@@ -45,16 +45,23 @@ import { errorMessage } from "../../core/shared/values.js";
 import type { ConversationRecord } from "../../core/workspace/conversationStore.js";
 
 interface UseRuntimeSettingsContext {
+  // Workspace and launch
   workspaceRoot: string;
   launchArgs: LaunchArgs;
+
+  // Runtime config state
   baseRuntimeConfigRef: React.RefObject<RuntimeConfig>;
   setBaseLayeredConfig: React.Dispatch<React.SetStateAction<LayeredConfigResult>>;
   setSessionRuntimeOverride: React.Dispatch<React.SetStateAction<PartialRuntimeConfig>>;
+
+  // Provider config and route
   providerWorkspaceConfig: ProviderWorkspaceConfig;
+  setProviderWorkspaceConfig: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
   setConversationRouteOverride: React.Dispatch<React.SetStateAction<ProviderRoute | null>>;
   routeChoiceRequiredRef: React.RefObject<string | null>;
   activeConversationRef: React.RefObject<ConversationRecord | null>;
-  setProviderWorkspaceConfig: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
+
+  // Feedback
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
 }
 
@@ -142,6 +149,7 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
       localBackend?: LocalBackendId,
     ) => {
       try {
+        // Build the next route, resolving the local backend when needed.
         const providerWorkspaceConfig = configRef.current;
         const runtime = getProviderRuntime(providerId);
         let nextConfig = setProviderActiveRoute(providerWorkspaceConfig, {
@@ -153,19 +161,27 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
             ? { localBackend: resolveLocalBackend(providerWorkspaceConfig, localBackend) }
             : {}),
         });
+
+        // The route must actually be selectable in this channel.
         if (
           nextConfig.activeRoute?.providerId !== providerId ||
           nextConfig.activeRoute.modelId !== nextModel
         )
           throw new Error("The provider route cannot be selected in this channel.");
+
+        // Persist the provider's default model and reasoning alongside the route.
         nextConfig = setProviderDefaultReasoning(
           setProviderDefaultModel(nextConfig, providerId, nextModel),
           providerId,
           nextReasoning,
         );
         updateProviderWorkspaceConfig(() => nextConfig);
+
+        // A resumed conversation no longer needs its saved route override.
         setConversationRouteOverride(null);
         routeChoiceRequiredRef.current = null;
+
+        // Record the route in the active conversation's metadata.
         const current = activeConversationRef.current;
         if (current && nextConfig.activeRoute) {
           activeConversationRef.current = {
@@ -173,6 +189,7 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
             metadata: { ...current.metadata, ...nextConfig.activeRoute },
           };
         }
+
         return true;
       } catch (error) {
         const message = errorMessage(error, "Unable to save active route.");

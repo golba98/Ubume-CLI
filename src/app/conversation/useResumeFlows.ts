@@ -107,6 +107,7 @@ function assessResumedRoute(
 
 export function useResumeFlows(context: ResumeFlowsContext) {
   const {
+    // Transcript swap and the active conversation record
     armTranscriptReplacement,
     activeConversationRef,
     preserveSavedRouteRef,
@@ -114,54 +115,74 @@ export function useResumeFlows(context: ResumeFlowsContext) {
     lastSaveErrorRef,
     appendEvent,
     saveWorkbenchRef,
+
+    // Run guards and workspace lease
     busy,
     stoppingRef,
     workspaceLeaseRef,
-    activeRunCaptureRef,
-    setResumeConversations,
-    catalogListsRef,
-    resumePickerPositionRef,
-    setScreen,
-    workspaceRoot,
-    activeRunIdRef,
     submissionRef,
     recoveryRef,
-    launchContext,
-    exit,
-    setExternalViewerSession,
-    externalViewerSession,
-    setSavedViewerSession,
-    busyRef,
-    providerWorkspaceConfig,
-    isMountedRef,
-    externalCliLaunchHooks,
-    setConversationChars,
     pipelineGenerationRef,
-    runControlRef,
+
+    // Active-run bookkeeping (checkpoints, captures, lifecycle, control)
+    activeRunIdRef,
+    activeTurnIdRef,
     activeRunLifecycleRef,
     activeRunTimingRef,
-    activeTurnIdRef,
+    runControlRef,
+    activeRunCaptureRef,
+
+    // Tool approval
     toolApprovalResolverRef,
     setToolApproval,
+
+    // Attachment and checkpoint registries
     pastedContentRegistryRef,
     imageAttachmentRegistryRef,
     fileAttachmentRegistryRef,
     checkpointsRef,
     restoredFileBoundaryRef,
     promptQueue,
-    setPlanFlow,
+
+    // Session dispatch and plan flow
     dispatchSession,
+    setPlanFlow,
     bumpWorkbench,
-    providerOverride,
-    routeChoiceRequiredRef,
-    setConversationRouteOverride,
-    intendedFocusTargetRef,
-    focusManager,
-    pendingQuitRef,
-    providerRegistry,
+
+    // Resume picker, viewers and conversation switches
+    setResumeConversations,
+    catalogListsRef,
+    resumePickerPositionRef,
+    setScreen,
+    workspaceRoot,
+    launchContext,
+    exit,
+    setExternalViewerSession,
+    externalViewerSession,
+    setSavedViewerSession,
     savedViewerSession,
     startupResumeHandledRef,
     launchArgs,
+
+    // Provider config and route override
+    providerWorkspaceConfig,
+    providerOverride,
+    providerRegistry,
+    routeChoiceRequiredRef,
+    setConversationRouteOverride,
+
+    // Focus routing and lifecycle
+    busyRef,
+    isMountedRef,
+    externalCliLaunchHooks,
+    intendedFocusTargetRef,
+    focusManager,
+    pendingQuitRef,
+
+    // Usage totals
+    setConversationChars,
+
+    // Conversation saving
     saveActiveConversation,
   } = context;
 

@@ -22,12 +22,16 @@ import type { Screen } from "../../session/types.js";
 const sharedUsageService = createUsageService();
 
 interface UseProviderUsageContext {
+  // Route and workspace
   activeProviderRoute: ProviderRoute;
   providerWorkspaceConfig: ProviderWorkspaceConfig;
   workspaceRoot: string;
   activeContextMetadata: ModelContextMetadata | null;
+
+  // Navigation
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
-  /** Test seams. */
+
+  // Test seams
   service?: typeof sharedUsageService;
   resolveTarget?: typeof resolveUsageTarget;
 }

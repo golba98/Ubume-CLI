@@ -21,15 +21,22 @@ import type { ProviderRoute, ProviderRuntime } from "../../core/providerRuntime/
 type ProviderDiagnostics = Record<string, Record<string, string | number | boolean | null>>;
 
 interface UseRouteStatusContext {
+  // Provider registry and diagnostics
   providerRegistry: ProviderConfig[];
   providerDiagnosticsRef: React.RefObject<ProviderDiagnostics>;
+
+  // Active route and context
   activeProviderRoute: ProviderRoute;
   activeContextMetadata: ModelContextMetadata | null;
-  workspaceDefaultProvider: ProviderConfig;
   activeRouteProvider: ProviderConfig;
   activeProviderRuntime: ProviderRuntime;
+
+  // Model and reasoning
   activeRouteModelCapabilities: CodexModelCapabilities | null;
   reasoningLevel: string;
+
+  // Workspace default
+  workspaceDefaultProvider: ProviderConfig;
 }
 
 /** Whether Ubume itself can send chats to a provider. */

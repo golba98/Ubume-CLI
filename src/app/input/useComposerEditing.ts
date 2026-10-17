@@ -22,15 +22,22 @@ import {
 } from "../../ui/input/pastedContent.js";
 
 interface UseComposerEditingContext {
+  // Session and feedback
   dispatchSession: (action: SessionAction) => void;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+
+  // Attachment registries
   pastedContentRegistryRef: React.RefObject<PastedContentRegistry>;
-  busyRef: React.RefObject<boolean>;
-  workspaceRoot: string;
-  runtimeConfig: RuntimeConfig;
   imageAttachmentRegistryRef: React.RefObject<ImageAttachmentRegistry>;
+
+  // Composer input state
   inputValueRef: React.RefObject<string>;
   cursorRef: React.RefObject<number>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+
+  // Workspace, config and guards
+  workspaceRoot: string;
+  runtimeConfig: RuntimeConfig;
+  busyRef: React.RefObject<boolean>;
 }
 
 export function useComposerEditing(context: UseComposerEditingContext) {
@@ -76,6 +83,7 @@ export function useComposerEditing(context: UseComposerEditingContext) {
       if (busyRef.current) {
         return;
       }
+
       try {
         const clipboardImage = await readClipboardImage();
         const attachmentsDir = resolveUbumeAttachmentDir(
@@ -91,6 +99,7 @@ export function useComposerEditing(context: UseComposerEditingContext) {
         } as const;
         const token = createImageAttachmentToken(attachment);
         imageAttachmentRegistryRef.current.set(token, attachment);
+
         const currentValue = replaceCommand ? "" : inputValueRef.current;
         const currentCursor = replaceCommand ? 0 : cursorRef.current;
         const separator =

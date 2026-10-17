@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createTestEnvironment } from "../../test/environment.js";
 
 function scenarios(steps: string[]) {
   const root = mkdtempSync(join(tmpdir(), "ubume-model-recovery-"));
@@ -21,21 +22,10 @@ function scenarios(steps: string[]) {
           cwd,
           encoding: "utf8",
           timeout: 20000,
-          env: {
-            ...process.env,
-            HOME: root,
+          env: createTestEnvironment(root, {
             UBUME_DATA_DIR: join(root, "data"),
             CODEXA_DATA_DIR: join(root, "data"),
-            CODEX_HOME: join(root, "codex"),
-            UBUME_DEV_MODE: "0",
-            CODEX_EXECUTABLE: join(root, "missing-codex"),
-            CLAUDE_EXECUTABLE: join(root, "missing-claude"),
-            AGY_EXECUTABLE: join(root, "missing-agy"),
-            VIBE_EXECUTABLE: join(root, "missing-vibe"),
-            ANTHROPIC_API_KEY: "",
-            OPENAI_API_KEY: "",
-            MISTRAL_API_KEY: "",
-          },
+          }),
         },
       );
       expect(`${result.stderr}\n${result.stdout}\n${result.error ?? ""}`).not.toContain(

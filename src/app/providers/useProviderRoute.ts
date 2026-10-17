@@ -79,43 +79,41 @@ type ProviderActionHandler = (
 ) => void;
 
 interface UseProviderRouteContext {
+  // Selection and navigation
   selectionCoordinator: SelectionCoordinator;
+  modelPickerOpenRef: React.RefObject<boolean>;
+  modelSelectionInFlightRef: React.RefObject<boolean>;
+  setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
+  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  intendedInputModeRef: React.RefObject<"chat/input" | "model-picker">;
+  intendedFocusTargetRef: React.RefObject<string>;
   setRouteSwitchBusy: React.Dispatch<React.SetStateAction<boolean>>;
+
+  // Local backend probing
   localBackendCheckInFlightRef: React.RefObject<
     Map<LocalBackendId, Promise<ProviderRouteValidationResult>>
   >;
   setLocalBackendStatuses: React.Dispatch<
     React.SetStateAction<Record<LocalBackendId, LocalBackendStatus>>
   >;
+
+  // Provider config, registry and diagnostics
   providerWorkspaceConfig: ProviderWorkspaceConfig;
-  isMountedRef: React.RefObject<boolean>;
-  modelPickerOpenRef: React.RefObject<boolean>;
-  modelSelectionInFlightRef: React.RefObject<boolean>;
-  setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
-  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
-  providerDiagnosticsRef: React.RefObject<
-    Record<string, Record<string, string | number | boolean | null>>
-  >;
-  workspaceRoot: string;
-  setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
   providerRegistry: ProviderConfig[];
   /** Saves a transform of the latest provider config; see useRuntimeSettings. */
   updateProviderWorkspaceConfig: (
     transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig,
   ) => ProviderWorkspaceConfig;
   activeRouteProvider: ProviderConfig;
-  model: string;
+  providerDiagnosticsRef: React.RefObject<
+    Record<string, Record<string, string | number | boolean | null>>
+  >;
   providerRouteErrorsRef: React.RefObject<Record<string, string>>;
-  intendedInputModeRef: React.RefObject<"chat/input" | "model-picker">;
-  intendedFocusTargetRef: React.RefObject<string>;
-  setModelAndReasoningWithNotice: (
-    nextModel: AvailableModel,
-    nextReasoning: ReasoningLevel,
-    providerId?: ProviderId,
-    localBackend?: LocalBackendId,
-  ) => Promise<void>;
+  setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
+
+  // Active route, model and discovery
   activeProviderRoute: ProviderRoute;
+  model: string;
   reasoningLevel: string;
   ensureProviderModels: (providerId: ProviderId, forceRefresh?: boolean) => Promise<unknown>;
   modelCapabilities: CodexModelCapabilities | null;
@@ -123,6 +121,14 @@ interface UseProviderRouteContext {
     forceRefresh?: boolean,
     announce?: boolean,
   ) => Promise<CodexModelCapabilities>;
+  setModelAndReasoningWithNotice: (
+    nextModel: AvailableModel,
+    nextReasoning: ReasoningLevel,
+    providerId?: ProviderId,
+    localBackend?: LocalBackendId,
+  ) => Promise<void>;
+
+  // Provider CLI launch and setup
   /**
    * Set after a successful executable preflight so the re-dispatched
    * `launch` action skips the check once.
@@ -137,6 +143,11 @@ interface UseProviderRouteContext {
     beforeLaunch: () => void;
     afterLaunch: () => void;
   };
+
+  // App plumbing
+  isMountedRef: React.RefObject<boolean>;
+  workspaceRoot: string;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
 }
 
 export function useProviderRoute(context: UseProviderRouteContext) {

@@ -42,34 +42,47 @@ import type { PlanActionValue } from "../../ui/panels/PlanActionPicker.js";
 import type { PromptRunLifecycle } from "./promptRunPrep.js";
 
 interface UsePlanFlowContext {
+  // Prompt execution
   startPromptRun: (
     displayPrompt: string,
     providerPrompt: string,
     lifecycle?: PromptRunLifecycle,
   ) => boolean;
-  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
   savePlanFile: (planContent: string) => string | null;
-  updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
+
+  // Plan flow state
   planFlow: PlanFlowState;
-  initialPromptSubmittedRef: React.RefObject<boolean>;
-  busy: boolean;
+  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
+
+  // Runtime config and mode
+  updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
+  mode: "suggest" | "auto-edit" | "full-auto";
+  planMode: boolean;
   launchArgs: LaunchArgs;
+
+  // Workspace
   workspaceRoot: string;
   allowedWritableRoots: string[];
-  planMode: boolean;
-  mode: "suggest" | "auto-edit" | "full-auto";
-  dispatchSession: (action: SessionAction) => void;
+
+  // UI and session state
   screen: Screen;
   uiState: UIState;
-  recoveryRef: React.RefObject<boolean>;
-  pipelineGenerationRef: React.RefObject<number>;
-  promptQueue: PromptQueue;
-  stoppingRef: React.RefObject<Promise<void>>;
-  activeRunIdRef: React.RefObject<number | null>;
-  submissionRef: React.RefObject<boolean>;
+  dispatchSession: (action: SessionAction) => void;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
   screenRef: React.RefObject<Screen>;
   getSessionState: () => SessionState;
+
+  // Run and submission guards
+  busy: boolean;
+  initialPromptSubmittedRef: React.RefObject<boolean>;
+  recoveryRef: React.RefObject<boolean>;
+  pipelineGenerationRef: React.RefObject<number>;
+  submissionRef: React.RefObject<boolean>;
+  activeRunIdRef: React.RefObject<number | null>;
+  stoppingRef: React.RefObject<Promise<void>>;
+  promptQueue: PromptQueue;
+
+  // Workbench
   saveWorkbenchRef: React.RefObject<(() => void) | null>;
   bumpWorkbench: React.Dispatch<React.SetStateAction<number>>;
   workbenchVersion: number;
@@ -145,6 +158,7 @@ export function usePlanFlow(context: UsePlanFlowContext) {
           imageAttachments,
           onCompleted: ({ response }) => {
             const nextPlan = response.trim();
+
             if (!nextPlan) {
               setPlanFlow(resetPlanFlow());
               appendEvent(
@@ -154,6 +168,7 @@ export function usePlanFlow(context: UsePlanFlowContext) {
               );
               return;
             }
+
             const planFilePath = savePlanFile(nextPlan);
             setPlanFlow((current) => finishPlanGeneration(current, nextPlan, planFilePath));
           },
@@ -369,7 +384,9 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     if (!idle) {
       return;
     }
+
     const generation = pipelineGenerationRef.current;
+
     void promptQueue
       .drain(
         (item) => {
@@ -387,6 +404,7 @@ export function usePlanFlow(context: UsePlanFlowContext) {
               [item.id],
             );
           }
+
           return current.startPromptRun(item.display, item.submitted, {
             commitPrompt: true,
             preserveInput: true,
@@ -407,12 +425,14 @@ export function usePlanFlow(context: UsePlanFlowContext) {
           );
         },
       )
+
       .then((started) => {
         if (started) {
           saveWorkbenchRef.current?.();
           bumpWorkbench((value) => value + 1);
         }
       })
+
       .catch((error) => {
         appendEvent("error", "Queue paused", (error as Error).message);
         saveWorkbenchRef.current?.();

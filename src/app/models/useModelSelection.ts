@@ -71,27 +71,41 @@ import {
 } from "./selectionLogic.js";
 
 interface UseModelSelectionContext {
-  dispatchSession: (action: SessionAction) => void;
+  // Selection transitions and recovery
   selectionCoordinator: SelectionCoordinator;
   pendingRouteProviderId: ProviderId | null;
+  setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
+  modelSelectionInFlightRef: React.RefObject<boolean>;
+  routeChoiceRequiredRef: React.RefObject<string | null>;
+  modelPickerOpenRef: React.RefObject<boolean>;
+  providerRouteErrorsRef: React.RefObject<Record<string, string>>;
+  providerDiagnosticsRef: React.RefObject<
+    Record<string, Record<string, string | number | boolean | null>>
+  >;
+  setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
+  markProviderAvailability: (
+    providerId: ProviderId,
+    availability: RuntimeAvailability,
+    reason: string,
+  ) => void;
+
+  // Model discovery and capabilities
   ensureProviderModels: (providerId: ProviderId, forceRefresh?: boolean) => Promise<unknown>;
+  modelCapabilities: CodexModelCapabilities | null;
+  currentModelCapability: CodexModelCapability | null;
+
+  // Active route and runtime configuration
+  activeProviderRoute: ProviderRoute;
+  providerWorkspaceConfig: ProviderWorkspaceConfig;
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
-  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+  model: string;
+  reasoningLevel: string;
   mode: "suggest" | "auto-edit" | "full-auto";
   planMode: boolean;
-  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
-  routeChoiceRequiredRef: React.RefObject<string | null>;
-  currentModelCapability: CodexModelCapability | null;
-  model: string;
   launchArgs: LaunchArgs;
-  providerWorkspaceConfig: ProviderWorkspaceConfig;
-  activeProviderRoute: ProviderRoute;
-  persistProviderDefaultModelAndReasoning: (
-    providerId: ProviderId,
-    modelId: string,
-    nextReasoning: string,
-  ) => void;
+  workspaceRoot: string;
+
+  // Route persistence
   persistActiveRoute: (
     providerId: ProviderId,
     nextModel: string,
@@ -99,25 +113,22 @@ interface UseModelSelectionContext {
     backendKindOverride?: ReturnType<typeof getProviderRuntime>["backendKind"],
     localBackend?: LocalBackendId,
   ) => boolean | void;
-  modelSelectionInFlightRef: React.RefObject<boolean>;
-  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
-  reasoningLevel: string;
-  workspaceRoot: string;
-  returnToChatMode: (reason?: string) => void;
-  modelCapabilities: CodexModelCapabilities | null;
-  setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
-  setRouteSwitchBusy: React.Dispatch<React.SetStateAction<boolean>>;
-  markProviderAvailability: (
+  persistProviderDefaultModelAndReasoning: (
     providerId: ProviderId,
-    availability: RuntimeAvailability,
-    reason: string,
+    modelId: string,
+    nextReasoning: string,
   ) => void;
-  providerDiagnosticsRef: React.RefObject<
-    Record<string, Record<string, string | number | boolean | null>>
-  >;
-  setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
-  providerRouteErrorsRef: React.RefObject<Record<string, string>>;
-  modelPickerOpenRef: React.RefObject<boolean>;
+
+  // UI feedback and navigation
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  returnToChatMode: (reason?: string) => void;
+  setRouteSwitchBusy: React.Dispatch<React.SetStateAction<boolean>>;
+  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
+
+  // Session dispatch and debug
+  dispatchSession: (action: SessionAction) => void;
+  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export function useModelSelection(context: UseModelSelectionContext) {
