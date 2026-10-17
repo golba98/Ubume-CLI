@@ -36,7 +36,7 @@ interface UseOpenAiModelReconcileContext {
 }
 
 /** The prompt-blocking message for a configured model that is not offered. */
-export function unavailableConfiguredModelMessage(model: string): string {
+function unavailableConfiguredModelMessage(model: string): string {
   return `Configured model ${model} is unavailable. Select a model explicitly before sending.`;
 }
 
