@@ -1,3 +1,9 @@
+/**
+ * Defines shared provider model fallbacks, aliases, normalization, and conversion to Codex-style
+ * capabilities. Normalizes provider reasoning levels and selects valid defaults for discovered
+ * models.
+ */
+
 import { formatReasoningLabel } from "../../config/settings.js";
 import type {
   CodexModelCapabilities,
@@ -91,6 +97,10 @@ function isRuntimeSource(source: ProviderModel["source"]): boolean {
   );
 }
 
+/**
+ * Adapts shared provider models for existing capability consumers without claiming live Codex
+ * discovery.
+ */
 export function providerModelsToCodexCapabilities(
   models: readonly ProviderModel[],
   currentModel: string,
@@ -124,6 +134,7 @@ export function providerModelsToCodexCapabilities(
   };
 }
 
+/** Labels supplied Claude effort ids while retaining unfamiliar native ids and their formatted labels. */
 export function getClaudeCodeEffortLevels(
   ids: readonly string[],
 ): readonly ReasoningEffortCapability[] {

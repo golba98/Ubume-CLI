@@ -1,5 +1,6 @@
 import type { ReasoningControl } from "../providerRuntime/types.js";
 
+/** Checks an advertised level or token budget, including explicit auto/disable capabilities. */
 export function isSupportedReasoning(
   control: ReasoningControl | undefined,
   value: string,
@@ -15,6 +16,10 @@ export function isSupportedReasoning(
   );
 }
 
+/**
+ * Keeps a supported preference or selects the control's valid default; unknown/unsupported
+ * controls return an empty value.
+ */
 export function reconcileReasoning(control: ReasoningControl | undefined, value: string): string {
   if (isSupportedReasoning(control, value)) return value;
   if (control?.kind === "levels")
@@ -26,6 +31,7 @@ export function reconcileReasoning(control: ReasoningControl | undefined, value:
   return "";
 }
 
+/** Moves a budget by 1024 tokens and clamps it to the advertised range. */
 export function stepReasoningBudget(
   control: Extract<ReasoningControl, { kind: "budget" }>,
   value: string,

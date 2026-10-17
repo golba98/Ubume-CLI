@@ -13,6 +13,10 @@ export interface LocalUsageRecord {
 
 const records = new Map<string, LocalUsageRecord>();
 
+/**
+ * Accumulates exact Local token counts; compaction re-emits and inexact estimates do not add
+ * requests.
+ */
 export function recordLocalContextUsage(
   scopeKey: string,
   usage: ProviderContextUsage,
@@ -37,6 +41,7 @@ export function recordLocalContextUsage(
   records.set(scopeKey, record);
 }
 
+/** Returns the in-memory conversation totals for a usage scope, if observed. */
 export function getLocalUsageRecord(scopeKey: string): LocalUsageRecord | undefined {
   return records.get(scopeKey);
 }

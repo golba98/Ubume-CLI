@@ -2,32 +2,31 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withEnvironment } from "../../test/environment.js";
 import { persistProviderDiscovery } from "../providerRuntime/registry.js";
 import type { ProviderModelDiscoveryResult } from "../providerRuntime/types.js";
 import { getCodexModelCapabilities } from "./codexModelCapabilities.js";
 
-test("cached inventory reuse does not rewrite last verification time or disk", () => {
+test("cached inventory reuse does not rewrite last verification time or disk", async () => {
   const home = mkdtempSync(join(tmpdir(), "ubume-verification-time-"));
-  const previous = process.env.HOME;
-  process.env.HOME = home;
   try {
-    const discovery: ProviderModelDiscoveryResult = {
-      providerId: "mistral",
-      backendKind: "mistral-vibe-cli-auth",
-      status: "ready",
-      freshness: "verified",
-      verifiedAt: 1234,
-      models: [],
-    };
-    persistProviderDiscovery(discovery);
-    const file = join(home, ".ubume-model-cache.json");
-    expect(JSON.parse(readFileSync(file, "utf8")).providers.mistral.discoveredAt).toBe(1234);
-    writeFileSync(file, "external-marker");
-    persistProviderDiscovery(discovery);
-    expect(readFileSync(file, "utf8")).toBe("external-marker");
+    await withEnvironment({ HOME: home, USERPROFILE: home }, () => {
+      const discovery: ProviderModelDiscoveryResult = {
+        providerId: "mistral",
+        backendKind: "mistral-vibe-cli-auth",
+        status: "ready",
+        freshness: "verified",
+        verifiedAt: 1234,
+        models: [],
+      };
+      persistProviderDiscovery(discovery);
+      const file = join(home, ".ubume-model-cache.json");
+      expect(JSON.parse(readFileSync(file, "utf8")).providers.mistral.discoveredAt).toBe(1234);
+      writeFileSync(file, "external-marker");
+      persistProviderDiscovery(discovery);
+      expect(readFileSync(file, "utf8")).toBe("external-marker");
+    });
   } finally {
-    if (previous === undefined) delete process.env.HOME;
-    else process.env.HOME = previous;
     rmSync(home, { recursive: true, force: true });
   }
 });

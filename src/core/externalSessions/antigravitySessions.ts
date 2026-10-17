@@ -1,3 +1,7 @@
+/**
+ * Lists Antigravity sessions from SQLite and reads session protobuf state.
+ */
+
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -73,6 +77,10 @@ function parseAntigravityTime(value: unknown): string {
   return new Date(Number.isNaN(time) ? 0 : time).toISOString();
 }
 
+/**
+ * Lists read-only native AGY summaries for the requested scope; a missing store yields no
+ * sessions.
+ */
 export async function listAntigravitySessions(
   scope: ExternalSessionScope,
   options: ExternalSessionOptions = {},
@@ -256,6 +264,10 @@ async function entriesFromHistory(root: string, id: string): Promise<ExternalTra
   }
 }
 
+/**
+ * Reads native AGY steps into display entries, falling back to prompt history when step data is
+ * unavailable.
+ */
 export async function readAntigravityTranscript(
   summary: ExternalSessionSummary,
   options: ExternalSessionOptions = {},

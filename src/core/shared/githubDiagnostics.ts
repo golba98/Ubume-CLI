@@ -1,3 +1,8 @@
+/**
+ * Checks Git/GitHub CLI, remote identity, and local write readiness and classifies diagnostic
+ * results.
+ */
+
 import { execFileSync, execSync } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -36,6 +41,9 @@ interface DiagnosticsReport {
     | "Cannot publish yet";
 }
 
+/**
+ * Recognizes GitHub HTTPS/SSH remotes; other URLs retain an explicit other-provider identity.
+ */
 export function parseRepoIdentity(remoteUrl: string | undefined | null): RepoIdentity | null {
   if (!remoteUrl) return null;
 
@@ -73,6 +81,7 @@ export function parseRepoIdentity(remoteUrl: string | undefined | null): RepoIde
   };
 }
 
+/** Reads origin from the current repository; unavailable Git/remotes return null. */
 export function getLocalGitRemoteUrl(): string | null {
   try {
     return execSync("git remote get-url origin", {
@@ -85,6 +94,7 @@ export function getLocalGitRemoteUrl(): string | null {
   }
 }
 
+/** Checks local gh installation/authentication without creating a remote resource. */
 export function checkGhCli(): DiagnosticResult {
   const result: DiagnosticResult = {
     path: "GH CLI",
@@ -132,6 +142,7 @@ export function checkGhCli(): DiagnosticResult {
   return result;
 }
 
+/** Checks origin reachability with git ls-remote; does not push or modify refs. */
 export function checkLocalGitRemote(): DiagnosticResult {
   const result: DiagnosticResult = {
     path: "Local git remote",
@@ -162,6 +173,10 @@ export function checkLocalGitRemote(): DiagnosticResult {
   return result;
 }
 
+/**
+ * Checks Git-directory writability and index-lock presence; does not prove remote/ref write
+ * permission.
+ */
 export function checkLocalGitWrite(): DiagnosticResult {
   const result: DiagnosticResult = {
     path: "Local .git write",
@@ -192,6 +207,7 @@ export function checkLocalGitWrite(): DiagnosticResult {
   return result;
 }
 
+/** Selects a publish workflow from supplied diagnostic evidence without executing it. */
 export function classifyDiagnostics(
   repo: RepoIdentity | null,
   ghCli: DiagnosticResult,

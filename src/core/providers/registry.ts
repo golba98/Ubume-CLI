@@ -4,6 +4,7 @@ import type { BackendProvider } from "./types.js";
 
 const BACKEND_PROVIDERS: BackendProvider[] = [codexSubprocessProvider];
 
+/** Returns a registered low-level backend, then the configured default, then Codex. */
 export function getBackendProvider(id: string): BackendProvider {
   return (
     BACKEND_PROVIDERS.find((provider) => provider.id === id) ??

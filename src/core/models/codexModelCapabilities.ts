@@ -1,3 +1,8 @@
+/**
+ * Normalizes selectable Codex models, reasoning levels, defaults, lookup, and display
+ * formatting.
+ */
+
 import {
   DEFAULT_MODEL,
   formatReasoningLabel,
@@ -69,6 +74,10 @@ interface ModelListResponse {
 }
 
 const verifiedCapabilityResults = new WeakSet<CodexModelCapabilities>();
+/**
+ * Checks process-local evidence of successful live discovery; a cached runtime-shaped seed alone
+ * is not verified.
+ */
 export function isVerifiedCodexModelCapabilities(value: CodexModelCapabilities): boolean {
   return verifiedCapabilityResults.has(value);
 }
@@ -190,6 +199,7 @@ function dedupeModels(models: CodexModelCapability[]): CodexModelCapability[] {
   return deduped;
 }
 
+/** Normalizes and deduplicates app-server model pages; throws when no usable models remain. */
 export function normalizeCodexModelListResponses(
   responses: readonly ModelListResponse[],
   options: { discoveredAt?: number; executable?: string | null } = {},
@@ -217,6 +227,10 @@ export function normalizeCodexModelListResponses(
   };
 }
 
+/**
+ * Builds the static, unavailable fallback inventory without implying successful runtime
+ * discovery.
+ */
 export function createFallbackModelCapabilities(
   error: unknown = null,
   options: { discoveredAt?: number; executable?: string | null } = {},
@@ -322,6 +336,10 @@ function persistCodexModelCapabilities(capabilities: CodexModelCapabilities): vo
 // (codex's own models_cache.json / Ubume's last-good discovery) → static
 // fallback model list. Failed discoveries are evicted from the in-memory cache
 // so retries are possible even when a seed satisfied the request.
+/**
+ * Shares live discovery per connection and TTL, then degrades to disk seeds or static fallback
+ * on failure. Failed live attempts are evicted so later calls can retry.
+ */
 export async function getCodexModelCapabilities(
   options: GetCodexModelCapabilitiesOptions = {},
 ): Promise<CodexModelCapabilities> {
@@ -399,16 +417,24 @@ export async function getCodexModelCapabilities(
   }
 }
 
+/**
+ * Forgets in-memory capability results; does not delete disk seeds or cancel an already-running
+ * discovery.
+ */
 export function clearCodexModelCapabilityCache(): void {
   capabilityCache.clear();
 }
 
+/** Filters hidden entries without asserting that their discovery is fresh or verified. */
 export function getSelectableModelCapabilities(
   capabilities: CodexModelCapabilities,
 ): readonly CodexModelCapability[] {
   return capabilities.models.filter((model) => !model.hidden);
 }
 
+/**
+ * Looks up a model by case-insensitive native id or capability id, returning null when absent.
+ */
 export function findModelCapability(
   capabilities: CodexModelCapabilities | null | undefined,
   model: string,
@@ -434,6 +460,10 @@ function isModelSelectable(
   return Boolean(found && !found.hidden);
 }
 
+/**
+ * Keeps a selectable current model, otherwise uses the advertised default or first visible
+ * model.
+ */
 export function getPreferredModelFromCapabilities(
   capabilities: CodexModelCapabilities,
   currentModel: string,
@@ -451,6 +481,10 @@ export function getPreferredModelFromCapabilities(
   );
 }
 
+/**
+ * Reconciles supported controls while retaining the current preference when reasoning metadata
+ * is unknown.
+ */
 export function normalizeReasoningForModelCapabilities(
   model: string,
   currentReasoning: string,
@@ -478,6 +512,7 @@ export function normalizeReasoningForModelCapabilities(
   return supported[0]!.id;
 }
 
+/** Formats visible model/reasoning metadata and reports runtime versus fallback provenance. */
 export function formatModelCapabilitiesList(
   capabilities: CodexModelCapabilities,
   currentModel: string,

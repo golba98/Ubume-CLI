@@ -14,6 +14,7 @@ export function createRunControl(handlers: BackendRunHandlers) {
   handlers.onRunControl?.({ stopped });
   return {
     stopped,
+    /** Register owned work before finish; rejection still counts as settled cleanup. */
     track<T>(promise: Promise<T>): Promise<T> {
       pending++;
       void promise.then(
@@ -28,6 +29,7 @@ export function createRunControl(handlers: BackendRunHandlers) {
       );
       return promise;
     },
+    /** Marks logical completion; stopped resolves only after the registered work settles. */
     finish() {
       finished = true;
       settle();

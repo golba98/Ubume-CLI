@@ -1,3 +1,8 @@
+/**
+ * Workspace provider preferences, native launch commands and picker records. Saved defaults and
+ * active routes are distinct; backend execution/discovery contracts live in providerRuntime.
+ */
+
 import type { ModelCapabilityProfile } from "../providerRuntime/capabilityProfile.js";
 import type { CodexaNativeOptions } from "../providerRuntime/codexaNativeConfig.js";
 import type { ProviderBackendKind } from "../providerRuntime/types.js";

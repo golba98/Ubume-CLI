@@ -1,3 +1,7 @@
+/**
+ * Resolves cached provider model feature profiles such as tools, vision, and reasoning support.
+ */
+
 import type { ProviderId, ProviderWorkspaceOverride } from "../providerLauncher/types.js";
 import { isRecord } from "../shared/values.js";
 
@@ -131,6 +135,10 @@ function metadataIdentityValues(raw: unknown): string[] {
   return values;
 }
 
+/**
+ * Recognizes supported Local model families from explicit identifiers and metadata; unknown
+ * families remain null.
+ */
 export function detectLocalModelFamily(
   modelId: string,
   rawMetadata?: unknown,
@@ -140,6 +148,7 @@ export function detectLocalModelFamily(
     : null;
 }
 
+/** Invalidates process-local capability hints after configuration/discovery changes. */
 export function clearModelCapabilityProfileCache(): void {
   capabilityCache.clear();
 }
@@ -371,6 +380,10 @@ function mergeProfiles(options: {
   };
 }
 
+/**
+ * Resolves model features from discovery/configuration and known family hints, retaining
+ * source/confidence instead of assuming support.
+ */
 export function resolveModelCapabilityProfileCached(
   options: ResolveModelCapabilityProfileOptions,
 ): ModelCapabilityProfile {

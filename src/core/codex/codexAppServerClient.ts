@@ -1,3 +1,9 @@
+/**
+ * Short-lived Codex app-server sessions shared by model discovery and usage queries. Owns the
+ * initialize handshake, response correlation, timeout/abort listeners and best-effort child
+ * termination; callers supply only the session work.
+ */
+
 import type { ChildProcess } from "node:child_process";
 import { APP_NAME, APP_VERSION } from "../../config/settings.js";
 import { spawnCodexProcess } from "../executables/codexExecutable.js";
@@ -24,6 +30,7 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
+/** Extracts a message from RPC errors or serializes other error values for diagnostics. */
 export function describeAppServerError(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -35,6 +42,16 @@ export function describeAppServerError(error: unknown): string {
   }
 }
 
+/**
+ * Runs work after the initialize handshake. Timeout, abort, parse or process failures reject;
+ * finally removes session listeners and requests child termination.
+ *
+ * @param executable - Resolved Codex command; platform wrapping is delegated to the spawn helper.
+ * @param options - Session-wide deadline, cancellation and diagnostic operation name.
+ * @param run - Work whose returned promise defines the successful session lifetime.
+ * @returns The callback result after session teardown has been requested.
+ * @throws When initialization, a request, the callback, or the session deadline/abort fails.
+ */
 export async function withCodexAppServer<T>(
   executable: string,
   options: CodexAppServerSessionOptions,

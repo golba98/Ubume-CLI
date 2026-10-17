@@ -1,3 +1,9 @@
+/**
+ * Supervises a separate Node/Playwright worker for Local browser tools. The Harness owns tool
+ * orchestration and approvals; this module owns worker generations, ephemeral browser sessions
+ * and descendant cleanup.
+ */
+
 import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,6 +56,9 @@ export class BrowserManager implements ComputerUseBackend {
   private stopping?: Promise<void>;
   private generation = 0;
   private sessions = new Set<string>();
+  /**
+   * Checks whether this worker has opened ephemeral state for the session.
+   */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
   }
@@ -183,6 +192,10 @@ export class BrowserManager implements ComputerUseBackend {
     }
   }
 
+  /**
+   * Lazily starts the worker and executes a policy-scoped call; cancellation/disconnect
+   * becomes a structured browser error.
+   */
   async execute(
     request: ComputerUseRequest,
     policy: ComputerUsePolicy,
@@ -213,6 +226,10 @@ export class BrowserManager implements ComputerUseBackend {
     }
   }
 
+  /**
+   * Reads the target identity for an approval without performing the proposed browser
+   * interaction; failures reject.
+   */
   async approvalState(
     sessionId: string,
     args: Record<string, unknown>,
@@ -226,6 +243,10 @@ export class BrowserManager implements ComputerUseBackend {
     )) as { description: string; identity: string };
   }
 
+  /**
+   * Drops this session's ephemeral browser state; failed worker cleanup escalates to shared
+   * shutdown.
+   */
   async closeSession(sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
     if (!this.transport) return;
@@ -240,6 +261,10 @@ export class BrowserManager implements ComputerUseBackend {
     }
   }
 
+  /**
+   * Coalesces shutdown, drains the worker when possible and escalates termination while
+   * removing owned browser/temp state.
+   */
   shutdown(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.sessions.clear();
@@ -286,6 +311,9 @@ export class BrowserManager implements ComputerUseBackend {
     return stopping;
   }
 
+  /**
+   * Immediately reaps known browser descendants and starts worker shutdown without waiting.
+   */
   terminate(): void {
     this.killBrowsers();
     void this.shutdown();

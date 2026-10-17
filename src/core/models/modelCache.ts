@@ -1,3 +1,8 @@
+/**
+ * Seeds startup model capabilities from Codex and Ubume last-good cache files without blocking
+ * live discovery. Persists and loads last-good model discovery results per provider.
+ */
+
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -93,6 +98,10 @@ function isAgyCacheEntry(entry: CachedProviderModels): boolean {
   );
 }
 
+/**
+ * Reads a validated last-good inventory or null. Legacy Google data and unverified custom Vibe
+ * execution entries are not treated as current inventory.
+ */
 export function loadCachedProviderModels(
   providerId: ProviderId | "antigravity",
   cacheFile = getProviderModelCacheFile(),
@@ -114,6 +123,10 @@ export function loadCachedProviderModels(
   return entry;
 }
 
+/**
+ * Best-effort atomic cache persistence with credential-field redaction and Google compatibility
+ * preservation; write failures do not fail discovery.
+ */
 export function saveCachedProviderModels(
   providerId: ProviderId,
   entry: CachedProviderModels,
@@ -210,6 +223,10 @@ function parseSeedModel(raw: unknown): ProviderModel | null {
   };
 }
 
+/**
+ * Reads Codex's own model cache without starting a process; malformed or missing data returns
+ * null.
+ */
 export function loadCodexSeedModels(cacheFile = getCodexModelsCacheFile()): CodexSeed | null {
   try {
     if (!existsSync(cacheFile)) {
@@ -235,6 +252,9 @@ export function loadCodexSeedModels(cacheFile = getCodexModelsCacheFile()): Code
 
 // Freshest locally known OpenAI models without spawning a subprocess:
 // codex's own cache file vs Ubume's persisted last-good discovery.
+/**
+ * Selects the freshest Codex or Ubume disk seed for startup without proving live availability.
+ */
 export function loadSeededOpenAiModels(
   options: { codexCacheFile?: string; providerCacheFile?: string } = {},
 ): CachedProviderModels | null {
@@ -270,6 +290,10 @@ function toCapability(model: ProviderModel, index: number): CodexModelCapability
 
 // Capabilities for the OpenAI picker sourced purely from local caches.
 // Returns null when nothing is cached yet (first ever launch).
+/**
+ * Converts startup disk seeds into capability records; callers must separately establish live
+ * verification.
+ */
 export function loadSeededCodexCapabilities(
   options: { codexCacheFile?: string; providerCacheFile?: string } = {},
 ): CodexModelCapabilities | null {

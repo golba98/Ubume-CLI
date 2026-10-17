@@ -1,3 +1,8 @@
+/**
+ * Pure normalization of usage values, reset times, provider text and scope identities. Missing
+ * values remain unknown rather than becoming zero or an unlimited quota.
+ */
+
 import type { ProviderWorkspaceOverride } from "../providerLauncher/types.js";
 import type { ProviderRoute } from "../providerRuntime/types.js";
 import { sanitizeTerminalOutput } from "../terminal/terminalSanitize.js";
@@ -49,6 +54,7 @@ export function parseResetTime(value: unknown, now: number): number | undefined 
   return Math.abs(ms - now) > MAX_RESET_DISTANCE_MS ? undefined : ms;
 }
 
+/** Formats a positive usage-window duration; missing/invalid durations remain undefined. */
 export function windowLabel(minutes: number | undefined): string | undefined {
   if (minutes === undefined || !Number.isFinite(minutes) || minutes <= 0) return undefined;
   if (minutes === 10080) return "Weekly limit";
@@ -73,6 +79,7 @@ export function completePercentPair(
   return {};
 }
 
+/** Keeps an explicit state or derives exhaustion only from supplied usage values. */
 export function deriveLimitState(limit: UsageLimit): UsageLimit["state"] {
   if (limit.state) return limit.state;
   if (limit.remainingPercent !== undefined && limit.remainingPercent <= 0) return "exhausted";
@@ -90,6 +97,9 @@ export function cleanProviderText(value: unknown, maxLength = 240): string | und
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+/**
+ * Sanitizes and title-cases a short provider plan name; blank/non-string values remain unknown.
+ */
 export function formatPlanName(value: unknown): string | undefined {
   const text = cleanProviderText(value, 40);
   if (!text) return undefined;

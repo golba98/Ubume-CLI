@@ -1,3 +1,8 @@
+/**
+ * Imports external attachments into app data, identifies images, and rewrites prompts to safe
+ * workspace-visible paths.
+ */
+
 import { existsSync } from "node:fs";
 import { access, copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +20,9 @@ const IMAGE_EXTENSIONS = new Set([
   ".svg",
 ]);
 
+/**
+ * Recognizes supported image extensions case-insensitively; it does not inspect file contents.
+ */
 export function isImageFile(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
@@ -28,6 +36,10 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Finds a collision-free attachment name without reserving or creating it; callers perform the
+ * copy/write.
+ */
 export async function resolveAttachmentDestPath(
   srcPath: string,
   attachmentsDir: string,
@@ -43,6 +55,10 @@ export async function resolveAttachmentDestPath(
   return dest;
 }
 
+/**
+ * Copies an eligible external file to attachment storage. Missing/dependency paths return null;
+ * destination I/O failures reject.
+ */
 export async function importExternalFile(
   srcPath: string,
   attachmentsDir: string,
@@ -71,6 +87,10 @@ export async function importExternalFile(
   return destPath;
 }
 
+/**
+ * Persists supplied clipboard PNG bytes under a private attachment filename and returns its
+ * path.
+ */
 export async function saveClipboardImage(
   data: Uint8Array,
   attachmentsDir: string,
@@ -81,6 +101,7 @@ export async function saveClipboardImage(
   return destPath;
 }
 
+/** Replaces imported path references, quoting replacement paths containing whitespace. */
 export function rewritePromptWithImportedPaths(
   prompt: string,
   replacements: Array<{ rawPath: string; replacementPath: string }>,

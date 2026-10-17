@@ -1,3 +1,9 @@
+/**
+ * Local Harness configuration, environment and fingerprints. Persisted route/transcript
+ * identities exclude credentials; a separate process-local salted secret fingerprint detects
+ * credential changes for process reuse.
+ */
+
 import { createHash, randomBytes, scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -38,6 +44,10 @@ export interface HarnessConfig {
 
 export type HarnessReasoningEffort = "low" | "medium" | "high";
 
+/**
+ * Enables a supported effort only when the selected model explicitly opts in through
+ * configuration.
+ */
 export function resolveHarnessReasoningEffort(
   request: ProviderChatRequest,
   model: string,
@@ -49,6 +59,10 @@ export function resolveHarnessReasoningEffort(
 
 export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
+/**
+ * Makes planning read-only and normalizes legacy full-access settings to the Harness sandbox
+ * vocabulary.
+ */
 export function resolveHarnessSandboxMode(request: ProviderChatRequest): HarnessSandboxMode {
   if (request.runIntent === "plan" || request.runtime.planMode) return "read-only";
   const mode = String(request.runtime.policy.sandboxMode);
@@ -76,10 +90,15 @@ export function sanitizedEndpoint(value: string): string {
   }
 }
 
+/** Fingerprints canonical restored history for Harness session-resume compatibility. */
 export function transcriptHash(request: ProviderChatRequest): string {
   return hashJson(request.conversationHistory ?? []);
 }
 
+/**
+ * Hashes non-secret execution configuration and policy used to decide whether saved Harness
+ * state can resume.
+ */
 export function routeFingerprint(config: HarnessConfig, request: ProviderChatRequest): string {
   return hashJson({
     baseUrl: sanitizedEndpoint(config.baseUrl),
@@ -94,6 +113,10 @@ export function routeFingerprint(config: HarnessConfig, request: ProviderChatReq
   });
 }
 
+/**
+ * Creates a process-salted credential-change fingerprint; it is not a persistent account
+ * identity.
+ */
 export function secretFingerprint(value: string): string {
   // This only detects credential changes during this process. A process-local
   // salt and memory-hard KDF prevent an exposed fingerprint from becoming a
@@ -101,6 +124,10 @@ export function secretFingerprint(value: string): string {
   return scryptSync(value, PROCESS_FINGERPRINT_SALT, 32).toString("hex");
 }
 
+/**
+ * Resolves the packaged Harness executable from its manifest; missing executable metadata
+ * throws.
+ */
 export function resolveDshBin(): string {
   const packagePath = packageRequire.resolve("@deepseek-ai/dsh/package.json");
   const manifest = JSON.parse(readFileSync(packagePath, "utf8")) as { bin?: { dsh?: string } };
@@ -109,6 +136,10 @@ export function resolveDshBin(): string {
   return resolve(dirname(packagePath), manifest.bin.dsh);
 }
 
+/**
+ * Resolves execution settings and validates required agent capabilities; Unsloth must already
+ * have a resolved connection.
+ */
 export function resolveHarnessConfig(request: ProviderChatRequest): HarnessConfig {
   const resolved = request.resolvedLocalAgentConfig;
   const selectedBackend = request.route.localBackend ?? request.localConfig?.localBackend;
@@ -181,6 +212,10 @@ export function resolveDefaultMaxOutputTokens(contextWindow: number | undefined)
   return Math.max(MIN_DEFAULT_MAX_OUTPUT_TOKENS, Math.min(MAX_DEFAULT_MAX_OUTPUT_TOKENS, scaled));
 }
 
+/**
+ * Builds child-only connection, permission and memory settings without mutating process.env;
+ * includes credentials and must not be logged verbatim.
+ */
 export function buildHarnessEnv(
   request: ProviderChatRequest,
   config: HarnessConfig,

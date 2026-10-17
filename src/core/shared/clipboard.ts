@@ -1,3 +1,8 @@
+/**
+ * Platform clipboard bridges for text and PNG images. Image reads validate PNG bytes and size,
+ * clean up their temporary directory and reject when no supported bridge succeeds.
+ */
+
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +20,7 @@ function trySpawn(cmd: string, args: string[], text: string): Promise<boolean> {
   });
 }
 
+/** Tries platform text clipboard commands and returns whether a bridge exited successfully. */
 export async function copyToClipboard(text: string): Promise<boolean> {
   const os = platform();
 
@@ -126,6 +132,10 @@ async function readWindowsClipboard(
   return Buffer.from(encoded.toString("utf8").trim(), "base64");
 }
 
+/**
+ * Reads a bounded PNG through platform bridges. Missing/invalid/oversized image data rejects;
+ * temporary macOS bridge files are removed in finally.
+ */
 export async function readClipboardImage(
   options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; run?: CommandRunner } = {},
 ): Promise<ClipboardImage> {

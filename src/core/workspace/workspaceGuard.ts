@@ -1,8 +1,14 @@
+/**
+ * Normalizes diagnostic paths, blocks or explains paths and commands outside the active
+ * workspace, and classifies destructive shell commands.
+ */
+
 import { posix, win32 } from "path";
 import { normalizeWorkspaceRoot } from "./workspaceRoot.js";
 
 type PathStyle = "windows" | "posix";
 
+/** Removes diagnostic line/column suffixes while preserving a Windows drive prefix. */
 export function normalizeDiagnosticPath(filePath: string): string {
   let pathPart = filePath;
   let drivePrefix = "";
@@ -84,6 +90,9 @@ function normalizedPathSegments(pathValue: string): string[] {
     .map((segment) => segment.toLowerCase());
 }
 
+/**
+ * Recognizes known dependency/cache paths that should not be imported into the active workspace.
+ */
 export function isSkippedExternalDependencyPath(pathValue: string): boolean {
   const segments = normalizedPathSegments(pathValue);
 
@@ -148,6 +157,10 @@ function normalizeAllowedRoots(
   return normalizedRoots;
 }
 
+/**
+ * Resolves diagnostic path text relative to the active workspace using the established platform
+ * rules.
+ */
 export function resolveWorkspacePath(pathValue: string, workspaceRoot: string): string {
   const trimmed = stripWrappingQuotes(pathValue.trim());
   const workspaceStyle = detectPathStyle(workspaceRoot) ?? "windows";
@@ -165,11 +178,19 @@ export function resolveWorkspacePath(pathValue: string, workspaceRoot: string): 
   return normalizeAbsolutePath(pathApi.resolve(workspaceRoot, separatorNormalized), workspaceStyle);
 }
 
+/**
+ * Checks lexical containment against the normalized workspace; file access requiring symlink
+ * protection uses containedFile.
+ */
 export function isPathInsideWorkspace(pathValue: string, workspaceRoot: string): boolean {
   const normalizedWorkspace = normalizeWorkspaceRoot(workspaceRoot);
   return isPathInsideAllowedRoots(pathValue, normalizedWorkspace);
 }
 
+/**
+ * Checks the workspace and explicitly permitted writable roots without changing filesystem
+ * state.
+ */
 export function isPathInsideAllowedRoots(
   pathValue: string,
   workspaceRoot: string,
@@ -206,6 +227,10 @@ export function isPathInsideAllowedRoots(
   return false;
 }
 
+/**
+ * Finds explicit path-like references for the workspace guard; this is a heuristic, not a shell
+ * parser.
+ */
 export function extractExplicitPathReferences(text: string): string[] {
   const matches: string[] = [];
   const seen = new Set<string>();
@@ -250,6 +275,7 @@ export function extractExplicitPathReferences(text: string): string[] {
   return matches;
 }
 
+/** Formats a dependency/cache diagnostic path without importing it. */
 export function formatSkippedDependencyPath(pathValue: string): string {
   const parts = pathValue.replace(/\\/g, "/").split("/");
   const registryIndex = parts.indexOf("registry");
@@ -267,6 +293,10 @@ export function formatSkippedDependencyPath(pathValue: string): string {
   return parts[parts.length - 1] ?? pathValue;
 }
 
+/**
+ * Returns explicit references outside the workspace, excluding recognized dependency
+ * diagnostics.
+ */
 export function findOutsideWorkspacePaths(
   text: string,
   workspaceRoot: string,
@@ -311,6 +341,7 @@ export function findOutsideWorkspacePaths(
   return { violations, skippedExternalPaths };
 }
 
+/** Detects directory-changing shell commands covered by the workspace guard. */
 export function containsDirectoryNavigationCommand(command: string): boolean {
   return DIRECTORY_NAVIGATION_PATTERN.test(command);
 }
@@ -350,6 +381,9 @@ function formatOutsidePathBlockMessage(
     .join("\n");
 }
 
+/**
+ * Explains explicit outside-workspace prompt references, or returns null when no guard applies.
+ */
 export function getPromptWorkspaceGuardMessage(
   prompt: string,
   workspaceRoot: string,
@@ -368,6 +402,10 @@ export function getPromptWorkspaceGuardMessage(
   );
 }
 
+/**
+ * Explains blocked directory navigation/outside-root command references without executing shell
+ * text.
+ */
 export function getShellWorkspaceGuardMessage(
   command: string,
   workspaceRoot: string,
@@ -408,7 +446,7 @@ const DANGEROUS_SHELL_PATTERNS: RegExp[] = [
   />\s*\/dev\/(?:sd|hd|nvme|disk)/i,
 ];
 
-/** True when a shell command matches a destructive pattern that always needs approval. */
+/** Classifies destructive shell patterns; the execution-policy caller owns rejection/approval. */
 export function isDangerousShellCommand(command: string): boolean {
   return DANGEROUS_SHELL_PATTERNS.some((pattern) => pattern.test(command));
 }

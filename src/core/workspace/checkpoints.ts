@@ -1,3 +1,9 @@
+/**
+ * Exact file snapshots and journaled restore operations, separate from display-only activity
+ * tracking. Conflicting edits and incomplete coverage block restoration; interrupted journals
+ * must be recovered before new workspace execution.
+ */
+
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
@@ -79,6 +85,10 @@ export class CheckpointStore {
     }
     return hash;
   }
+  /**
+   * Stores exact eligible file bytes/modes within snapshot/store limits; skipped paths and
+   * incomplete coverage remain explicit.
+   */
   async capture(): Promise<FileBoundary> {
     const boundary: FileBoundary = { files: Object.create(null), complete: true, skipped: [] };
     let size = 0;
@@ -134,6 +144,10 @@ export class CheckpointStore {
     }
     return boundary;
   }
+  /**
+   * Builds a display diff from verified blobs with bounded diff computation; does not change
+   * workspace files.
+   */
   async patch(before: FileBoundary, after: FileBoundary, path: string): Promise<string> {
     const a = fileAt(before, path);
     const b = fileAt(after, path);
@@ -159,11 +173,18 @@ export class CheckpointStore {
       );
     });
   }
+  /**
+   * Returns paths whose captured byte hash or permission mode changed.
+   */
   changed(before: FileBoundary, after: FileBoundary): string[] {
     return [...new Set([...Object.keys(before.files), ...Object.keys(after.files)])]
       .filter((path) => !same(fileAt(before, path), fileAt(after, path)))
       .sort();
   }
+  /**
+   * Builds and verifies restore operations, refusing incomplete history, missing blobs and
+   * conflicting later edits.
+   */
   async preview(checkpoints: readonly FileCheckpoint[]): Promise<RestoreOperation[]> {
     if (checkpoints.some((point) => point.recoveryInvalidated))
       throw new Error(
@@ -240,6 +261,10 @@ export class CheckpointStore {
       await unlink(temp).catch(() => undefined);
     }
   }
+  /**
+   * Journals verified operations before changing files. Failure attempts rollback; an
+   * unresolved journal blocks later workspace execution.
+   */
   async restore(operations: readonly RestoreOperation[]): Promise<void> {
     await this.verify(operations);
     for (const op of operations) {
@@ -261,6 +286,10 @@ export class CheckpointStore {
       throw error;
     }
   }
+  /**
+   * Rolls an interrupted journal back after checking every current path; conflicting later
+   * edits throw without overwriting them.
+   */
   async recover(): Promise<boolean> {
     const journal = join(this.directory, "restore.json");
     let value: { version: number; operations: RestoreOperation[] };
@@ -314,6 +343,10 @@ export async function pendingFileRecoveries(workspace: string): Promise<string[]
   }
   return pending.sort();
 }
+/**
+ * Blocks workspace execution when another conversation has an interrupted restore journal; the
+ * recovering conversation may exempt itself.
+ */
 export async function assertFileRecoveryReady(
   workspace: string,
   recoveringSession?: string,

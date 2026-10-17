@@ -1,3 +1,8 @@
+/**
+ * Google runtime backed by the Antigravity CLI. Keeps native selectors and reasoning metadata,
+ * validates AGY, adapts buffered output and preserves cancellation across owned subprocesses.
+ */
+
 import { formatConversationHistory } from "../../session/conversation.js";
 import { verifyAgyExecutable } from "../executables/antigravityExecutable.js";
 import {
@@ -292,6 +297,7 @@ function normalizeCachedAgyModels(models: readonly ProviderModel[]): readonly Pr
 }
 
 // Resolve persisted model/reasoning state to the exact selector advertised by `agy models`.
+/** Selects the provider-advertised native selector for a model/reasoning pair. */
 export function getAgyModelSelector(
   modelId: string,
   reasoning: string | null | undefined,
@@ -313,6 +319,7 @@ export function getAgyModelSelector(
   return effort ? (metadata.selectors[effort] ?? null) : null;
 }
 
+/** Formats a native model id for display without changing the execution id. */
 export function getAntigravityModelLabel(modelId: string): string {
   const discovered = getActiveAgyModels().find((m) => m.id === modelId || m.modelId === modelId);
   if (discovered) return discovered.label;
@@ -374,6 +381,10 @@ function getActiveAgyModels(): readonly ProviderModel[] {
   );
 }
 
+/**
+ * Reads AGY's model inventory through its supported CLI interface with bounded subprocess
+ * execution.
+ */
 export async function discoverAgyModels(options: {
   executable: string;
   cwd: string;
@@ -451,6 +462,9 @@ function isAntigravityRouteConfigured(): boolean {
   return agyRouteValidated;
 }
 
+/**
+ * Resets AGY route state and advances discovery generation so older results cannot publish.
+ */
 export function resetAntigravityRouteValidationCacheForTests(): void {
   agyRouteValidated = false;
   resolvedAgyExecutable = "agy";
@@ -465,6 +479,7 @@ export function resetAntigravityRouteValidationCacheForTests(): void {
 // Route validation
 // ---------------------------------------------------------------------------
 
+/** Verifies AGY command readiness and route metadata without submitting a user prompt. */
 export async function validateAntigravityRoute(options: {
   cwd?: string;
   configuredPath?: string | null;
@@ -577,6 +592,10 @@ export async function validateAntigravityRoute(options: {
 // run()
 // ---------------------------------------------------------------------------
 
+/**
+ * Runs the selected native AGY route and adapts output; cancellation retains ownership until
+ * subprocess cleanup settles.
+ */
 export function runAntigravityWithRunner(
   request: ProviderChatRequest,
   handlers: BackendRunHandlers,
@@ -672,6 +691,10 @@ export function runAntigravityWithRunner(
 // Runtime
 // ---------------------------------------------------------------------------
 
+/**
+ * Amends model reasoning controls from AGY help/probe output without changing its native
+ * identity.
+ */
 export function applyAgyEffortMetadata(model: ProviderModel, output: string): ProviderModel {
   try {
     const body = JSON.parse(output);
@@ -718,6 +741,10 @@ export function applyAgyEffortMetadata(model: ProviderModel, output: string): Pr
   }
 }
 
+/**
+ * Probes reasoning support for the selected native model and returns updated capability
+ * evidence.
+ */
 export async function resolveAgyReasoningCapability(
   model: ProviderModel,
   options: {

@@ -1,3 +1,8 @@
+/**
+ * Describes, lazily creates, removes when unused, and prunes per-session
+ * `.ubume/scratch/<session>` folders where the Local agent keeps throwaway test/debug files.
+ */
+
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +26,7 @@ interface SessionScratchDir {
   relativePath: string;
 }
 
+/** Names the workspace-relative scratch root without creating it. */
 export function resolveScratchRoot(workspaceRoot: string): string {
   return join(workspaceRoot, ".ubume", "scratch");
 }

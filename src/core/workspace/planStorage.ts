@@ -1,3 +1,7 @@
+/**
+ * Normalizes, saves, and reads reviewed plans from Ubume workspace data.
+ */
+
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";

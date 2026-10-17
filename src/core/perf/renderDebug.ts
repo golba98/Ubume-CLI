@@ -1,3 +1,8 @@
+/**
+ * Provides opt-in render counts, lifecycle traces, frame diagnostics, and React render
+ * instrumentation.
+ */
+
 import { useEffect, useRef } from "react";
 import { resolveUbumeDebugLogPath } from "../workspace/appData.js";
 import { createDebugLog } from "./debugLog.js";
@@ -44,6 +49,10 @@ function configureFromEnv(env: DebugEnv = process.env): void {
   configured = true;
 }
 
+/**
+ * Loads debug flags/path from the supplied environment, resets counters and optionally writes a
+ * session-start record.
+ */
 export function configureRenderDebug(env: DebugEnv = process.env): void {
   configureFromEnv(env);
   counters.clear();
@@ -52,6 +61,7 @@ export function configureRenderDebug(env: DebugEnv = process.env): void {
   }
 }
 
+/** Lazily reads render diagnostic flags on first use; does not write a terminal frame. */
 export function isRenderDebugEnabled(): boolean {
   if (!configured) {
     configureFromEnv();
@@ -80,6 +90,7 @@ function isFlickerDebugEnabled(): boolean {
   return flickerEnabled;
 }
 
+/** Reads the independently configured plain-action diagnostic flag. */
 export function isPlainActionsDebugEnabled(): boolean {
   if (!configured) {
     configureFromEnv();
@@ -87,6 +98,7 @@ export function isPlainActionsDebugEnabled(): boolean {
   return plainActionsEnabled;
 }
 
+/** Returns the configured diagnostic destination after lazy environment initialization. */
 export function getRenderDebugLogPath(): string {
   if (!configured) {
     configureFromEnv();
@@ -134,6 +146,7 @@ function writeRecord(kind: string, fields: Record<string, unknown>): void {
   }
 }
 
+/** Records a counted component lifecycle event when render diagnostics are enabled. */
 export function traceLifecycleEvent(
   component: string,
   event: "mount" | "unmount" | "blankFrame" | "emptyFrame" | "stateTransition" | string,
@@ -144,6 +157,9 @@ export function traceLifecycleEvent(
   writeRecord("lifecycle", { component, event, count, ...fields });
 }
 
+/**
+ * Traces component mount/unmount through React effects; the effect retains its initial fields.
+ */
 export function useLifecycleDebug(component: string, fields: Record<string, unknown> = {}): void {
   useEffect(() => {
     traceLifecycleEvent(component, "mount", fields);
@@ -153,12 +169,17 @@ export function useLifecycleDebug(component: string, fields: Record<string, unkn
   }, []);
 }
 
+/** Records an opt-in blank-frame diagnostic without changing rendered output. */
 export function traceBlankFrame(component: string, fields: Record<string, unknown> = {}): void {
   if (!isRenderDebugEnabled()) return;
   const count = nextCounter(`blankFrame.${component}`);
   writeRecord("blankFrame", { component, event: "blankFrame", count, ...fields });
 }
 
+/**
+ * Records nonpositive/nonfinite numeric layout fields for diagnostics; does not repair
+ * dimensions.
+ */
 export function traceLayoutValidity(component: string, fields: Record<string, unknown> = {}): void {
   if (!isRenderDebugEnabled()) return;
   const values = Object.entries(fields).filter(([, value]) => typeof value === "number") as Array<
@@ -177,6 +198,7 @@ export function traceLayoutValidity(component: string, fields: Record<string, un
   });
 }
 
+/** Records state transitions when render or lifecycle diagnostics are enabled. */
 export function traceStateTransition(fields: Record<string, unknown>): void {
   if (!isRenderDebugEnabled() && !isLifecycleDebugEnabled()) return;
   writeRecord("state", { event: "transition", ...fields });
@@ -238,6 +260,7 @@ function summarizeWatched(watched: Record<string, unknown>): Record<string, unkn
   return summary;
 }
 
+/** Records a counted component render and the supplied reason when enabled. */
 export function traceRender(
   component: string,
   reason = "unknown",
@@ -248,6 +271,10 @@ export function traceRender(
   writeRecord("render", { component, count, reason, ...fields });
 }
 
+/**
+ * Tracks render count and changed watched keys per mounted component; values are summarized
+ * before logging.
+ */
 export function useRenderDebug(component: string, watched: Record<string, unknown> = {}): void {
   const renderCount = useRef(0);
   const previous = useRef<Record<string, unknown> | null>(null);
@@ -264,6 +291,7 @@ export function useRenderDebug(component: string, watched: Record<string, unknow
   previous.current = watched;
 }
 
+/** Tracks watched-value changes for the independent flicker/render-trace channels. */
 export function useFlickerDebug(event: string, watched: Record<string, unknown> = {}): void {
   const renderCount = useRef(0);
   const previous = useRef<Record<string, unknown> | null>(null);
@@ -280,6 +308,7 @@ export function useFlickerDebug(event: string, watched: Record<string, unknown> 
   previous.current = watched;
 }
 
+/** Writes a counted event to the named render diagnostic channel when enabled. */
 export function traceEvent(
   channel: string,
   event: string,
@@ -304,15 +333,18 @@ export function traceEventLazy(
   traceEvent(channel, event, buildFields());
 }
 
+/** Records a render-scheduler flush through the shared opt-in event channel. */
 export function traceSchedulerFlush(fields: Record<string, unknown>): void {
   traceEvent("scheduler", "flush", fields);
 }
 
+/** Records status animation ticks on render and applicable flicker channels. */
 export function traceStatusTick(fields: Record<string, unknown>): void {
   traceEvent("status", "tick", fields);
   traceFlickerEvent("statusTick", fields);
 }
 
+/** Records timeline updates through the shared opt-in event channel. */
 export function traceTimelineUpdate(fields: Record<string, unknown>): void {
   traceEvent("timeline", "update", fields);
 }
@@ -326,12 +358,17 @@ export function traceLifecycleTransition(fields: Record<string, unknown>): void 
   writeRecord("lifecycle", fields);
 }
 
+/** Writes a counted flicker event when any relevant render/flicker trace flag is enabled. */
 export function traceFlickerEvent(event: string, fields: Record<string, unknown> = {}): void {
   if (!isRenderDebugEnabled() && !isFlickerDebugEnabled() && !isRenderTraceEnabled()) return;
   const count = nextCounter(`flicker.${event}`);
   writeRecord("flicker", { event, count, ...fields });
 }
 
+/**
+ * Records sequence/byte diagnostics rather than the terminal contents, and does not perform the
+ * write.
+ */
 export function traceTerminalWrite(
   stream: "stdout" | "stderr",
   source: string,
@@ -370,6 +407,7 @@ export function traceTerminalWrite(
   });
 }
 
+/** Records an explicit clear through the opt-in render diagnostic channel. */
 export function traceTerminalClear(source: string, fields: Record<string, unknown> = {}): void {
   traceEvent("terminal", "clearScreen", { source, ...fields });
 }

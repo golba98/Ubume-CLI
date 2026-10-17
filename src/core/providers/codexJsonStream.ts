@@ -1,3 +1,8 @@
+/**
+ * Incrementally parses Codex JSONL events into assistant, reasoning, tool, and lifecycle
+ * callbacks.
+ */
+
 import type { RunToolActivity } from "../../session/types.js";
 import { normalizeLineBreaks } from "../shared/text.js";
 import type { BackendProgressUpdate } from "./types.js";
@@ -182,6 +187,10 @@ function mapToolActivity(
   };
 }
 
+/**
+ * Creates per-run structured event state. Call feedLine with complete JSONL lines; the caller
+ * owns chunk buffering and trailing-line handling.
+ */
 export function createCodexJsonStreamParser(handlers: CodexJsonStreamHandlers) {
   const assistantTextById = new Map<string, string>();
   const progressTextById = new Map<string, string>();

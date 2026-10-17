@@ -1,3 +1,8 @@
+/**
+ * Resolves, caches, and formats model context-window metadata from provider config, discovery,
+ * and known registries.
+ */
+
 import type { ProviderId, ProviderWorkspaceOverride } from "../providerLauncher/types.js";
 import { isRecord } from "../shared/values.js";
 
@@ -215,14 +220,20 @@ function cacheKey(options: ResolveModelContextLengthOptions): string {
   });
 }
 
+/**
+ * Invalidates process-local context facts so later lookups can use refreshed
+ * discovery/configuration.
+ */
 export function clearModelContextMetadataCache(): void {
   contextCache.clear();
 }
 
+/** Formats a token count with separators; null remains explicitly Unknown. */
 export function formatContextLength(value: number | null): string {
   return value === null ? "Unknown" : value.toLocaleString("en-US");
 }
 
+/** Formats token counts with compact k/K/M suffixes for terminal metadata. */
 export function formatContextCompact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 100_000) return `${Math.round(n / 1_000)}K`;
@@ -230,6 +241,9 @@ export function formatContextCompact(n: number): string {
   return `${n}`;
 }
 
+/**
+ * Formats used/limit values and a capped percentage, retaining Unknown when the limit is absent.
+ */
 export function formatContextMeter(
   usedTokens: number | null | undefined,
   contextLimit: number | null,
@@ -240,6 +254,10 @@ export function formatContextMeter(
   return `${used.toLocaleString("en-US")} / ${contextLimit.toLocaleString("en-US")} · ${pct}%`;
 }
 
+/**
+ * Adapts resolved context metadata to composer state, retaining the estimated marker when
+ * applicable.
+ */
 export function contextMetadataToModelSpec(metadata: ModelContextMetadata): ModelSpec {
   if (metadata.contextLength === null) {
     return {
@@ -373,6 +391,10 @@ function resolveFromKnownRegistry(
   };
 }
 
+/**
+ * Resolves cached metadata, then raw discovery, configuration and known registry values. This
+ * async interface does not fetch remote metadata itself.
+ */
 export async function resolveModelContextLength(
   options: ResolveModelContextLengthOptions,
 ): Promise<ModelContextMetadata> {
@@ -399,6 +421,10 @@ export async function resolveModelContextLength(
   return resolved;
 }
 
+/**
+ * Synchronous context lookup using the same raw/config/registry precedence; unknown results do
+ * not imply a context limit.
+ */
 export function resolveModelContextLengthCached(
   options: ResolveModelContextLengthOptions,
 ): ModelContextMetadata {

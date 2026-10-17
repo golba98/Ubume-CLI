@@ -1,3 +1,7 @@
+/**
+ * Validates executable paths and process-launch inputs before spawning commands.
+ */
+
 import { existsSync } from "fs";
 import { isAbsolute, resolve } from "path";
 
@@ -50,6 +54,10 @@ function validateCommonExecutableSyntax(value: string, label: string): void {
   }
 }
 
+/**
+ * Normalizes a command name or path without accepting shell arguments. Invalid syntax,
+ * disallowed bare names or required missing paths throw.
+ */
 export function normalizeExecutableValue(
   rawValue: string,
   options: ExecutableValidationOptions,
@@ -85,6 +93,10 @@ export function normalizeExecutableValue(
   return normalized;
 }
 
+/**
+ * Validates executable syntax before direct spawn, allowing nonexistent paths unless the caller
+ * requires existence.
+ */
 export function validateExecutableForSpawn(
   executable: string,
   options: ExecutableValidationOptions,
@@ -95,6 +107,7 @@ export function validateExecutableForSpawn(
   });
 }
 
+/** Rejects cmd.exe metacharacters in batch executable paths before shell wrapping. */
 export function validateWindowsBatchExecutableForCmd(executable: string, label: string): void {
   if (!hasWindowsBatchExtension(executable)) return;
   if (WINDOWS_BATCH_METACHARACTER_PATTERN.test(executable)) {
@@ -102,6 +115,7 @@ export function validateWindowsBatchExecutableForCmd(executable: string, label: 
   }
 }
 
+/** Rejects shell metacharacters in arguments passed through the Windows batch wrapper. */
 export function validateWindowsBatchArgumentForCmd(argument: string, label: string): void {
   if (WINDOWS_BATCH_METACHARACTER_PATTERN.test(argument)) {
     throw new Error(`${label} contains characters that are unsafe for cmd.exe batch launch.`);

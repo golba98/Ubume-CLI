@@ -1,3 +1,9 @@
+/**
+ * Prepares executable resolution, capability selection and argv for Codex exec without spawning
+ * the prompt process. Normal runs assume the modern CLI interface; explicit probes and opt-in
+ * diagnostics support compatibility checks.
+ */
+
 import { fileURLToPath } from "node:url";
 import { resolveCodexExecutable } from "../executables/codexExecutable.js";
 import * as perf from "../perf/profiler.js";
@@ -102,6 +108,10 @@ function logCodexLaunchDiagnostics(
   logger(debugLines.join("\n"));
 }
 
+/**
+ * Resolves the executable and argv without starting a prompt. Resolution/probe errors reject;
+ * unsupported runtime controls return an unsuccessful result.
+ */
 export async function prepareCodexExecLaunch(
   options: PrepareCodexExecLaunchOptions,
   responsibleModuleUrl: string,

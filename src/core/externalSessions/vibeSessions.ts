@@ -1,3 +1,7 @@
+/**
+ * Lists and reads native Mistral Vibe session transcripts.
+ */
+
 import { readdir, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { parseTomlDocument } from "../../config/layeredConfig.js";
@@ -20,6 +24,10 @@ import type {
   ExternalTranscriptEntry,
 } from "./types.js";
 
+/**
+ * Resolves Vibe's configured session directory with the native-home fallback; does not create
+ * it.
+ */
 export async function vibeSessionDir(options: ExternalSessionOptions = {}): Promise<string> {
   const home = envValue(options, "VIBE_HOME") ?? join(resolveHome(options), ".vibe");
   try {
@@ -73,6 +81,7 @@ async function summarize(path: string): Promise<ExternalSessionSummary | null> {
   };
 }
 
+/** Lists native Vibe metadata for the requested scope without modifying Vibe's store. */
 export async function listVibeSessions(
   scope: ExternalSessionScope,
   options: ExternalSessionOptions = {},
@@ -108,6 +117,10 @@ export async function listVibeSessions(
     );
 }
 
+/**
+ * Reads Vibe messages and tool activity into a display transcript; native files remain
+ * unchanged.
+ */
 export async function readVibeTranscript(
   summary: ExternalSessionSummary,
 ): Promise<ExternalTranscript> {

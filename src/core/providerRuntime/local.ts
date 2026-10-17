@@ -1,3 +1,8 @@
+/**
+ * Checks local-server readiness, discovers models, resolves configuration, delegates active
+ * Local requests to the Harness adapter, and reports diagnostics.
+ */
+
 import { createHash } from "node:crypto";
 import { resolveBrowserCapability } from "../computerUse/capability.js";
 import type { LocalBackendId, ProviderWorkspaceOverride } from "../providerLauncher/types.js";
@@ -71,12 +76,16 @@ function nonEmpty(value: string | undefined | null): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/** Updates process-local Local configuration for the selected workspace/backend. */
 export function setLocalProviderConfig(
   override: ProviderWorkspaceOverride | null | undefined,
 ): void {
   configuredOverride = override ?? null;
 }
 
+/**
+ * Clears Local configuration, discovery, validation and metadata caches for isolated tests.
+ */
 export function resetLocalProviderStateForTests(): void {
   configuredOverride = null;
   discoveryCaches.clear();
@@ -86,6 +95,10 @@ export function resetLocalProviderStateForTests(): void {
   clearModelContextMetadataCache();
 }
 
+/**
+ * Resolves Local endpoint, model and credential preferences from workspace configuration and
+ * environment.
+ */
 export function resolveLocalProviderConfig(
   override: ProviderWorkspaceOverride | null | undefined = configuredOverride,
   env: NodeJS.ProcessEnv = process.env,
@@ -311,6 +324,7 @@ function notConfiguredResult(
   };
 }
 
+/** Returns the current Local discovery snapshot; active readiness probing is separate. */
 export function discoverLocalModels(
   override: ProviderWorkspaceOverride | null | undefined = configuredOverride,
   localBackend: LocalBackendId = override?.localBackend ?? "lm-studio",
@@ -375,6 +389,10 @@ export function validateLocalProvider(
   return promise;
 }
 
+/**
+ * Probes the selected Local backend and refreshes model/capability state; failed readiness
+ * remains recoverable.
+ */
 export async function checkLocalProvider(
   options: {
     override?: ProviderWorkspaceOverride | null;
@@ -932,6 +950,7 @@ async function resolveLocalAgentConfig(
   };
 }
 
+/** Collects Local endpoint/model readiness evidence without submitting an agent prompt. */
 export async function runLocalDiagnostics(
   options: {
     localConfig?: ProviderWorkspaceOverride | null;

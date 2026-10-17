@@ -26,6 +26,10 @@ async def main():
 asyncio.run(main())
 `;
 
+/**
+ * Reads Vibe's effective model configuration through its installed Python interpreter, with
+ * timeout/abort and subprocess cleanup. Unsupported installations or malformed output reject.
+ */
 export async function probeVibeEffectiveModels(options: {
   executable: string;
   cwd: string;

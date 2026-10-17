@@ -1,3 +1,8 @@
+/**
+ * Discovers Vibe configuration/models, resolves and launches the CLI, manages sessions, and
+ * adapts routed output.
+ */
+
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -76,6 +81,10 @@ function findProjectVibeConfig(cwd: string, vibeHome: string): string | null {
   return null;
 }
 
+/**
+ * Reads the configured Vibe model preference without replacing native aliases with inferred
+ * labels.
+ */
 export function detectVibeActiveModel(
   options: { cwd?: string; env?: NodeJS.ProcessEnv; homeDirectory?: string } = {},
 ): VibeModelDetection {
@@ -187,6 +196,7 @@ function vibeEntryToProviderModel(entry: VibeConfigModelEntry): ProviderModel {
   };
 }
 
+/** Reads configured Vibe model definitions for the workspace and native home. */
 export function listVibeConfiguredModels(
   options: { cwd?: string; env?: NodeJS.ProcessEnv; homeDirectory?: string } = {},
 ): { models: ProviderModel[]; configPath: string | null } {
@@ -343,6 +353,9 @@ export function mergeMistralVibeModels(
 
 const effectiveVibeModels = new Map<string, ProviderModelDiscoveryResult>();
 
+/**
+ * Normalizes the installed Vibe reader's effective assignments into executable model choices.
+ */
 export function parseVibeEffectiveModels(payload: unknown): ProviderModelDiscoveryResult {
   if (!isRecord(payload) || !Array.isArray(payload.models))
     throw new Error("Invalid Vibe model configuration.");
@@ -386,6 +399,7 @@ export function parseVibeEffectiveModels(payload: unknown): ProviderModelDiscove
   };
 }
 
+/** Returns synchronous Vibe configuration/cache discovery; live refresh remains separate. */
 export function discoverMistralVibeModels(cwd = process.cwd()): ProviderModelDiscoveryResult {
   const effective = effectiveVibeModels.get(catalogContextKey("mistral", { cwd }));
   if (effective) return effective;
@@ -445,6 +459,7 @@ function vibeCurrentDefaultModel(): ProviderModel {
   };
 }
 
+/** Hands terminal ownership to the native Vibe CLI and reports structured launch errors. */
 export async function launchMistralVibeCli(
   provider: ProviderConfig,
   options: LaunchProviderCliOptions & {
@@ -471,6 +486,7 @@ export async function launchMistralVibeCli(
 // Vibe persists every programmatic run as a session directory; passing the last
 // session id back via --resume keeps conversation context across Ubume turns.
 
+/** Finds the newest matching native session for resume without modifying the session store. */
 export async function findLatestVibeSession(options: {
   workspaceRoot: string;
   sinceMs: number;
@@ -549,6 +565,7 @@ interface VibeStreamParser {
 
 // Parses `vibe -p --output streaming` stdout: one JSON LLMMessage per line, followed
 // by the final assistant text repeated as plain text (which must not be emitted twice).
+/** Creates per-run parsing state for Vibe text, reasoning and tool callbacks. */
 export function createVibeStreamParser(
   handlers: BackendRunHandlers,
   options: { startAfterUserPrompt?: string } = {},
@@ -681,6 +698,10 @@ function isVibeAuthFailure(stderr: string): boolean {
   return /api key|401|unauthorized|authentication/i.test(stderr);
 }
 
+/**
+ * Starts Vibe with native configuration and returns cancellation; run control exposes completion
+ * of all owned teardown work.
+ */
 export function runMistralVibe(
   request: ProviderChatRequest,
   handlers: BackendRunHandlers,
@@ -972,6 +993,8 @@ export function runMistralVibe(
   };
 }
 
+/** Checks native Vibe executable availability and reports configured selection; authentication is
+ * deferred to execution. */
 export async function validateMistralVibeRoute(
   options: { cwd: string; resolveExecutable?: (cwd: string) => Promise<string | null> } = {
     cwd: process.cwd(),

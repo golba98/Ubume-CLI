@@ -1,3 +1,9 @@
+/**
+ * Adapts Harness notifications to Ubume callbacks using explicit process and active-run
+ * ownership. Event handlers update per-run text, reasoning, tools and usage; only the owning
+ * runtime completes or fails a run.
+ */
+
 import { randomUUID } from "node:crypto";
 import { traceLocalStream } from "../../perf/debugLog.js";
 import type { BackendRunHandlers } from "../../providers/types.js";
@@ -76,6 +82,10 @@ interface NotificationProcess {
   emitUsage: (state: HarnessRunState, usage: Record<string, unknown>) => void;
 }
 
+/**
+ * Routes only the owning child/session's notifications; stale or settled runs cannot consume new
+ * events.
+ */
 export function routeNotification(
   method: string,
   params: HarnessNotification,
