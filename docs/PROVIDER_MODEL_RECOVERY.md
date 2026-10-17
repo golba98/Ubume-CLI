@@ -6,11 +6,11 @@ The investigation used mocked unavailable models and deferred validation respons
 
 The failure involved several independent defects:
 
-1. `isUsableSavedModel` accepted every concrete saved identifier. `handleProviderAction` also attempted restoration whenever that provider was already active. Returning to a provider therefore retried its rejected preference rather than offering another model. See [useProviderRoute.ts](../src/app/useProviderRoute.ts).
-2. Failed activation cleared `pendingRouteProviderId`. After switching away from Google, returning unsuccessfully left the other provider active and removed the Google recovery target. Opening the model picker then showed the other provider. The provider picker had a `select-model` handler but no keyboard action invoking it. See [useModelSelection.ts](../src/app/useModelSelection.ts), [useOverlayRouting.ts](../src/app/useOverlayRouting.ts), and [ProviderPicker.tsx](../src/ui/panels/ProviderPicker.tsx).
-3. The two activation handlers used a shared boolean rather than ordered transitions. An older success could commit over a newer selection; stale completion could also change focus or clear another operation's busy state. Persistence callbacks captured older configuration snapshots, and runtime changes were published before a failed save could be detected. See [useRuntimeSettings.ts](../src/app/useRuntimeSettings.ts).
+1. `isUsableSavedModel` accepted every concrete saved identifier. `handleProviderAction` also attempted restoration whenever that provider was already active. Returning to a provider therefore retried its rejected preference rather than offering another model. See [providerActions.ts](../src/app/providers/providerActions.ts) (where `isUsableSavedModel` and the activation decision now live) and [useProviderRoute.ts](../src/app/providers/useProviderRoute.ts).
+2. Failed activation cleared `pendingRouteProviderId`. After switching away from Google, returning unsuccessfully left the other provider active and removed the Google recovery target. Opening the model picker then showed the other provider. The provider picker had a `select-model` handler but no keyboard action invoking it. See [useModelSelection.ts](../src/app/models/useModelSelection.ts), [useOverlayRouting.ts](../src/app/overlays/useOverlayRouting.ts), and [ProviderPicker.tsx](../src/ui/panels/ProviderPicker.tsx).
+3. The two activation handlers used a shared boolean rather than ordered transitions. An older success could commit over a newer selection; stale completion could also change focus or clear another operation's busy state. Persistence callbacks captured older configuration snapshots, and runtime changes were published before a failed save could be detected. See [useRuntimeSettings.ts](../src/app/settings/useRuntimeSettings.ts).
 4. Request errors triggered catalog refresh through broad regular expressions, without retaining scoped rejection evidence. Model failures shared the `not-configured` validation status with setup/authentication failures. Google readiness also depended on a nonempty model list. See [registry.ts](../src/core/providerRuntime/registry.ts) and [antigravity.ts](../src/core/providerRuntime/antigravity.ts).
-5. In the actual App, Enter on `/model` completed the input to `/models` instead of submitting the exact command. Request finalization could also move focus to the composer while a picker was open. See [useComposerInput.ts](../src/ui/chrome/composer/useComposerInput.ts) and [useRunLifecycle.ts](../src/app/useRunLifecycle.ts).
+5. In the actual App, Enter on `/model` completed the input to `/models` instead of submitting the exact command. Request finalization could also move focus to the composer while a picker was open. See [useComposerInput.ts](../src/ui/chrome/composer/useComposerInput.ts) and [useRunLifecycle.ts](../src/app/run/useRunLifecycle.ts).
 
 A request error alone did not universally prevent the picker from opening. The isolated adapter also successfully processed a mocked replacement model after rejecting another. The reproduction establishes restoration, navigation, command submission, and ordering defects rather than a permanent Google adapter crash.
 
@@ -47,8 +47,7 @@ The App fixture replaces provider discovery, validation, and execution with dete
 - The two original hook reproductions failed before implementation and pass after the repair.
 - Actual-App acceptance and regression tests pass, including restart, request-time errors, unavailable catalogs, and recovery without configuration edits.
 - `bun run build` passed, including generated build information, type checking, and Biome checks. The generated build-info file was restored to its pre-existing workspace contents afterward.
-- Final implementation-workspace `bun run test`: **2,191 passed, 0 failed**, across 200 files (162.98 seconds). This includes **54 added regression cases** relative to the investigation baseline.
-- Isolated PR branch, excluding unrelated native-provider edits: `bun test` passed **2,191 tests, 0 failed**, across 199 files (163.67 seconds). Build, type checking, Biome, and diff checks also passed on this branch.
+- Final `bun run test`: **2,191 passed, 0 failed**, across 200 files (162.98 seconds). This includes **54 added regression cases** relative to the investigation baseline.
 - `bun run typecheck`, `bun run check`, `bun run format`, and `git diff --check` passed. No unresolved test or build failures remain.
 
 Intermediate verification exposed assumptions in existing tests about runtime-gated persistence and catalogs without freshness/completeness evidence. Those fixtures now state the intended authoritative discovery explicitly. Fallback picker entries remain provisionally selectable. Intermediate fallback-selection failures were corrected by preserving provisional selection. A run overlapping a picker-label edit was discarded because cached modules and updated assertions differed. Fresh complete runs were used for final verification; only the final result above represents the completed checks.
@@ -59,7 +58,7 @@ The workspace configuration format, credentials, provider identities, executable
 
 Model rejection evidence is session-only: no persistent blacklist or automatic replacement model is introduced. After restart, saved preferences are re-evaluated through authoritative discovery or request-time evidence; the controls remain accessible throughout. Plain-text CLI errors require conservative classification, so ambiguous failures remain unknown. Mocked tests verify recovery architecture, not the availability or entitlement of any real Gemini model.
 
-Unrelated pre-existing native-provider changes are excluded from this repair. No deployment or real paid provider request was performed.
+Existing uncommitted work, including native-provider changes, was retained. No commit, push, deployment, or real paid provider request was performed for this repair.
 
 ## Files changed by this repair
 
@@ -67,15 +66,15 @@ Application:
 
 ```text
 src/app/App.tsx
-src/app/OverlayPanels.tsx
-src/app/useAppState.ts
-src/app/useModelCatalog.ts
-src/app/useModelSelection.ts
-src/app/useOverlayRouting.ts
-src/app/usePromptRun.ts
-src/app/useProviderRoute.ts
-src/app/useRunLifecycle.ts
-src/app/useRuntimeSettings.ts
+src/app/overlays/OverlayPanels.tsx
+src/app/state/useAppState.ts
+src/app/models/useModelCatalog.ts
+src/app/models/useModelSelection.ts
+src/app/overlays/useOverlayRouting.ts
+src/app/run/usePromptRun.ts
+src/app/providers/useProviderRoute.ts
+src/app/run/useRunLifecycle.ts
+src/app/settings/useRuntimeSettings.ts
 ```
 
 Core, session, and UI:
@@ -103,9 +102,9 @@ src/ui/panels/ProviderPicker.tsx
 Tests and fixture:
 
 ```text
-src/app/modelRecovery.test.tsx
-src/app/modelRecoveryApp.test.ts
-src/app/useRuntimeSettings.test.tsx
+src/app/models/modelRecovery.test.tsx
+src/app/models/modelRecoveryApp.test.ts
+src/app/settings/useRuntimeSettings.test.tsx
 src/core/models/modelSelection.test.ts
 src/core/models/selectionCoordinator.test.ts
 src/core/providerLauncher/registry.test.ts

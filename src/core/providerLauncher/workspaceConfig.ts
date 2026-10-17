@@ -4,6 +4,7 @@ import { getProviderRuntime, isProviderRoutableInUbume } from "../providerRuntim
 import { isRecord } from "../shared/values.js";
 import { resolveUbumeWorkspaceDataDir } from "../workspace/appData.js";
 import { normalizeWorkspaceRoot } from "../workspace/workspaceRoot.js";
+import { resolveLocalBackend } from "./localBackend.js";
 import { resolveProviderIdentity } from "./providerIdentity.js";
 import { isKnownProviderId } from "./registry.js";
 import type {
@@ -519,8 +520,7 @@ export function setProviderActiveRoute(
     };
   }
 
-  const localBackend =
-    activeRoute.localBackend ?? config.providers?.local?.localBackend ?? "lm-studio";
+  const localBackend = resolveLocalBackend(config, activeRoute.localBackend);
   return {
     ...config,
     activeRoute: { ...activeRoute, localBackend },

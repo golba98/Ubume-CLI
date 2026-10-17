@@ -4,7 +4,7 @@ import type {
   ProviderModelDiscoveryResult,
   ProviderRuntime,
 } from "../providerRuntime/types.js";
-import { catalogContextKey, ModelCatalog } from "./modelCatalog.js";
+import { catalogContextKey, ModelCatalog, providerConnectionKey } from "./modelCatalog.js";
 
 const model = (id: string): ProviderModel => ({
   id,
@@ -247,4 +247,27 @@ test("runtime capability rejection updates subscribers without allowing stale re
   expect(catalog.amendModel("mistral", "one", (m) => ({ ...m, label: "stale" }), old)).toBe(false);
   expect(catalog.get("mistral")!.models[0]!.label).toBe("one");
   unsubscribe();
+});
+
+test("Local connection keys agree whether or not the route names its backend", () => {
+  const cwd = "/tmp/ubume-connection-key";
+  const savedUnsloth = { providers: { local: { localBackend: "unsloth" as const } } };
+  // Evidence recorded for a route that names its backend must be found by a
+  // consumer that only knows the saved preference, and vice versa.
+  expect(providerConnectionKey("local", { cwd, config: savedUnsloth })).toBe(
+    providerConnectionKey("local", { cwd, config: savedUnsloth, routeLocalBackend: "unsloth" }),
+  );
+  expect(providerConnectionKey("local", { cwd, config: {} })).toBe(
+    providerConnectionKey("local", { cwd, config: {}, routeLocalBackend: "lm-studio" }),
+  );
+  expect(providerConnectionKey("local", { cwd, config: savedUnsloth })).not.toBe(
+    providerConnectionKey("local", { cwd, config: savedUnsloth, routeLocalBackend: "lm-studio" }),
+  );
+});
+
+test("non-Local connection keys ignore Local backend selection", () => {
+  const cwd = "/tmp/ubume-connection-key";
+  expect(providerConnectionKey("google", { cwd, config: {} })).toBe(
+    providerConnectionKey("google", { cwd, config: {}, routeLocalBackend: "unsloth" }),
+  );
 });

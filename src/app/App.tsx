@@ -1,3 +1,27 @@
+/**
+ * The interactive app's root component.
+ *
+ * App composes the hooks under `src/app/` and renders two roots:
+ * `TranscriptShell` for the main chat and `AppShell` (with `OverlayPanels`)
+ * for overlays. It owns very little logic itself; read
+ * docs/architecture/app.md for the full map.
+ *
+ * Invariants (do not "simplify" these away):
+ * - Hook call order is significant. Effects run in declaration order, and
+ *   several hooks were split out of larger ones at exactly their original
+ *   positions to keep that order. Move a hook only if you have checked the
+ *   effects it contains and the ones around it.
+ * - The terminal and clear-frame wiring stays inline here: creating and
+ *   disposing the clear-frame boundary controller, syncing it with session
+ *   state, the alternate-screen fallback, and `armTranscriptReplacement`.
+ *   The frame write that owns screen transitions happens before effects run.
+ * - Render-time ref assignments (`snapshotRef`, `inputValueRef`, `busyRef`, …)
+ *   stay in render, never in effects, so async callbacks and the frame writer
+ *   see the values of the render being committed.
+ * - `OverlayPanels` is not memoized; `AppShell` is, with a custom comparator,
+ *   so avoid adding props to it that change during streaming.
+ */
+
 import { useApp, useFocusManager, useStdin, useStdout } from "ink";
 import {
   useCallback,
@@ -10,43 +34,20 @@ import {
 } from "react";
 import type { LaunchArgs } from "../config/launchArgs.js";
 import { applyLayeredRuntimeOverride } from "../config/layeredConfig.js";
-import { saveSettings } from "../config/persistence.js";
 import { buildRuntimeSummary, resolveRuntimeConfig } from "../config/runtimeConfig.js";
 import {
   estimateTokens,
   formatBusyLoaderSettingValue,
-  formatReasoningLabel,
-  formatThemeLabel,
   formatWorkspaceDisplayPath,
   type HeaderConfig,
   type UserSettingValues,
 } from "../config/settings.js";
-import {
-  type CodexModelCapabilities,
-  createFallbackModelCapabilities,
-  findModelCapability,
-  getSelectableModelCapabilities,
-  normalizeReasoningForModelCapabilities,
-} from "../core/models/codexModelCapabilities.js";
-import { catalogContextKey } from "../core/models/modelCatalog.js";
-import { traceModelStateDebug } from "../core/perf/debugLog.js";
+import type { CodexModelCapabilities } from "../core/models/codexModelCapabilities.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
-import { buildProviderRegistry, findProvider } from "../core/providerLauncher/registry.js";
 import type { LocalBackendId, ProviderId } from "../core/providerLauncher/types.js";
-import { resolveModelContextLength } from "../core/providerRuntime/contextMetadata.js";
 import { isLocalRuntime } from "../core/providerRuntime/deployment.js";
-import { modelRecoveryMessage } from "../core/providerRuntime/failures.js";
-import { type checkLocalProvider, setLocalProviderConfig } from "../core/providerRuntime/local.js";
-import { closeLocalHarnessSession } from "../core/providerRuntime/localHarness/runtime.js";
-import { providerModelsToCodexCapabilities } from "../core/providerRuntime/models.js";
-import {
-  createRoutedProvider,
-  discoverProviderModels,
-  getProviderRouteSetupMessage,
-  getProviderRuntime,
-  resolveActiveProviderRoute,
-} from "../core/providerRuntime/registry.js";
-import type { RuntimeAvailability } from "../core/providerRuntime/types.js";
+import type { checkLocalProvider } from "../core/providerRuntime/local.js";
+import { createRoutedProvider } from "../core/providerRuntime/registry.js";
 import { getBackendProvider } from "../core/providers/registry.js";
 import type { BackendProvider } from "../core/providers/types.js";
 import { createClearFrameBoundaryController } from "../core/terminal/clearFrameBoundary.js";
@@ -58,7 +59,7 @@ import { createTerminalModeController } from "../core/terminal/terminalControl.j
 import { sanitizeTerminalOutput } from "../core/terminal/terminalSanitize.js";
 import { detectGlobalPackageManager, getUpdateCommand } from "../core/version/packageManager.js";
 import type { UpdateCheckResult } from "../core/version/updateCheck.js";
-import { CheckpointStore, type FileCheckpoint } from "../core/workspace/checkpoints.js";
+import { CheckpointStore } from "../core/workspace/checkpoints.js";
 import { createEventId } from "../session/eventIds.js";
 import { createInitialPlanFlowState, type PlanFlowState } from "../session/planFlow.js";
 import type { Screen, TimelineEvent } from "../session/types.js";
@@ -72,30 +73,39 @@ import { getContentWidth, resolveStartupHeaderMode } from "../ui/layout.js";
 import { measurePlanActionPickerRows } from "../ui/panels/PlanActionPicker.js";
 import { measureTextEntryPanelRows } from "../ui/panels/TextEntryPanel.js";
 import { buildActiveRuntimeDisplay, runtimeDisplayToSummary } from "../ui/render/runtimeDisplay.js";
-import { commitThemeSelection, getDisplayedThemeName, THEMES, ThemeProvider } from "../ui/theme.js";
+import { getDisplayedThemeName, THEMES, ThemeProvider } from "../ui/theme.js";
 import { TranscriptShell } from "../ui/timeline/TranscriptShell.js";
-import { OverlayPanels } from "./OverlayPanels.js";
-import { useRouteStatus } from "./routeStatus.js";
-import { useAppComposer } from "./useAppComposer.js";
-import { useAppDebugTracing } from "./useAppDebugTracing.js";
-import { useAppInput } from "./useAppInput.js";
-import { useAppState } from "./useAppState.js";
-import { useComposerEditing } from "./useComposerEditing.js";
-import { useConversation } from "./useConversation.js";
-import { useFocusRouting } from "./useFocusRouting.js";
-import { useModelCatalog } from "./useModelCatalog.js";
-import { useModelSelection } from "./useModelSelection.js";
-import { useOverlayRouting } from "./useOverlayRouting.js";
-import { usePlanFlow } from "./usePlanFlow.js";
-import { usePromptExecution } from "./usePromptExecution.js";
-import { usePromptRun } from "./usePromptRun.js";
-import { useProviderRoute } from "./useProviderRoute.js";
-import { useProviderUsage } from "./useProviderUsage.js";
-import { useRunLifecycle } from "./useRunLifecycle.js";
-import { useRuntimeSettings } from "./useRuntimeSettings.js";
-import { buildSettingsPayload, useSettings } from "./useSettings.js";
-import { useUpdateCheck } from "./useUpdateCheck.js";
-import { useWorkbenchActions } from "./useWorkbenchActions.js";
+import { rewindCheckpoints } from "./conversation/conversationMetadata.js";
+import { useClearConversation } from "./conversation/useClearConversation.js";
+import { useConversation } from "./conversation/useConversation.js";
+import { useAppComposer } from "./input/useAppComposer.js";
+import { useAppInput } from "./input/useAppInput.js";
+import { useComposerEditing } from "./input/useComposerEditing.js";
+import { useWorkbenchActions } from "./input/useWorkbenchActions.js";
+import { useAppDebugTracing } from "./lifecycle/useAppDebugTracing.js";
+import { useAppLifecycleEffects } from "./lifecycle/useAppLifecycleEffects.js";
+import { useFocusRouting } from "./lifecycle/useFocusRouting.js";
+import { useTerminalUiState } from "./lifecycle/useTerminalUiState.js";
+import { useUpdateCheck } from "./lifecycle/useUpdateCheck.js";
+import { useActiveModelMetadata } from "./models/useActiveModelMetadata.js";
+import { useModelCatalog } from "./models/useModelCatalog.js";
+import { useModelPickerModel } from "./models/useModelPickerModel.js";
+import { useModelSelection } from "./models/useModelSelection.js";
+import { useOpenAiModelReconcile } from "./models/useOpenAiModelReconcile.js";
+import { OverlayPanels } from "./overlays/OverlayPanels.js";
+import { useOverlayRouting } from "./overlays/useOverlayRouting.js";
+import { useRouteStatus } from "./providers/routeStatus.js";
+import { useActiveProviderRoute } from "./providers/useActiveProviderRoute.js";
+import { useProviderRoute } from "./providers/useProviderRoute.js";
+import { useProviderUsage } from "./providers/useProviderUsage.js";
+import { usePlanFlow } from "./run/usePlanFlow.js";
+import { usePromptExecution } from "./run/usePromptExecution.js";
+import { usePromptRun } from "./run/usePromptRun.js";
+import { useRunLifecycle } from "./run/useRunLifecycle.js";
+import { useRuntimeSettings } from "./settings/useRuntimeSettings.js";
+import { useSettings } from "./settings/useSettings.js";
+import { useThemeCommit } from "./settings/useThemeCommit.js";
+import { useAppState } from "./state/useAppState.js";
 
 interface AppProps {
   launchArgs: LaunchArgs;
@@ -106,6 +116,8 @@ interface AppProps {
 export function App({ launchArgs, providerOverride }: AppProps) {
   const { exit, suspendTerminal } = useApp();
   const focusManager = useFocusManager();
+  // ─── Startup state ───────────────────────────────────────────────────────────
+
   const appState = useAppState({ providerOverride, launchArgs });
   const selectionVersion = useSyncExternalStore(
     appState.selectionCoordinator.subscribe,
@@ -113,7 +125,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   );
   const {
     workspaceRoot,
-    initialSettings,
     initialUpdateCheckResult,
     initialProviderWorkspaceConfig,
     terminalLayout,
@@ -136,7 +147,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     themeSelection,
     setThemeSelection,
     themeNotice,
-    setThemeNotice,
     customTheme,
     setCustomTheme,
     headerConfig,
@@ -149,8 +159,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     toolApproval,
     setToolApproval,
     toolApprovalResolverRef,
-    registryNonce,
-    setRegistryNonce,
     screenRef,
     bumpPostClearRepaint,
     sessionState,
@@ -163,14 +171,9 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     fileAttachmentRegistryRef,
     checkpointsRef,
     restoredFileBoundaryRef,
-    stoppingRef,
     snapshotRef,
-    deferredRouteCloseRef,
-    isMountedRef,
-    activeRunIdRef,
     clearEpochRef,
     interruptHint,
-    conversationRouteOverride,
     preserveSavedRouteRef,
     savedViewerSession,
     resumeConversations,
@@ -181,12 +184,11 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     conversationChars,
     modelCapabilities,
     modelCapabilitiesBusy,
-    routeSwitchBusy,
     providerModelLoading,
-    providerModelErrors,
     activeContextMetadata,
-    setActiveContextMetadata,
   } = appState;
+  // ─── Terminal and clear-frame wiring (must stay inline) ─────────────────────
+
   const { stdout } = useStdout();
   const { stdin } = useStdin();
   // Keep Ink's raw-mode refcount above zero for the whole session so composer
@@ -262,8 +264,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   const globalPackageManager = useMemo(() => detectGlobalPackageManager(), []);
   const overlayMode = screen !== "main";
 
-  // ─── Effects & Handlers ──────────────────────────────────────────────────────
-
   useEffect(() => {
     return () => {
       clearFrameBoundaryController?.dispose();
@@ -316,7 +316,12 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     return () => {
       terminalControl.setAlternateScreen(false, "src/app/App.tsx:overlay.cleanupAlternateScreen");
     };
-  }, [terminalControl]); // Incremented on /clear to suppress stale command events
+  }, [terminalControl]);
+
+  // ─── App-local refs ─────────────────────────────────────────────────────────
+  // Shared by several hooks below; refs because async work reads and writes
+  // them without needing a render.
+
   const externalCliStatusRef = useRef(sessionState.externalCliStatus);
   const previousScreenRef = useRef<Screen>("main");
   const themePreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -347,6 +352,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     activeThemeName === "custom"
       ? { ...THEMES.purple, ...customTheme }
       : (THEMES[activeThemeName] ?? THEMES.purple);
+  // ─── Runtime config, provider route and model metadata ───────────────────────
+
   const baseRuntimeConfigRef = useRef(baseLayeredConfig.runtime);
   const layeredRuntimeConfig = useMemo(
     () =>
@@ -364,251 +371,49 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     () => buildRuntimeSummary(resolvedRuntimeConfig),
     [resolvedRuntimeConfig],
   );
-  const activeProviderRoute = useMemo(() => {
-    // When --model was given on the CLI, override the stored activeRoute's modelId so
-    // the actual run uses the CLI model instead of whatever is persisted in providers.json.
-    // The providers.json entry is left unchanged so it survives this session.
-    const cliModel = appState.selectionCoordinator.interactiveSelection
-      ? null
-      : launchArgs.modelOverride;
-    if (conversationRouteOverride) return conversationRouteOverride;
-    const configuredRoute = providerWorkspaceConfig.activeRoute;
-    const effectiveRoute =
-      cliModel && configuredRoute ? { ...configuredRoute, modelId: cliModel } : configuredRoute;
-    return resolveActiveProviderRoute({
-      workspaceConfigActiveRoute: effectiveRoute,
-      googleMigrationRequired: providerWorkspaceConfig.googleMigrationRequired,
-      currentModel: model,
-      currentReasoning: reasoningLevel,
-    });
-  }, [
-    conversationRouteOverride,
-    launchArgs.modelOverride,
-    model,
-    providerWorkspaceConfig.activeRoute,
-    providerWorkspaceConfig.googleMigrationRequired,
-    reasoningLevel,
-    registryNonce,
-    providerWorkspaceConfig,
-    selectionVersion,
-  ]);
-  const previousProviderRouteRef = useRef(activeProviderRoute);
-  useEffect(() => {
-    const previous = previousProviderRouteRef.current;
-    const changed =
-      previous.providerId !== activeProviderRoute.providerId ||
-      previous.modelId !== activeProviderRoute.modelId ||
-      previous.localBackend !== activeProviderRoute.localBackend;
-    if (changed && previous.providerId === "local") {
-      const sessionId = activeConversationRef.current?.metadata.localHarnessSession?.sessionId;
-      if (activeRunIdRef.current !== null) deferredRouteCloseRef.current = sessionId;
-      else
-        stoppingRef.current = stoppingRef.current.then(() => closeLocalHarnessSession(sessionId));
-    }
-    previousProviderRouteRef.current = activeProviderRoute;
-  }, [activeProviderRoute]);
-  const activeProviderRuntime = useMemo(
-    () => getProviderRuntime(activeProviderRoute.providerId),
-    [activeProviderRoute.providerId],
-  );
-  const providerRegistry = useMemo(
-    () => {
-      setLocalProviderConfig(providerWorkspaceConfig.providers?.local);
-      return buildProviderRegistry({
-        activeModel: model,
-        workspaceRoot,
-        workspaceConfig: providerWorkspaceConfig,
-        diagnostics: providerDiagnosticsRef.current,
-        routeErrors: providerRouteErrorsRef.current,
-      });
-    },
-    // registryNonce is intentionally included: startup probes and post-validation
-    // updates mutate providerDiagnosticsRef/providerRouteErrorsRef (refs, not state)
-    // and then increment the nonce to trigger a re-read of those refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, providerWorkspaceConfig, registryNonce, workspaceRoot],
-  );
-  const workspaceDefaultProvider = useMemo(
-    () => providerRegistry.find((provider) => provider.isDefault) ?? providerRegistry[0] ?? null,
-    [providerRegistry],
-  );
-  const activeRouteProviderId = activeProviderRoute.providerId;
-  const markProviderAvailability = useCallback(
-    (providerId: ProviderId, availability: RuntimeAvailability, reason: string) => {
-      const previous = providerDiagnosticsRef.current[providerId] ?? {};
-      const selectedModel =
-        typeof previous.selectedModel === "string" && previous.selectedModel.trim()
-          ? previous.selectedModel.trim()
-          : providerId === activeProviderRoute.providerId
-            ? activeProviderRoute.modelId
-            : null;
-      providerDiagnosticsRef.current[providerId] = {
-        ...previous,
-        selectedModel,
-        availabilityStatus: availability,
-        endpointCheckResult: availability,
-      };
-      traceModelStateDebug("provider_availability_marked", {
-        providerId,
-        selectedModel,
-        availability,
-        reason,
-      });
-      setRegistryNonce((current) => current + 1);
-    },
-    [activeProviderRoute.modelId, activeProviderRoute.providerId],
-  );
-
-  // Reset provider readiness when the user switches to a different provider.
-  useEffect(() => {
-    dispatchSession({ type: "SET_EXTERNAL_CLI_STATUS", status: "idle" });
-  }, [activeRouteProviderId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const activeRouteProvider = useMemo(
-    () => findProvider(providerRegistry, activeRouteProviderId) ?? providerRegistry[0] ?? null,
-    [activeRouteProviderId, providerRegistry],
-  );
-  const modelPickerProviderId = pendingRouteProviderId ?? activeProviderRoute.providerId;
-  const modelPickerRuntime = useMemo(
-    () => getProviderRuntime(modelPickerProviderId),
-    [modelPickerProviderId],
-  );
-  const modelPickerDiscovery = useMemo(() => {
-    if (modelPickerProviderId === "openai") return null;
-    return discoverProviderModels(modelPickerProviderId);
-    // registryNonce is intentionally included: route validation discovers models
-    // as a side effect and bumps the nonce so an open picker re-reads them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelPickerProviderId, registryNonce]);
-  const providerModelCapabilities = useMemo(() => {
-    if (!modelPickerDiscovery) return null;
-    return providerModelsToCodexCapabilities(
-      modelPickerDiscovery.models,
-      activeProviderRoute.modelId,
-    );
-  }, [activeProviderRoute.modelId, modelPickerDiscovery]);
-  const activeRouteModelCapabilities = useMemo(() => {
-    if (activeProviderRoute.providerId === "openai") return modelCapabilities;
-    const discovery = discoverProviderModels(activeProviderRoute.providerId);
-    return providerModelsToCodexCapabilities(discovery.models, activeProviderRoute.modelId);
-    // Local startup discovery mutates the runtime cache without necessarily
-    // changing the restored model id. Re-read it when the registry nonce moves
-    // so discovered context metadata can replace the initial Unknown value.
-  }, [
-    activeProviderRoute.modelId,
-    activeProviderRoute.providerId,
-    modelCapabilities,
-    registryNonce,
-  ]);
-  const modelPickerModels = useMemo(() => {
-    const capabilities =
-      providerModelCapabilities ??
-      (modelPickerProviderId === "openai"
-        ? (modelCapabilities ?? createFallbackModelCapabilities(null))
-        : null);
-    return capabilities
-      ? getSelectableModelCapabilities(capabilities).map((entry) => ({
-          ...entry,
-          reasoningPreference:
-            providerWorkspaceConfig.providers?.[modelPickerProviderId]?.models?.[entry.model]
-              ?.reasoningPreference,
-        }))
-      : [];
-  }, [
-    modelCapabilities,
-    modelPickerProviderId,
-    providerModelCapabilities,
-    providerWorkspaceConfig.providers,
-  ]);
-  const modelPickerCurrentModel = useMemo(() => {
-    if (!pendingRouteProviderId) return activeProviderRoute.modelId;
-    if (pendingRouteProviderId === activeProviderRoute.providerId)
-      return activeProviderRoute.modelId;
-    // Non-active provider: use stored default, fall back to first selectable model
-    const storedDefault = providerWorkspaceConfig.providers?.[pendingRouteProviderId]?.currentModel;
-    const selectable = getSelectableModelCapabilities(
-      providerModelCapabilities ?? createFallbackModelCapabilities(null),
-    );
-    return storedDefault ?? selectable[0]?.model ?? model;
-  }, [
+  const {
     activeProviderRoute,
-    model,
-    pendingRouteProviderId,
-    providerModelCapabilities,
-    providerWorkspaceConfig,
-  ]);
-  const modelPickerCurrentReasoning = useMemo(() => {
-    if (!pendingRouteProviderId) {
-      return activeProviderRoute.reasoning ?? reasoningLevel;
-    }
-    if (pendingRouteProviderId === activeProviderRoute.providerId) {
-      return activeProviderRoute.reasoning ?? reasoningLevel;
-    }
-    const storedReasoning =
-      providerWorkspaceConfig.providers?.[pendingRouteProviderId]?.currentReasoning;
-    if (storedReasoning) return storedReasoning;
-    const pickerCapabilities =
-      pendingRouteProviderId === "openai" ? modelCapabilities : providerModelCapabilities;
-    const capability = findModelCapability(pickerCapabilities, modelPickerCurrentModel);
-    return (
-      capability?.defaultReasoningLevel ??
-      capability?.supportedReasoningLevels?.[0]?.id ??
-      reasoningLevel
-    );
-  }, [
-    activeProviderRoute.providerId,
-    activeProviderRoute.reasoning,
-    modelPickerCurrentModel,
-    modelCapabilities,
-    pendingRouteProviderId,
-    providerModelCapabilities,
-    providerWorkspaceConfig.providers,
-    reasoningLevel,
-  ]);
-  const modelPickerProviderLabel = useMemo(
-    () =>
-      modelPickerRuntime.modelPickerLabel ??
-      findProvider(providerRegistry, modelPickerProviderId)?.displayName ??
-      modelPickerRuntime.label,
-    [modelPickerProviderId, modelPickerRuntime, providerRegistry],
-  );
-  const modelPickerEmptyMessage = useMemo(() => {
-    const connection = catalogContextKey(modelPickerProviderId, {
-      cwd: workspaceRoot,
-      providerConfig: providerWorkspaceConfig.providers?.[modelPickerProviderId],
-      ...(modelPickerProviderId === "local"
-        ? { localBackend: providerWorkspaceConfig.providers?.local?.localBackend ?? "lm-studio" }
-        : {}),
-    });
-    if (
-      appState.selectionCoordinator.state(connection, modelPickerCurrentModel)?.status ===
-      "unavailable"
-    )
-      return modelRecoveryMessage(modelPickerCurrentModel);
-    if (modelPickerProviderId === "openai") {
-      return modelCapabilities?.error
-        ? `No models available: ${modelCapabilities.error}`
-        : "No models available.";
-    }
-    if (modelPickerDiscovery?.status === "ready" && modelPickerDiscovery.models.length === 0) {
-      const setup = getProviderRouteSetupMessage(modelPickerProviderId);
-      return `No ${modelPickerProviderLabel} models are currently advertised. Refresh models or change provider. ${setup}`;
-    }
-    if (providerModelErrors[modelPickerProviderId]) {
-      return `${providerModelErrors[modelPickerProviderId]} Press Refresh models to retry.`;
-    }
-    return modelPickerDiscovery?.message ?? "No models available.";
-  }, [
+    activeProviderRuntime,
+    providerRegistry,
+    workspaceDefaultProvider,
+    markProviderAvailability,
+    activeRouteProvider,
+  } = useActiveProviderRoute({
+    ...appState,
+    launchArgs,
     selectionVersion,
-    modelPickerCurrentModel,
-    providerWorkspaceConfig.providers,
-    workspaceRoot,
+    model,
+    reasoningLevel,
+    providerDiagnosticsRef,
+    providerRouteErrorsRef,
+  });
+  const {
+    activeRouteModelCapabilities,
+    currentModelCapability,
+    currentReasoningCapabilities,
+    currentReasoningSourceLabel,
+  } = useActiveModelMetadata({
+    ...appState,
+    activeProviderRoute,
     modelCapabilities,
-    modelPickerDiscovery,
+    providerDiagnosticsRef,
+  });
+  const {
     modelPickerProviderId,
+    modelPickerModels,
+    modelPickerCurrentModel,
+    modelPickerCurrentReasoning,
     modelPickerProviderLabel,
-    providerModelErrors,
-  ]);
+    modelPickerEmptyMessage,
+  } = useModelPickerModel({
+    ...appState,
+    activeProviderRoute,
+    modelCapabilities,
+    providerRegistry,
+    model,
+    reasoningLevel,
+    selectionVersion,
+  });
   const { routeStatusMessage } = useRouteStatus({
     ...appState,
     providerRegistry,
@@ -620,64 +425,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     activeRouteModelCapabilities,
     reasoningLevel,
   });
-  const currentModelCapability = useMemo(
-    () => findModelCapability(activeRouteModelCapabilities, activeProviderRoute.modelId),
-    [activeProviderRoute.modelId, activeRouteModelCapabilities],
-  );
-  const currentModelRawMetadataKey = useMemo(
-    () =>
-      currentModelCapability?.raw === undefined ? "" : JSON.stringify(currentModelCapability.raw),
-    [currentModelCapability?.raw],
-  );
-  const currentReasoningCapabilities = currentModelCapability?.supportedReasoningLevels ?? [];
-  const currentReasoningSourceLabel = useMemo(() => {
-    if (activeProviderRoute.providerId !== "anthropic") return null;
-    const raw = currentModelCapability?.raw as
-      | { source?: string; effortVerified?: boolean }
-      | null
-      | undefined;
-    if (raw?.source === "claude-code" || raw?.source === "discovered")
-      return "Discovered from Claude Code";
-    if (raw?.source === "settings" || raw?.source === "config") return "From Claude settings";
-    return raw?.effortVerified === false ? "Fallback defaults; unverified" : "Fallback defaults";
-  }, [activeProviderRoute.providerId, currentModelCapability]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const providerId = activeProviderRoute.providerId;
-    const modelId = activeProviderRoute.modelId;
-    const rawMetadata = currentModelCapability?.raw;
-
-    void resolveModelContextLength({
-      providerId,
-      modelId,
-      providerConfig: providerWorkspaceConfig.providers?.[providerId],
-      rawMetadata,
-    }).then((metadata) => {
-      if (cancelled || !isMountedRef.current) return;
-      setActiveContextMetadata(metadata);
-
-      const contextSource = metadata.source === "known-registry" ? "registry" : metadata.source;
-      providerDiagnosticsRef.current[providerId] = {
-        ...(providerDiagnosticsRef.current[providerId] ?? {}),
-        contextLength: metadata.contextLength,
-        contextSource,
-        contextConfidence: metadata.confidence,
-        contextRawField: metadata.rawField ?? null,
-        contextError: metadata.error ?? null,
-      };
-      setRegistryNonce((current) => current + 1);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeProviderRoute.modelId,
-    activeProviderRoute.providerId,
-    currentModelRawMetadataKey,
-    providerWorkspaceConfig.providers,
-  ]);
+  // ─── Presentation values ─────────────────────────────────────────────────────
 
   const workspaceLabel = useMemo(
     () => formatWorkspaceDisplayPath(workspaceRoot, workspaceDisplayMode),
@@ -724,6 +473,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ],
   );
   const currentModelSpec = activeRuntimeDisplay.modelSpec;
+
+  // ─── Composer state, busy focus and layout ─────────────────────────────────────
 
   // Refs for mutable state values — used by stable callbacks below so they
   // always read the latest value without being listed as deps (which would
@@ -797,6 +548,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       }),
     [composerRows, terminalLayout.cols, terminalLayout.rows],
   );
+  useTerminalUiState(uiState.kind, busy);
   useAppDebugTracing({
     ...appState,
     activeRootComponent,
@@ -813,6 +565,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     model,
     reasoningLevel,
   });
+
+  // ─── Provider client, lifecycle effects and focus ──────────────────────────────
 
   const backendProvider: BackendProvider = useMemo(() => getBackendProvider(backend), [backend]);
   const provider: BackendProvider = useMemo(() => {
@@ -831,6 +585,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     providerWorkspaceConfig.providers,
     providerOverride,
   ]);
+  useAppLifecycleEffects({
+    ...appState,
+    baseRuntimeConfigRef,
+    providerOverride,
+    themePreviewTimerRef,
+    themeNoticeTimerRef,
+  });
   const { getInputDebugSnapshot, returnToChatMode, returnFromUpdateOverlay } = useFocusRouting({
     ...appState,
     busyRef,
@@ -839,15 +600,14 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelSelectionInFlightRef,
     intendedFocusTargetRef,
     stdin,
-    baseRuntimeConfigRef,
-    providerOverride,
     themePreviewTimerRef,
-    themeNoticeTimerRef,
     previousScreenRef,
     focusManager,
     planFlow,
     modelPickerOpenRef,
   });
+
+  // ─── Transcript events and the clear-frame boundary arming ─────────────────────
 
   const appendStaticEvent = useCallback(
     (event: TimelineEvent) => {
@@ -905,6 +665,10 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ],
   );
 
+  // ─── Feature hooks ─────────────────────────────────────────────────────────────
+  // Conversation → settings and models → providers and overlays → runs →
+  // input. Later hooks consume earlier hooks' callbacks.
+
   const conversation = useConversation({
     armTranscriptReplacement,
     ...appState,
@@ -945,7 +709,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     baseRuntimeConfigRef,
     appendEvent,
   });
-  const { updateRuntimeConfig, persistProviderDefaultModelAndReasoning } = runtimeSettings;
+  const { updateRuntimeConfig } = runtimeSettings;
   const { routeChoiceRequiredRef } = appState;
   const { refreshModelCapabilities, ensureProviderModels, refreshAuthStatus } = useModelCatalog({
     ...appState,
@@ -970,44 +734,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     returnFromUpdateOverlay,
   });
 
-  const repaintCommittedTheme = useCallback(
-    (themeName: string) => {
-      // Persist the committed value synchronously as well as through the normal
-      // settings effect. This matters when the terminal is closed immediately
-      // after choosing a theme, before React gets another effect pass.
-      saveSettings(
-        buildSettingsPayload(
-          initialSettings.current,
-          {
-            theme: themeName,
-            workspaceDisplayMode,
-            terminalTitleMode,
-            showBusyLoader,
-            customTheme,
-          },
-          authPreference,
-          headerConfig,
-        ),
-      );
-      setThemeSelection((currentTheme) => commitThemeSelection(currentTheme, themeName));
-      setThemeNotice(`Theme switched to ${formatThemeLabel(themeName)}.`);
-      if (themeNoticeTimerRef.current) clearTimeout(themeNoticeTimerRef.current);
-      themeNoticeTimerRef.current = setTimeout(() => {
-        setThemeNotice(null);
-        themeNoticeTimerRef.current = null;
-      }, 1800);
-    },
-    [
-      authPreference,
-      customTheme,
-      headerConfig,
-      showBusyLoader,
-      terminalTitleMode,
-      workspaceDisplayMode,
-    ],
-  );
+  const { repaintCommittedTheme } = useThemeCommit({
+    ...appState,
+    themeNoticeTimerRef,
+  });
 
-  // Track clear epoch to suppress stale command result events
+  // Mirror session values into refs read by async callbacks. The clear epoch
+  // lets late command results from before a /clear be ignored.
   useEffect(() => {
     clearEpochRef.current = sessionState.clearEpoch;
   }, [sessionState.clearEpoch]);
@@ -1016,55 +749,22 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     externalCliStatusRef.current = sessionState.externalCliStatus;
   }, [sessionState.externalCliStatus]);
 
-  // Reconcile effort only. A withdrawn model always requires explicit reselection.
-  useEffect(() => {
-    if (
-      providerOverride ||
-      preserveSavedRouteRef.current ||
-      activeProviderRoute.providerId !== "openai" ||
-      modelCapabilities?.status !== "ready" ||
-      discoverProviderModels("openai").freshness !== "verified"
-    )
-      return;
-    const selected = findModelCapability(modelCapabilities, model);
-    if (!selected || !selected.available || selected.hidden) {
-      const message = `Configured model ${model} is unavailable. Select a model explicitly before sending.`;
-      if (routeChoiceRequiredRef.current !== message)
-        appendEvent("error", "Selected model unavailable", message);
-      routeChoiceRequiredRef.current = message;
-      return;
-    }
-    if (
-      routeChoiceRequiredRef.current ===
-      `Configured model ${model} is unavailable. Select a model explicitly before sending.`
-    )
-      routeChoiceRequiredRef.current = null;
-    const nextReasoning = normalizeReasoningForModelCapabilities(
-      model,
-      reasoningLevel,
-      modelCapabilities,
-    );
-    if (nextReasoning === reasoningLevel) return;
-    updateRuntimeConfig((current) => ({ ...current, reasoningLevel: nextReasoning }));
-    appendEvent(
-      "system",
-      "Reasoning updated",
-      `Reasoning level is now ${formatReasoningLabel(nextReasoning)} for ${model}.`,
-    );
-  }, [
-    activeProviderRoute.providerId,
-    appendEvent,
-    model,
-    modelCapabilities,
+  useOpenAiModelReconcile({
     providerOverride,
+    preserveSavedRouteRef,
+    routeChoiceRequiredRef,
+    activeProviderRoute,
+    modelCapabilities,
+    model,
     reasoningLevel,
+    appendEvent,
     updateRuntimeConfig,
-  ]);
+  });
+
   const modelSelection = useModelSelection({
     ...runtimeSettings,
     ...appState,
     appendEvent,
-    busy,
     mode,
     planMode,
     setPlanFlow,
@@ -1075,9 +775,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelSelectionInFlightRef,
     getInputDebugSnapshot,
     reasoningLevel,
-    activeRouteModelCapabilities,
-    runtimeConfig,
-    activeRouteProvider,
     returnToChatMode,
     markProviderAvailability,
     providerDiagnosticsRef,
@@ -1096,7 +793,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...runtimeSettings,
     appendEvent,
     returnFromUpdateOverlay,
-    busy,
   });
   const {
     setAuthPreferenceWithNotice,
@@ -1117,7 +813,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       modelSelectionInFlightRef,
       providerDiagnosticsRef,
       appendEvent,
-      busy,
       providerRegistry,
       activeRouteProvider,
       model,
@@ -1128,16 +823,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       reasoningLevel,
       ensureProviderModels,
       refreshModelCapabilities,
-      markProviderAvailability,
-      runtimeConfig,
-      resolvedRuntimeConfig,
       busyRef,
       externalCliLaunchHooks,
+      updateProviderWorkspaceConfig: runtimeSettings.updateProviderWorkspaceConfig,
     });
   const overlayRouting = useOverlayRouting({
     ...appState,
     ...settings,
-    modelSelectionInFlightRef,
     getInputDebugSnapshot,
     modelPickerOpenRef,
     intendedInputModeRef,
@@ -1158,7 +850,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...conversation,
     intendedFocusTargetRef,
     focusManager,
-    activeProviderRoute,
     activeEvents,
     uiState,
     busy,
@@ -1169,19 +860,27 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     staticEvents,
   });
   const { handleCancel } = runLifecycle;
-  const { handleChangeInput, handleRegisterPaste, handlePasteImage, handleClear } =
-    useComposerEditing({
-      armTranscriptReplacement,
-      ...appState,
-      ...conversation,
-      ...runLifecycle,
-      busyRef,
-      runtimeConfig,
-      inputValueRef,
-      cursorRef,
-      appendEvent,
-      setPlanFlow,
-    });
+  const {
+    handleChangeInput,
+    handleRegisterPaste,
+    handlePasteImage,
+    handleHistoryUp,
+    handleHistoryDown,
+  } = useComposerEditing({
+    ...appState,
+    busyRef,
+    runtimeConfig,
+    inputValueRef,
+    cursorRef,
+    appendEvent,
+  });
+  const { handleClear } = useClearConversation({
+    ...appState,
+    ...conversation,
+    ...runLifecycle,
+    armTranscriptReplacement,
+    setPlanFlow,
+  });
   const promptExecution = usePromptExecution({
     ...appState,
     allowedWritableRoots,
@@ -1189,8 +888,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     focusManager,
     busy,
     exit,
-    staticEvents,
-    activeEvents,
   });
   const { startPromptRun } = usePromptRun({
     ...appState,
@@ -1206,7 +903,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     backend,
     externalCliStatusRef,
     refreshAuthStatus,
-    mode,
   });
   const workbenchActions = useWorkbenchActions({
     armTranscriptReplacement,
@@ -1259,6 +955,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     openUsagePanel: providerUsage.openUsagePanel,
     appendEvent,
     busy,
+    staticEvents,
+    activeEvents,
     layeredRuntimeConfig,
     runtimeConfig,
     resolvedRuntimeConfig,
@@ -1284,10 +982,9 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     mode,
     setPlanFlow,
     runPlanGeneration,
-    focusManager,
-    handlePlanFeedbackSubmit,
-    inputValue,
   });
+
+  // ─── Render inputs ─────────────────────────────────────────────────────────────
 
   const modelDisplayName = activeRuntimeDisplay.modelDisplay;
   const activeConversationId = activeConversationRef.current?.metadata.id ?? null;
@@ -1295,22 +992,10 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     () => (activeConversationId ? new CheckpointStore(workspaceRoot, activeConversationId) : null),
     [activeConversationId, workspaceRoot],
   );
-  const recoveryCheckpoints = checkpointsRef.current.length
-    ? checkpointsRef.current
-    : (activeConversationRef.current?.messages ?? []).flatMap((message, index): FileCheckpoint[] =>
-        message.role === "user"
-          ? [
-              {
-                id: `legacy-${index}`,
-                turnId: message.turnId ?? index,
-                messageCount: index,
-                prompt: message.submittedContent ?? message.content,
-                before: { files: {}, complete: false, skipped: [] },
-              },
-            ]
-          : [],
-      );
-  const composerReasoningLevel = "";
+  const recoveryCheckpoints = rewindCheckpoints(
+    checkpointsRef.current,
+    activeConversationRef.current?.messages ?? [],
+  );
   const headerRuntimeSummary = useMemo(
     () => runtimeDisplayToSummary(activeRuntimeDisplay, runtimeSummary),
     [activeRuntimeDisplay, runtimeSummary],
@@ -1334,6 +1019,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...modelSelection,
     planFlow,
     handlePlanAction,
+    handleHistoryUp,
+    handleHistoryDown,
     initialRevisionText,
     setInitialRevisionText,
     handlePlanFeedbackSubmit,
@@ -1344,7 +1031,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelDisplayName,
     activeRuntimeDisplay,
     activeThemeName,
-    composerReasoningLevel,
     planMode,
     currentModelSpec,
     inputValue,
@@ -1356,6 +1042,18 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     openProviderPicker,
     activeProviderRoute,
   });
+
+  // The update prompt shows its own notice, so the header card is hidden there.
+  const headerUpdateNotice =
+    screen !== "update-prompt" &&
+    updateCheckResult?.status === "update-available" &&
+    updateCheckResult.latestVersion
+      ? {
+          latestVersion: updateCheckResult.latestVersion,
+          currentVersion: updateCheckResult.currentVersion,
+          updateCommand: getUpdateCommand(globalPackageManager).displayCommand,
+        }
+      : null;
 
   // ─── Render ──────────────────────────────────────────────────────────────────
 
@@ -1395,17 +1093,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
           verboseMode={verboseMode}
           clearCount={sessionState.clearCount}
           headerConfig={effectiveHeaderConfig}
-          updateAvailable={
-            screen !== "update-prompt" &&
-            updateCheckResult?.status === "update-available" &&
-            updateCheckResult.latestVersion
-              ? {
-                  latestVersion: updateCheckResult.latestVersion,
-                  currentVersion: updateCheckResult.currentVersion,
-                  updateCommand: getUpdateCommand(globalPackageManager).displayCommand,
-                }
-              : null
-          }
+          updateAvailable={headerUpdateNotice}
           panel={
             <OverlayPanels
               screen={screen}
@@ -1440,7 +1128,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               terminalLayout={terminalLayout}
               handleProviderAction={handleProviderAction}
               providerWorkspaceConfig={providerWorkspaceConfig}
-              setProviderWorkspaceConfig={appState.setProviderWorkspaceConfig}
+              updateProviderWorkspaceConfig={runtimeSettings.updateProviderWorkspaceConfig}
               localBackendStatuses={localBackendStatuses}
               probeLocalBackends={probeLocalBackends}
               modelPickerOpenRef={modelPickerOpenRef}
@@ -1453,10 +1141,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               modelPickerProviderId={modelPickerProviderId}
               modelCapabilitiesBusy={modelCapabilitiesBusy}
               providerModelLoading={providerModelLoading}
-              routeSwitchBusy={routeSwitchBusy}
               modelPickerEmptyMessage={modelPickerEmptyMessage}
               activeProviderRoute={activeProviderRoute}
-              persistProviderDefaultModelAndReasoning={persistProviderDefaultModelAndReasoning}
               appendEvent={appendEvent}
               setModelAndReasoningWithNotice={setModelAndReasoningWithNotice}
               returnToChatMode={returnToChatMode}
