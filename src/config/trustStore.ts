@@ -1,16 +1,31 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
-import { dirname } from "path";
+/**
+ * @fileoverview Project Trust Store
+ *
+ * Manages user trust decisions for project-level `.codex/config.toml` configuration files.
+ * For security isolation, configuration files inside repository roots are only executed
+ * or merged when the project root is explicitly recorded in `ubume-trust.json`.
+ *
+ * Supports seamless non-destructive migration from legacy `codexa-trust.json`.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
 import { normalizeWorkspaceRoot } from "../core/workspace/workspaceRoot.js";
+import { writeJsonFileAtomic } from "./atomicFile.js";
 import { getLegacyCodexaTrustStoreFile, getUbumeTrustStoreFile } from "./settings.js";
 
+/** Internal schema stored in `ubume-trust.json` */
 interface TrustStoreData {
   trustedProjectRoots: string[];
 }
 
+/** Returns the empty default trust store structure. */
 function getDefaultTrustStore(): TrustStoreData {
   return { trustedProjectRoots: [] };
 }
 
+/**
+ * Parses and sanitizes trust store data, removing invalid types and duplicates.
+ */
 function parseTrustStoreData(data: unknown): TrustStoreData {
   if (!data || typeof data !== "object") {
     return getDefaultTrustStore();
@@ -28,6 +43,10 @@ function parseTrustStoreData(data: unknown): TrustStoreData {
   };
 }
 
+/**
+ * Loads trusted project roots from the trust store file.
+ * Automatically migrates from legacy `codexa-trust.json` if `ubume-trust.json` does not exist.
+ */
 function loadTrustStore(): TrustStoreData {
   try {
     const ubumeFile = getUbumeTrustStoreFile();
@@ -55,25 +74,44 @@ function loadTrustStore(): TrustStoreData {
   }
 }
 
+/**
+ * Persists the trust store data to disk atomically.
+ */
 function saveTrustStore(data: TrustStoreData): void {
   try {
     const trustStoreFile = getUbumeTrustStoreFile();
-    mkdirSync(dirname(trustStoreFile), { recursive: true });
-    const tmpFile = `${trustStoreFile}.tmp`;
-    writeFileSync(tmpFile, JSON.stringify(data, null, 2), "utf-8");
-    renameSync(tmpFile, trustStoreFile);
+    writeJsonFileAtomic(trustStoreFile, data);
   } catch {
-    // Best-effort persistence only.
+    // Best-effort persistence only; failures must not crash the application.
   }
 }
 
+/**
+ * Checks whether a project repository root is marked as trusted by the user.
+ * Project-level configuration (.codex/config.toml) is only loaded for trusted repositories.
+ *
+ * @param projectRoot - Absolute path to the repository/project root.
+ * @returns True if the project is trusted.
+ */
 export function isProjectTrusted(projectRoot: string): boolean {
+  if (!projectRoot || !projectRoot.trim()) {
+    return false;
+  }
   const normalizedRoot = normalizeWorkspaceRoot(projectRoot);
   const store = loadTrustStore();
   return store.trustedProjectRoots.includes(normalizedRoot);
 }
 
+/**
+ * Updates the trust status for a project repository root.
+ *
+ * @param projectRoot - Absolute path to the repository/project root.
+ * @param trusted - Whether the project should be marked as trusted.
+ */
 export function setProjectTrust(projectRoot: string, trusted: boolean): void {
+  if (!projectRoot || !projectRoot.trim()) {
+    return;
+  }
   const normalizedRoot = normalizeWorkspaceRoot(projectRoot);
   const store = loadTrustStore();
   const nextRoots = trusted

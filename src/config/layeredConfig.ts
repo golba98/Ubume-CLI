@@ -1,5 +1,19 @@
-import { existsSync, readFileSync } from "fs";
-import { dirname, join, resolve } from "path";
+/**
+ * @fileoverview Layered Configuration Resolution Engine
+ *
+ * Implements the 5-layer configuration precedence hierarchy for Ubume CLI:
+ * 1. Built-in defaults (`DEFAULT_RUNTIME_CONFIG`)
+ * 2. User-level configuration (`~/.codex/config.toml`)
+ * 3. Project-level configuration (`.codex/config.toml`, only applied if project is trusted)
+ * 4. Named profiles (`[profiles.<name>]` defined in user or project configuration)
+ * 5. CLI overrides (`--config key=value` / `-c key=value` flags)
+ *
+ * Provides complete provenance tracking for every configuration field and generates
+ * diagnostics for ignored, blocked, or missing configuration layers.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { errorMessage, isRecord } from "../core/shared/values.js";
 import { normalizeWorkspaceRoot } from "../core/workspace/workspaceRoot.js";
 import type { LaunchArgs } from "./launchArgs.js";
@@ -37,7 +51,9 @@ import {
 } from "./settings.js";
 import { isProjectTrusted } from "./trustStore.js";
 
-const RUNTIME_FIELD_PATHS = [
+// ─── 1. Field Constants & Diagnostic Interfaces ───────────────────────────────
+
+export const RUNTIME_FIELD_PATHS = [
   "provider",
   "model",
   "reasoningLevel",
@@ -52,11 +68,11 @@ const RUNTIME_FIELD_PATHS = [
   "policy.personality",
 ] as const;
 
-type RuntimeFieldPath = (typeof RUNTIME_FIELD_PATHS)[number];
+export type RuntimeFieldPath = (typeof RUNTIME_FIELD_PATHS)[number];
 
-type ConfigLayerStatus = "loaded" | "missing" | "blocked" | "error";
+export type ConfigLayerStatus = "loaded" | "missing" | "blocked" | "error";
 
-interface ConfigLayerReport {
+export interface ConfigLayerReport {
   label: string;
   status: ConfigLayerStatus;
   path?: string;
@@ -79,7 +95,7 @@ export interface LayeredConfigResult {
   diagnostics: LayeredConfigDiagnostics;
 }
 
-interface ResolveLayeredConfigOptions {
+export interface ResolveLayeredConfigOptions {
   workspaceRoot: string;
   launchArgs: LaunchArgs;
 }
@@ -97,8 +113,6 @@ interface ParsedConfigLayer {
   topLevelPatch: RuntimeLayerPatch;
   topLevelProfile: string | null;
 }
-
-// ─── Field source tracking ─────────────────────────────────────────────────────
 
 function createFieldSources(label: string): Record<RuntimeFieldPath, string> {
   return Object.fromEntries(RUNTIME_FIELD_PATHS.map((field) => [field, label])) as Record<
@@ -122,10 +136,9 @@ function assignPolicyValue<T extends keyof NonNullable<PartialRuntimeConfig["pol
   };
 }
 
-// ─── TOML patch extraction ─────────────────────────────────────────────────────
+// ─── 2. TOML Patch Extraction & Field Specifications ──────────────────────────
 
 function isAbsolutePath(pathValue: string): boolean {
-  // Matches Windows drive-letter paths (C:\ or C:/), UNC paths (\\server), and Unix absolute paths (/).
   return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(pathValue);
 }
 
@@ -158,6 +171,7 @@ interface FieldSpec {
     configFilePath: string,
   ) => void;
 }
+
 const FIELD_SPECS: readonly FieldSpec[] = [
   {
     keys: ["model"],
@@ -187,10 +201,16 @@ const FIELD_SPECS: readonly FieldSpec[] = [
     },
   },
   {
-    keys: [],
+    keys: [
+      "antigravity_command_path",
+      "antigravityCommandPath",
+      "gemini_command_path",
+      "geminiCommandPath",
+    ],
     apply: (data, patch, touchedFields, ignoredEntries, _configFilePath) => {
-      if (data.geminiCommandPath !== undefined || data.gemini_command_path !== undefined)
+      if (data.geminiCommandPath !== undefined || data.gemini_command_path !== undefined) {
         ignoredEntries.push("gemini_command_path (removed; not an Antigravity executable)");
+      }
       const antigravityCommandPath = data.antigravityCommandPath ?? data.antigravity_command_path;
       if (antigravityCommandPath !== undefined) {
         if (
@@ -370,8 +390,11 @@ function extractRuntimePatch(
   };
 }
 
-// ─── Layer loading ─────────────────────────────────────────────────────────────
+// ─── 3. Layer Loading & Filesystem Discovery ──────────────────────────────────
 
+/**
+ * Parses a raw TOML string using the runtime Bun TOML engine.
+ */
 export function parseTomlDocument(text: string): Record<string, unknown> {
   const parsed = (
     globalThis as { Bun?: { TOML?: { parse?: (input: string) => unknown } } }
@@ -466,16 +489,15 @@ function extractRuntimePatchFromOverride(
 
   const overrideData: Record<string, unknown> = {};
   const spec = FIELD_SPECS.find((entry) => entry.keys.includes(key));
-  if (!spec)
+  if (!spec) {
     return { patch: {}, touchedFields: [], ignoredEntries: [`${sourceLabel}: unsupported key`] };
-  // Legacy Codexa override keys use the same current table as before.
+  }
+
   const path = (key.startsWith("codexa.") ? key.replace(/^codexa\./, "ubume.") : key).split(".");
   setNestedValue(overrideData, path, value);
 
   return extractRuntimePatch(overrideData, sourceLabel, configPath);
 }
-
-// ─── Config resolution ─────────────────────────────────────────────────────────
 
 function findProjectRoot(workspaceRoot: string): string {
   let current = normalizeWorkspaceRoot(workspaceRoot);
@@ -514,13 +536,20 @@ function listProjectLayerPaths(projectRoot: string, workspaceRoot: string): stri
   return paths;
 }
 
+// ─── 4. Layered Configuration Resolution Engine ───────────────────────────────
+
+/**
+ * Resolves the final effective runtime configuration by composing all 5 layers:
+ * 1. Built-in defaults (`DEFAULT_RUNTIME_CONFIG`)
+ * 2. User configuration (`~/.codex/config.toml`)
+ * 3. Project configuration (`.codex/config.toml`, only when repository is trusted)
+ * 4. Named profile (`[profiles.<name>]` from user or project configuration)
+ * 5. CLI overrides (`--config` / `-c` arguments)
+ *
+ * @param options - Workspace root and parsed launch arguments.
+ * @returns Fully merged RuntimeConfig along with complete LayeredConfigDiagnostics provenance.
+ */
 export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): LayeredConfigResult {
-  // Config resolution order (each layer wins over the previous):
-  //   1. Built-in defaults (DEFAULT_RUNTIME_CONFIG)
-  //   2. User config  (~/.codex/config.toml)
-  //   3. Project config  (.codex/config.toml, only when project is trusted)
-  //   4. Profile patch  ([profiles.<name>] from any loaded layer)
-  //   5. CLI overrides  (--config key=value flags)
   const workspaceRoot = normalizeWorkspaceRoot(options.workspaceRoot);
   const projectRoot = findProjectRoot(workspaceRoot);
   const projectTrusted = isProjectTrusted(projectRoot);
@@ -537,9 +566,9 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
 
   let runtime = DEFAULT_RUNTIME_CONFIG;
   const loadedLayers: ParsedConfigLayer[] = [];
-  // The last profile name found in any config file. CLI --profile takes priority over this.
   let configFileProfile: { name: string; source: string } | null = null;
 
+  // Layer 2: User config (~/.codex/config.toml)
   const userConfigFile = getCodexConfigFile();
   const userLayer = tryLoadConfigLayer("User config", userConfigFile);
   if ("data" in userLayer) {
@@ -559,6 +588,7 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
     diagnostics.layers.push(userLayer);
   }
 
+  // Layer 3: Project config (.codex/config.toml)
   const projectLayerPaths = listProjectLayerPaths(projectRoot, workspaceRoot).filter((filePath) =>
     existsSync(filePath),
   );
@@ -604,6 +634,7 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
     }
   }
 
+  // Determine active profile (CLI argument wins over config file top-level profile)
   if (options.launchArgs.profile) {
     diagnostics.selectedProfile = options.launchArgs.profile;
     diagnostics.selectedProfileSource = "CLI --profile";
@@ -612,6 +643,7 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
     diagnostics.selectedProfileSource = configFileProfile.source;
   }
 
+  // Layer 4: Profile patch
   if (diagnostics.selectedProfile) {
     let matchedProfile = false;
     for (const layer of loadedLayers) {
@@ -636,6 +668,7 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
     }
   }
 
+  // Layer 5: CLI overrides
   for (const rawOverride of options.launchArgs.configOverrides) {
     const overridePatch = extractRuntimePatchFromOverride(workspaceRoot, rawOverride);
     diagnostics.ignoredEntries.push(...overridePatch.ignoredEntries);
@@ -650,7 +683,7 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
       `CLI override (${rawOverride})`,
     );
     diagnostics.layers.push({
-      label: `CLI override`,
+      label: "CLI override",
       status: "loaded",
       reason: rawOverride,
     });
@@ -662,7 +695,7 @@ export function resolveLayeredConfig(options: ResolveLayeredConfigOptions): Laye
   };
 }
 
-// ─── Runtime override helpers ──────────────────────────────────────────────────
+// ─── 5. Dynamic Runtime Override Helpers ──────────────────────────────────────
 
 function getTouchedFieldsFromPatch(patch: PartialRuntimeConfig): RuntimeFieldPath[] {
   const touched = new Set<RuntimeFieldPath>();
@@ -683,6 +716,10 @@ function getTouchedFieldsFromPatch(patch: PartialRuntimeConfig): RuntimeFieldPat
   return Array.from(touched);
 }
 
+/**
+ * Applies an interactive or programmatic override onto an existing LayeredConfigResult,
+ * updating runtime values and field provenance tracking.
+ */
 export function applyLayeredRuntimeOverride(
   base: LayeredConfigResult,
   override: PartialRuntimeConfig,
@@ -715,7 +752,7 @@ export function applyLayeredRuntimeOverride(
   };
 }
 
-// ─── Diagnostics formatting ────────────────────────────────────────────────────
+// ─── 6. Diagnostics Formatting ────────────────────────────────────────────────
 
 function formatRuntimeFieldValue(runtime: RuntimeConfig, field: RuntimeFieldPath): string {
   switch (field) {
@@ -750,6 +787,11 @@ function formatRuntimeFieldValue(runtime: RuntimeConfig, field: RuntimeFieldPath
   }
 }
 
+/**
+ * Formats a multi-line textual status report of the resolved layered configuration,
+ * including trust status, active profile, layer loading status, winning field sources,
+ * and any ignored or unsupported configuration keys.
+ */
 export function formatLayeredConfigStatus(result: LayeredConfigResult): string {
   const { diagnostics, runtime } = result;
   const lines = [
@@ -785,7 +827,7 @@ export function formatLayeredConfigStatus(result: LayeredConfigResult): string {
   return lines.join("\n");
 }
 
-// ─── TOML merge helpers ────────────────────────────────────────────────────────
+// ─── 7. TOML Merge Utilities ──────────────────────────────────────────────────
 
 function cloneTomlValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -836,6 +878,10 @@ function setNestedValue(
   table[path[path.length - 1]!] = cloneTomlValue(value);
 }
 
+/**
+ * Merges non-default RuntimeConfig properties into an existing TOML configuration document,
+ * without overwriting keys that already exist in the target TOML document.
+ */
 export function mergeRuntimeIntoTomlConfig(
   currentData: Record<string, unknown>,
   runtime: RuntimeConfig,
