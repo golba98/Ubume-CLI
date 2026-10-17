@@ -134,9 +134,19 @@ for (const [action, call] of directActions) {
   });
 }
 
-for (const action of ["status", "workspace", "help"] as const) {
-  test(`${action} is handled elsewhere and dispatches nothing`, () => {
-    assert.deepEqual(dispatch({ action, message: "m" } as CommandResult), []);
+// Regression: these lost their output when the command switch became a
+// handler table (they used to fall through to the message handlers).
+const reportCommands: Array<[CommandResult["action"], string]> = [
+  ["status", "Runtime status"],
+  ["workspace", "Command"],
+  ["help", "Command"],
+];
+
+for (const [action, title] of reportCommands) {
+  test(`/${action} posts its report under "${title}"`, () => {
+    assert.deepEqual(dispatch({ action, message: "m" } as CommandResult), [
+      `appendEvent("system",${JSON.stringify(title)},"m")`,
+    ]);
   });
 }
 

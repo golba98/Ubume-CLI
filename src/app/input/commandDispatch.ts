@@ -179,10 +179,9 @@ export function dispatchCommand(context: CommandDispatchContext): void | Promise
     copy: run(context.handleCopy),
     paste_image: run(() => context.handlePasteImage(true)),
     workspace_relaunch: applyOrNotify(context.handleWorkspaceRelaunch),
-    // Handled before dispatch (status line, workspace info, help overlay).
-    status: () => {},
-    workspace: () => {},
-    help: () => {},
+    status: notifyOnly("Runtime status"),
+    workspace: notifyOnly("Command"),
+    help: notifyOnly("Command"),
 
     // --- Model, mode and reasoning -------------------------------------------
     model: applyOrNotify<AvailableModel>(context.setModelWithNotice),
