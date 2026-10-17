@@ -227,5 +227,20 @@ export function useComposerEditing(context: UseComposerEditingContext) {
     saveActiveConversation,
     workspaceRoot,
   ]);
-  return { handleChangeInput, handleRegisterPaste, handlePasteImage, handleClear };
+  const handleHistoryUp = useCallback(() => {
+    dispatchSession({ type: "HISTORY_UP" });
+  }, [dispatchSession]);
+
+  const handleHistoryDown = useCallback(() => {
+    dispatchSession({ type: "HISTORY_DOWN" });
+  }, [dispatchSession]);
+
+  return {
+    handleChangeInput,
+    handleRegisterPaste,
+    handlePasteImage,
+    handleClear,
+    handleHistoryUp,
+    handleHistoryDown,
+  };
 }

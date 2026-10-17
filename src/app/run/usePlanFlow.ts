@@ -1,3 +1,18 @@
+/**
+ * Plan mode: generate a plan, let the user review it, then run it.
+ *
+ * The plan state machine itself lives in `session/planFlow.ts`
+ * (`idle → generating → awaiting_action → executing`, with
+ * `collecting_feedback` for revisions). This hook connects it to prompt runs:
+ *
+ * - Plan generation runs read-only (`suggest`) with action parsing off and the
+ *   response rendered as a plan block; the plan is saved to the app-data dir.
+ * - Approving runs the plan in `auto-edit` and turns plan mode off for the
+ *   session.
+ * - It also submits the `--prompt` initial prompt once at startup, and drains
+ *   the prompt queue whenever the app becomes idle.
+ */
+
 import { useCallback, useEffect, useRef } from "react";
 import type { LaunchArgs } from "../../config/launchArgs.js";
 import { saveRuntimeModePreference } from "../../config/persistence.js";
@@ -91,6 +106,11 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     workbenchVersion,
   } = context;
 
+  /**
+   * Starts a read-only planning run for `state`. Any outcome other than a
+   * non-empty plan resets plan mode's flow to idle. Returns whether the run
+   * started.
+   */
   const runPlanGeneration = useCallback(
     (
       state: Extract<PlanFlowState, { kind: "generating" }>,
@@ -155,6 +175,10 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     [appendEvent, savePlanFile, startPromptRun],
   );
 
+  /**
+   * Runs an approved plan in auto-edit mode. If the run cannot start, the
+   * review state is restored so the user can try again.
+   */
   const startApprovedPlanExecution = useCallback(
     (state: Extract<PlanFlowState, { kind: "awaiting_action" }>) => {
       const submitTiming = createPromptRunTiming();
@@ -210,6 +234,8 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     [appendEvent, startPromptRun, updateRuntimeConfig],
   );
 
+  // Ignores repeated picker actions until the plan flow state has moved on, so
+  // a double Enter cannot start the same plan twice.
   const planActionInFlightRef = useRef(false);
   useEffect(() => {
     planActionInFlightRef.current = false;
@@ -276,6 +302,7 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     [appendEvent, planFlow, runPlanGeneration],
   );
 
+  // Submit `--prompt` once, as soon as the app is idle.
   useEffect(() => {
     if (initialPromptSubmittedRef.current || busy) {
       return;
@@ -322,17 +349,26 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     workspaceRoot,
   ]);
 
+  // Queued prompts start through the latest callbacks and settings, which a
+  // drain that is already waiting on a previous run would otherwise miss.
   const queueDispatchRef = useRef({ startPromptRun, runPlanGeneration, planMode, mode, planFlow });
   queueDispatchRef.current = { startPromptRun, runPlanGeneration, planMode, mode, planFlow };
+
+  // Drain the prompt queue whenever the app becomes idle on the main screen.
+  // Readiness is checked twice: here (from render state) to decide whether to
+  // start draining, and again inside `drain` after the previous run has fully
+  // stopped, from refs and live session state. The generation counter makes a
+  // cancel or clear in between abandon the drain.
   useEffect(() => {
-    if (
-      busy ||
-      screen !== "main" ||
-      planFlow.kind !== "idle" ||
-      uiState.kind !== "IDLE" ||
-      recoveryRef.current
-    )
+    const idle =
+      !busy &&
+      screen === "main" &&
+      planFlow.kind === "idle" &&
+      uiState.kind === "IDLE" &&
+      !recoveryRef.current;
+    if (!idle) {
       return;
+    }
     const generation = pipelineGenerationRef.current;
     void promptQueue
       .drain(

@@ -17,12 +17,11 @@ import {
 import { acquireOwnership, type OwnershipLease } from "../../core/workspace/ownership.js";
 import { getShellWorkspaceGuardMessage } from "../../core/workspace/workspaceGuard.js";
 import type { SessionAction } from "../../session/appSession.js";
-import { findUserPrompt } from "../../session/appSession.js";
 import { createEventId, type PromptRunTiming } from "../../session/eventIds.js";
-import type { ShellEvent, TimelineEvent, UserPromptEvent } from "../../session/types.js";
+import type { ShellEvent } from "../../session/types.js";
 import { FOCUS_IDS } from "../../ui/input/focus.js";
 import type { PromptRunLifecycle } from "./promptRunPrep.js";
-import { createShellLineBatcher } from "./promptRunPrep.js";
+import { createShellLineBatcher } from "./shellLineBatcher.js";
 
 interface UsePromptExecutionContext {
   workspaceRoot: string;
@@ -42,8 +41,6 @@ interface UsePromptExecutionContext {
   busy: boolean;
   launchContext: LaunchContext;
   exit: (errorOrResult?: Error | unknown) => void;
-  staticEvents: TimelineEvent[];
-  activeEvents: TimelineEvent[];
 }
 
 export function usePromptExecution(context: UsePromptExecutionContext) {
@@ -65,8 +62,6 @@ export function usePromptExecution(context: UsePromptExecutionContext) {
     busy,
     launchContext,
     exit,
-    staticEvents,
-    activeEvents,
   } = context;
 
   const handleShellExecute = useCallback(
@@ -251,25 +246,5 @@ export function usePromptExecution(context: UsePromptExecutionContext) {
     [appendEvent, appendEvent, busy, exit, launchContext],
   );
 
-  const handleHistoryUp = useCallback(() => {
-    dispatchSession({ type: "HISTORY_UP" });
-  }, [dispatchSession]);
-
-  const handleHistoryDown = useCallback(() => {
-    dispatchSession({ type: "HISTORY_DOWN" });
-  }, [dispatchSession]);
-
-  const findUserPromptForTurn = useCallback(
-    (turnId: number): UserPromptEvent | null => {
-      return findUserPrompt([...staticEvents, ...activeEvents], turnId);
-    },
-    [activeEvents, staticEvents],
-  );
-  return {
-    handleShellExecute,
-    handleWorkspaceRelaunch,
-    handleHistoryUp,
-    handleHistoryDown,
-    findUserPromptForTurn,
-  };
+  return { handleShellExecute, handleWorkspaceRelaunch };
 }

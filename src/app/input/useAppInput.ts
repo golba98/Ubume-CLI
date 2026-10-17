@@ -39,12 +39,12 @@ import {
   formatSkippedDependencyPath,
   getPromptWorkspaceGuardMessage,
 } from "../../core/workspace/workspaceGuard.js";
-import type { SessionAction, SessionState } from "../../session/appSession.js";
+import { findUserPrompt, type SessionAction, type SessionState } from "../../session/appSession.js";
 import { buildFollowUpPrompt } from "../../session/chatLifecycle.js";
 import type { PromptRunTiming } from "../../session/eventIds.js";
 import { createPromptRunTiming } from "../../session/eventIds.js";
 import { type PlanFlowState, startPlanGeneration } from "../../session/planFlow.js";
-import type { Screen, UIState, UserPromptEvent } from "../../session/types.js";
+import type { Screen, TimelineEvent, UIState, UserPromptEvent } from "../../session/types.js";
 import { type FileAttachment, type PromptQueue, queuedPrompt } from "../../session/workbench.js";
 import type { InterruptHint } from "../../ui/chrome/composer/composerModel.js";
 import {
@@ -141,7 +141,8 @@ interface UseAppInputContext {
   fileAttachmentRegistryRef: React.RefObject<Map<string, FileAttachment>>;
   workspaceRoot: string;
   uiState: UIState;
-  findUserPromptForTurn: (turnId: number) => UserPromptEvent | null;
+  staticEvents: TimelineEvent[];
+  activeEvents: TimelineEvent[];
   startPromptRun: (
     displayPrompt: string,
     providerPrompt: string,
@@ -255,7 +256,8 @@ export function useAppInput(context: UseAppInputContext) {
     fileAttachmentRegistryRef,
     workspaceRoot,
     uiState,
-    findUserPromptForTurn,
+    staticEvents,
+    activeEvents,
     startPromptRun,
     promptQueue,
     saveWorkbenchRef,
@@ -273,6 +275,12 @@ export function useAppInput(context: UseAppInputContext) {
     togglePlanModeWithNotice,
     themeSelection,
   } = context;
+
+  const findUserPromptForTurn = useCallback(
+    (turnId: number): UserPromptEvent | null =>
+      findUserPrompt([...staticEvents, ...activeEvents], turnId),
+    [activeEvents, staticEvents],
+  );
 
   const handleSubmit = useCallback(async () => {
     const submitTiming = createPromptRunTiming();

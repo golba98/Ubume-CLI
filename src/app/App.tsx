@@ -869,7 +869,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...conversation,
     intendedFocusTargetRef,
     focusManager,
-    activeProviderRoute,
     activeEvents,
     uiState,
     busy,
@@ -880,19 +879,25 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     staticEvents,
   });
   const { handleCancel } = runLifecycle;
-  const { handleChangeInput, handleRegisterPaste, handlePasteImage, handleClear } =
-    useComposerEditing({
-      armTranscriptReplacement,
-      ...appState,
-      ...conversation,
-      ...runLifecycle,
-      busyRef,
-      runtimeConfig,
-      inputValueRef,
-      cursorRef,
-      appendEvent,
-      setPlanFlow,
-    });
+  const {
+    handleChangeInput,
+    handleRegisterPaste,
+    handlePasteImage,
+    handleClear,
+    handleHistoryUp,
+    handleHistoryDown,
+  } = useComposerEditing({
+    armTranscriptReplacement,
+    ...appState,
+    ...conversation,
+    ...runLifecycle,
+    busyRef,
+    runtimeConfig,
+    inputValueRef,
+    cursorRef,
+    appendEvent,
+    setPlanFlow,
+  });
   const promptExecution = usePromptExecution({
     ...appState,
     allowedWritableRoots,
@@ -900,8 +905,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     focusManager,
     busy,
     exit,
-    staticEvents,
-    activeEvents,
   });
   const { startPromptRun } = usePromptRun({
     ...appState,
@@ -917,7 +920,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     backend,
     externalCliStatusRef,
     refreshAuthStatus,
-    mode,
   });
   const workbenchActions = useWorkbenchActions({
     armTranscriptReplacement,
@@ -970,6 +972,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     openUsagePanel: providerUsage.openUsagePanel,
     appendEvent,
     busy,
+    staticEvents,
+    activeEvents,
     layeredRuntimeConfig,
     runtimeConfig,
     resolvedRuntimeConfig,
@@ -1045,6 +1049,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...modelSelection,
     planFlow,
     handlePlanAction,
+    handleHistoryUp,
+    handleHistoryDown,
     initialRevisionText,
     setInitialRevisionText,
     handlePlanFeedbackSubmit,

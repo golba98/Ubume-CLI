@@ -3,14 +3,13 @@ import { useCallback } from "react";
 import * as perf from "../../core/perf/profiler.js";
 import * as renderDebug from "../../core/perf/renderDebug.js";
 import { unloadCodexaNative } from "../../core/providerRuntime/codexaNative.js";
-import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "../../core/providers/types.js";
 import { sanitizeTerminalOutput } from "../../core/terminal/terminalSanitize.js";
 import { resetLocalUsageRecords } from "../../core/usage/localUsageTracker.js";
 import type { ConversationStore } from "../../core/workspace/conversationStore.js";
 import { savePlan } from "../../core/workspace/planStorage.js";
 import type { SessionAction } from "../../session/appSession.js";
-import { extractAssistantActionRequired, isCurrentRun } from "../../session/chatLifecycle.js";
+import { isCurrentRun } from "../../session/chatLifecycle.js";
 import { createEventId, type PromptRunTiming } from "../../session/eventIds.js";
 import type { PersistedRunStatus } from "../../session/persistedResponse.js";
 import { cancelPlanFeedback, type PlanFlowState, resetPlanFlow } from "../../session/planFlow.js";
@@ -22,6 +21,11 @@ import type { PromptQueue } from "../../session/workbench.js";
 import { FOCUS_IDS } from "../../ui/input/focus.js";
 
 import type { PromptRunLifecycle } from "./promptRunPrep.js";
+import {
+  parseFinalResponse,
+  sanitizeResponseText,
+  shouldPauseQueueAfterRun,
+} from "./runFinalize.js";
 
 interface UseRunLifecycleContext {
   dispatchSession: (action: SessionAction) => void;
@@ -44,7 +48,6 @@ interface UseRunLifecycleContext {
   captureFinalRef: React.RefObject<((runId: number) => void) | null>;
   saveWorkbenchRef: React.RefObject<(() => void) | null>;
   bumpWorkbench: React.Dispatch<React.SetStateAction<number>>;
-  activeProviderRoute: ProviderRoute;
   toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
   screenRef: React.RefObject<Screen>;
@@ -83,7 +86,6 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
     captureFinalRef,
     saveWorkbenchRef,
     bumpWorkbench,
-    activeProviderRoute,
     toolApprovalResolverRef,
     setToolApproval,
     screenRef,
@@ -125,6 +127,49 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
     [dispatchSession, focusManager, resetComposer],
   );
 
+  /**
+   * Clears the active-run refs so no further callbacks treat the run as
+   * current, and returns its cleanup and lifecycle for the caller to finish.
+   * Focus returns to the composer only on the main screen, so a run that
+   * ends while a picker or panel is open (for example during model
+   * recovery) does not steal focus from it.
+   */
+  const detachActiveRun = useCallback(() => {
+    const detached = { cleanup: cleanupRef.current, lifecycle: activeRunLifecycleRef.current };
+    cleanupRef.current = null;
+    activeRunLifecycleRef.current = null;
+    activeRunTimingRef.current = null;
+    activeRunIdRef.current = null;
+    activeTurnIdRef.current = null;
+    if (screenRef.current === "main") {
+      focusManager.focus(FOCUS_IDS.composer);
+    }
+    return detached;
+  }, [focusManager]);
+
+  /** Moves the UI state machine out of its running state after a cancel. */
+  const dispatchRunEnded = useCallback(
+    (runId: number, promptTurnId: number | null) => {
+      if (uiState.kind === "SHELL_RUNNING") {
+        dispatchSession({ type: "UI_ACTION", action: { type: "SHELL_FINISHED", shellId: runId } });
+      } else if (promptTurnId !== null) {
+        dispatchSession({
+          type: "UI_ACTION",
+          action: { type: "RUN_CANCELED", turnId: promptTurnId },
+        });
+      }
+    },
+    [dispatchSession, uiState.kind],
+  );
+
+  /**
+   * Ends the current run: flushes its last live updates, detaches it, runs its
+   * cleanup, persists the assistant message and dispatches `FINALIZE_RUN`.
+   *
+   * Returns false (and does nothing) when `runId` is no longer the current run,
+   * which makes late provider callbacks harmless. `response === undefined`
+   * tells the reducer to keep the streamed text as the final answer.
+   */
   const finalizePromptRun = useCallback(
     (
       runId: number,
@@ -139,7 +184,6 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
       }
       perf.mark("finalize_start");
 
-      const lifecycle = activeRunLifecycleRef.current;
       const timing =
         activeRunTimingRef.current?.runId === runId ? activeRunTimingRef.current : null;
       const finalMonotonicMs = performance.now();
@@ -159,34 +203,18 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
         finalFlushRef.current.flush();
         finalFlushRef.current = null;
       }
-      const cleanup = cleanupRef.current;
-      cleanupRef.current = null;
-      activeRunLifecycleRef.current = null;
-      activeRunTimingRef.current = null;
-      activeRunIdRef.current = null;
-      activeTurnIdRef.current = null;
-      if (screenRef.current === "main") focusManager.focus(FOCUS_IDS.composer);
+      const { cleanup, lifecycle } = detachActiveRun();
       cleanup?.();
+
       const safeMessage = message ? sanitizeTerminalOutput(message) : undefined;
-      // When response is undefined, signal the reducer to preserve streamed content as-is.
-      const safeResponse =
-        response != null
-          ? sanitizeTerminalOutput(response, { preserveTabs: false, tabSize: 2 })
-          : undefined;
-      const shouldParseActionRequired = lifecycle?.parseActionRequired ?? true;
-      const parsed =
-        status === "completed" && safeResponse?.trim()
-          ? shouldParseActionRequired
-            ? extractAssistantActionRequired(safeResponse)
-            : { content: safeResponse, question: null as string | null }
-          : { content: safeResponse, question: null as string | null };
-      const safePersistedResponse =
-        persistedResponse != null
-          ? sanitizeTerminalOutput(persistedResponse, { preserveTabs: false, tabSize: 2 })
-          : undefined;
+      const parsed = parseFinalResponse(
+        status,
+        sanitizeResponseText(response),
+        lifecycle?.parseActionRequired ?? true,
+      );
       persistRunConversationMessage(runId, status, {
         renderedResponse: parsed.content,
-        completeResponse: safePersistedResponse,
+        completeResponse: sanitizeResponseText(persistedResponse),
         errorMessage: safeMessage,
       });
       dispatchSession({
@@ -208,8 +236,9 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
           turnId,
         }),
       });
-      if (status !== "completed" || parsed.question || lifecycle?.responsePresentation === "plan")
+      if (shouldPauseQueueAfterRun(status, parsed.question, lifecycle)) {
         promptQueue.paused = true;
+      }
       captureFinalRef.current?.(runId);
       saveWorkbenchRef.current?.();
       bumpWorkbench((value) => value + 1);
@@ -218,7 +247,9 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
       perf.setMeta("status", status);
       perf.setMeta("elapsed_wall_ms", durationMs);
       const perfSession = perf.getSession();
-      if (perfSession) perf.persistSession(perfSession);
+      if (perfSession) {
+        perf.persistSession(perfSession);
+      }
 
       if (status === "completed") {
         lifecycle?.onCompleted?.({
@@ -241,17 +272,29 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
 
       return true;
     },
-    [activeProviderRoute.providerId, dispatchSession, focusManager, persistRunConversationMessage],
+    [detachActiveRun, dispatchSession, persistRunConversationMessage],
   );
 
+  /**
+   * Cancels the active prompt or shell run (Ctrl+C, /quit, queue edits).
+   *
+   * Any pending tool approval is denied first. With `retainHistory` the
+   * canceled turn stays in the transcript (a prompt run is finalized as
+   * "canceled"; a shell run is marked failed). Without it, the run's events
+   * are removed and the conversation records the turn as canceled.
+   */
   const cancelActiveRun = useCallback(
     (retainHistory = true) => {
       const runId = activeRunIdRef.current;
-      if (runId === null) return false;
+      if (runId === null) {
+        return false;
+      }
       toolApprovalResolverRef.current?.("deny");
       toolApprovalResolverRef.current = null;
       setToolApproval(null);
-      if (screenRef.current === "tool-approval") setScreen("main");
+      if (screenRef.current === "tool-approval") {
+        setScreen("main");
+      }
       const promptTurnId = activeTurnIdRef.current;
 
       if (!isCurrentRun(activeRunIdRef.current, runId)) {
@@ -269,14 +312,7 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
         return finalizePromptRun(runId, runEvent.turnId, "canceled");
       }
 
-      const cleanup = cleanupRef.current;
-      const lifecycle = activeRunLifecycleRef.current;
-      cleanupRef.current = null;
-      activeRunLifecycleRef.current = null;
-      activeRunTimingRef.current = null;
-      activeRunIdRef.current = null;
-      activeTurnIdRef.current = null;
-      if (screenRef.current === "main") focusManager.focus(FOCUS_IDS.composer);
+      const { cleanup, lifecycle } = detachActiveRun();
       cleanup?.();
 
       if (retainHistory) {
@@ -298,44 +334,33 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
         if (promptTurnId !== null) {
           lifecycle?.onCanceled?.({ turnId: promptTurnId, runId });
         }
-        if (uiState.kind === "SHELL_RUNNING") {
-          dispatchSession({
-            type: "UI_ACTION",
-            action: { type: "SHELL_FINISHED", shellId: runId },
-          });
-        } else if (promptTurnId !== null) {
-          dispatchSession({
-            type: "UI_ACTION",
-            action: { type: "RUN_CANCELED", turnId: promptTurnId },
-          });
-        }
+        dispatchRunEnded(runId, promptTurnId);
         dispatchSession({ type: "REMOVE_ACTIVE_RUNTIME", runId, turnId: promptTurnId });
         return true;
       }
 
-      if (uiState.kind === "SHELL_RUNNING") {
-        dispatchSession({ type: "UI_ACTION", action: { type: "SHELL_FINISHED", shellId: runId } });
-      } else if (promptTurnId !== null) {
-        dispatchSession({
-          type: "UI_ACTION",
-          action: { type: "RUN_CANCELED", turnId: promptTurnId },
-        });
-      }
-
+      dispatchRunEnded(runId, promptTurnId);
       return true;
     },
     [
       activeEvents,
+      detachActiveRun,
+      dispatchRunEnded,
       dispatchSession,
       finalizePromptRun,
-      focusManager,
       persistRunConversationMessage,
-      uiState.kind,
     ],
   );
 
+  /**
+   * Esc / Ctrl+C handling, in priority order: cancel a running turn, leave
+   * plan feedback, cancel plan review, or dismiss a transient error/question.
+   * Always pauses the prompt queue and invalidates an in-progress submission.
+   */
   const handleCancel = useCallback(() => {
-    if (submissionRef.current) pipelineGenerationRef.current++;
+    if (submissionRef.current) {
+      pipelineGenerationRef.current++;
+    }
     promptQueue.paused = true;
     bumpWorkbench((value) => value + 1);
     if (busy) {
@@ -377,8 +402,11 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
       });
     };
     // Let journaled file transactions and session switches finish before exiting.
-    if (recoveryRef.current) pendingQuitRef.current = quit;
-    else quit();
+    if (recoveryRef.current) {
+      pendingQuitRef.current = quit;
+    } else {
+      quit();
+    }
   }, [cancelActiveRun, conversationStore, exit, promptQueue]);
 
   const { handleCopy } = useTranscriptExport(staticEvents, appendEvent);
