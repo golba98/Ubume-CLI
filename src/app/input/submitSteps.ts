@@ -28,8 +28,8 @@ import {
 } from "../../ui/input/pastedContent.js";
 import type { PendingImportFile } from "../../ui/panels/AttachmentImportPanel.js";
 import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
+import type { UseAppInputContext } from "./appInputContext.js";
 import { dispatchCommand } from "./commandDispatch.js";
-import type { UseAppInputContext } from "./useAppInput.js";
 
 const WORKBENCH_COMMANDS = ["/queue", "/transcript", "/diff", "/rewind"];
 

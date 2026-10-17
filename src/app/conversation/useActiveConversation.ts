@@ -21,9 +21,9 @@ import type {
   ConversationRecord,
 } from "../../core/workspace/conversationStore.js";
 import type { PersistedRunStatus } from "../../session/persistedResponse.js";
+import type { UseConversationContext } from "./conversationContext.js";
 import { buildRunAssistantMessage, withRouteMetadata } from "./conversationMetadata.js";
 import { saveConversationRecord } from "./conversationPersistence.js";
-import type { UseConversationContext } from "./useConversation.js";
 
 type ActiveConversationContext = Pick<
   UseConversationContext,

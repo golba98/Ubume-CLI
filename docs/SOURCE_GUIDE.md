@@ -38,6 +38,7 @@ Start with [docs/architecture/app.md](architecture/app.md) for lifecycles and in
 | File | Purpose |
 | --- | --- |
 | `src/app/App.tsx` | Root component: composes the app hooks in a fixed order, keeps the terminal/clear-frame wiring inline, and renders `TranscriptShell` or `AppShell` with `OverlayPanels`. See [docs/architecture/app.md](architecture/app.md). |
+| `src/app/conversation/conversationContext.ts` | The shared context type for `useConversation` and its sub-hooks. |
 | `src/app/conversation/conversationMetadata.ts` | Pure conversation transforms: route metadata, interrupted-run notes, restored prompt history, run assistant messages, rewind checkpoints. |
 | `src/app/conversation/conversationPersistence.ts` | Shared conversation save, conversation-switch completion (`finishRecovery`) and scratch-state reset/restore. |
 | `src/app/conversation/useActiveConversation.ts` | Owns the active conversation record: creation on the first prompt, autosave, final checkpoint capture, run messages. |
@@ -45,6 +46,7 @@ Start with [docs/architecture/app.md](architecture/app.md) for lifecycles and in
 | `src/app/conversation/useConversation.ts` | Composes `useActiveConversation`, `useResumeFlows` and `useStartupNotices` in effect order; defines the shared conversation context type. |
 | `src/app/conversation/useResumeFlows.ts` | Every conversation switch: resume picker, saved and imported sessions, native CLI resume, workspace relaunch, startup `--resume`/`--import`. |
 | `src/app/conversation/useStartupNotices.ts` | Provider migration and project-instruction notices after startup. |
+| `src/app/input/appInputContext.ts` | The context type shared by `useAppInput` and `submitSteps.ts`. |
 | `src/app/input/commandDispatch.ts` | Applies parsed slash-command results (`CommandResult`) through a handler table grouped by domain. |
 | `src/app/input/submitSteps.ts` | Submission steps: direct commands, `!shell`, slash-command routing, attachment expansion, outside-workspace interception. |
 | `src/app/input/useAppComposer.tsx` | Memoizes the composer element: plan action picker, plan feedback entry, or the prompt composer. |

@@ -55,13 +55,13 @@ import { restoredEvents } from "../../session/workbench.js";
 import { FOCUS_IDS } from "../../ui/input/focus.js";
 import type { ExternalListScope, ResumePickerPosition } from "../../ui/panels/resumePickerRows.js";
 import { resetTimelineMeasureCaches } from "../../ui/timeline/timelineMeasure.js";
+import type { UseConversationContext } from "./conversationContext.js";
 import {
   conversationCharCount,
   interruptedRunMessage,
   promptHistoryFromMessages,
 } from "./conversationMetadata.js";
 import { finishRecovery, restoreConversationScratchState } from "./conversationPersistence.js";
-import type { UseConversationContext } from "./useConversation.js";
 
 type ResumeFlowsContext = Omit<
   UseConversationContext,

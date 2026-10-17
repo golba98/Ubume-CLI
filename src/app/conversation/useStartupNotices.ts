@@ -8,7 +8,7 @@ import { useEffect } from "react";
 import { traceInputDebug } from "../../core/perf/debugLog.js";
 import { findProvider } from "../../core/providerLauncher/registry.js";
 import { createProviderMigrationNoticeEvent } from "../../session/eventIds.js";
-import type { UseConversationContext } from "./useConversation.js";
+import type { UseConversationContext } from "./conversationContext.js";
 
 type StartupNoticesContext = Pick<
   UseConversationContext,
