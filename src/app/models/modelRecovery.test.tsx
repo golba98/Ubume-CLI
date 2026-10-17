@@ -136,6 +136,7 @@ async function harness() {
       setPendingRouteProviderId: setPending,
       setRouteSwitchBusy: setBusy,
       setProviderWorkspaceConfig: setConfig,
+      updateProviderWorkspaceConfig: (transform: (latest: any) => any) => setConfig(transform),
       updateRuntimeConfig: setRuntime,
       setRegistryNonce: noop,
       appendEvent: (_: string, title: string, message: string) =>

@@ -10,13 +10,13 @@ import {
   createFallbackModelCapabilities,
   getSelectableModelCapabilities,
 } from "../../core/models/codexModelCapabilities.js";
-import { catalogContextKey, providerCatalog } from "../../core/models/modelCatalog.js";
+import { providerCatalog, providerConnectionKey } from "../../core/models/modelCatalog.js";
 import { isCatalogModelUnavailable } from "../../core/models/modelSelection.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import { traceInputDebug } from "../../core/perf/debugLog.js";
+import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import type { ProviderId, ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
 import {
-  saveProviderWorkspaceConfig,
   setProviderActiveRoute,
   setProviderDefaultModel,
 } from "../../core/providerLauncher/workspaceConfig.js";
@@ -26,7 +26,6 @@ import {
 } from "../../core/providerRuntime/anthropic.js";
 import { modelRecoveryMessage } from "../../core/providerRuntime/failures.js";
 import { validateLocalProvider } from "../../core/providerRuntime/local.js";
-import { providerModelsToCodexCapabilities } from "../../core/providerRuntime/models.js";
 import {
   discoverProviderModels,
   getProviderRuntime,
@@ -39,6 +38,7 @@ import type { BackendProvider } from "../../core/providers/types.js";
 import { errorMessage } from "../../core/shared/values.js";
 
 import type { Screen } from "../../session/types.js";
+import { openAiCapabilitiesFromDiscovery } from "./catalogLogic.js";
 
 interface UseModelCatalogContext {
   selectionCoordinator: SelectionCoordinator;
@@ -80,7 +80,10 @@ interface UseModelCatalogContext {
     reason: string,
   ) => void;
   reasoningLevel: string;
-  setProviderWorkspaceConfig: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
+  /** Saves a transform of the latest provider config; see useRuntimeSettings. */
+  updateProviderWorkspaceConfig: (
+    transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig,
+  ) => ProviderWorkspaceConfig;
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
 }
 
@@ -108,7 +111,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
     activeProviderRoute,
     markProviderAvailability,
     reasoningLevel,
-    setProviderWorkspaceConfig,
+    updateProviderWorkspaceConfig,
     updateRuntimeConfig,
   } = context;
 
@@ -132,18 +135,9 @@ export function useModelCatalog(context: UseModelCatalogContext) {
         return next;
       });
       if (providerId === "openai" && snapshot.refreshState !== "loading") {
-        const capabilities = providerModelsToCodexCapabilities(
-          snapshot.models,
-          latest.current.activeProviderRoute.modelId,
+        setModelCapabilities(
+          openAiCapabilitiesFromDiscovery(snapshot, latest.current.activeProviderRoute.modelId),
         );
-        setModelCapabilities({
-          ...capabilities,
-          status: snapshot.freshness === "verified" ? "ready" : "fallback",
-          error:
-            snapshot.freshness === "verified"
-              ? null
-              : (snapshot.message ?? "Cached Codex inventory is unverified."),
-        });
       }
       setRegistryNonce((current) => current + 1);
     });
@@ -164,14 +158,14 @@ export function useModelCatalog(context: UseModelCatalogContext) {
       // Single-flight: concurrent requests share the same in-flight discovery
       // promise so we never spawn a duplicate discovery job or emit duplicate
       // transcript messages.
-      const connection = catalogContextKey("openai", {
+      const connection = providerConnectionKey("openai", {
         cwd: workspaceRoot,
-        providerConfig: providerWorkspaceConfig.providers?.openai,
+        config: providerWorkspaceConfig,
       });
       const currentConnection = () =>
-        catalogContextKey("openai", {
+        providerConnectionKey("openai", {
           cwd: workspaceRoot,
-          providerConfig: latest.current.providerWorkspaceConfig.providers?.openai,
+          config: latest.current.providerWorkspaceConfig,
         });
       if (modelDiscoveryInFlightRef.current && modelDiscoveryContextRef.current === connection) {
         traceInputDebug(
@@ -200,18 +194,10 @@ export function useModelCatalog(context: UseModelCatalogContext) {
             forceRefresh,
             signal: discoveryLifetime.current.signal,
           });
-          const converted = providerModelsToCodexCapabilities(
-            discovery.models,
+          const capabilities = openAiCapabilitiesFromDiscovery(
+            discovery,
             activeProviderRoute.modelId,
           );
-          const capabilities: CodexModelCapabilities = {
-            ...converted,
-            status: discovery.freshness === "verified" ? "ready" : "fallback",
-            error:
-              discovery.freshness === "verified"
-                ? null
-                : (discovery.message ?? "Cached Codex inventory is unverified."),
-          };
           if (
             discoveryLifetime.current.signal.aborted ||
             currentConnection() !== connection ||
@@ -305,17 +291,10 @@ export function useModelCatalog(context: UseModelCatalogContext) {
         return next;
       });
 
-      const connection = catalogContextKey(providerId, {
+      const connection = providerConnectionKey(providerId, {
         cwd: workspaceRoot,
-        providerConfig: providerWorkspaceConfig.providers?.[providerId],
-        ...(providerId === "local"
-          ? {
-              localBackend:
-                activeProviderRoute.localBackend ??
-                providerWorkspaceConfig.providers?.local?.localBackend ??
-                "lm-studio",
-            }
-          : {}),
+        config: providerWorkspaceConfig,
+        routeLocalBackend: activeProviderRoute.localBackend,
       });
       const revision = selectionCoordinator.revision(connection, activeProviderRoute.modelId);
       const promise = refreshProviderModels(providerId, {
@@ -326,10 +305,10 @@ export function useModelCatalog(context: UseModelCatalogContext) {
         localConfig: providerId === "local" ? providerWorkspaceConfig.providers?.local : undefined,
         ...(providerId === "local"
           ? {
-              localBackend:
-                activeProviderRoute.localBackend ??
-                providerWorkspaceConfig.providers?.local?.localBackend ??
-                "lm-studio",
+              localBackend: resolveLocalBackend(
+                providerWorkspaceConfig,
+                activeProviderRoute.localBackend,
+              ),
             }
           : {}),
       })
@@ -489,13 +468,10 @@ export function useModelCatalog(context: UseModelCatalogContext) {
     const navigation = selectionCoordinator.navigationToken;
     const startedRoute = activeProviderRoute;
     const localConnection = () =>
-      catalogContextKey("local", {
+      providerConnectionKey("local", {
         cwd: workspaceRoot,
-        providerConfig: latest.current.providerWorkspaceConfig.providers?.local,
-        localBackend:
-          latest.current.activeProviderRoute.localBackend ??
-          latest.current.providerWorkspaceConfig.providers?.local?.localBackend ??
-          "lm-studio",
+        config: latest.current.providerWorkspaceConfig,
+        routeLocalBackend: latest.current.activeProviderRoute.localBackend,
       });
     const startedConnection = localConnection();
     void (async () => {
@@ -527,21 +503,17 @@ export function useModelCatalog(context: UseModelCatalogContext) {
               ? result.diagnostics.selectedModel.trim()
               : "";
           if (detectedModel && ["Local default", "default"].includes(activeProviderRoute.modelId)) {
-            const localBackend =
-              activeProviderRoute.localBackend ??
-              providerWorkspaceConfig.providers?.local?.localBackend ??
-              "lm-studio";
             const nextReasoning = activeProviderRoute.reasoning ?? reasoningLevel;
-            let nextConfig = setProviderActiveRoute(providerWorkspaceConfig, {
-              providerId: "local",
-              modelId: detectedModel,
-              backendKind: result.backendKind,
-              reasoning: nextReasoning,
-              localBackend,
+            updateProviderWorkspaceConfig((latestConfig) => {
+              const withRoute = setProviderActiveRoute(latestConfig, {
+                providerId: "local",
+                modelId: detectedModel,
+                backendKind: result.backendKind,
+                reasoning: nextReasoning,
+                localBackend: resolveLocalBackend(latestConfig, activeProviderRoute.localBackend),
+              });
+              return setProviderDefaultModel(withRoute, "local", detectedModel);
             });
-            nextConfig = setProviderDefaultModel(nextConfig, "local", detectedModel);
-            saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
-            setProviderWorkspaceConfig(nextConfig);
             updateRuntimeConfig((current) => ({ ...current, model: detectedModel }));
           }
         }

@@ -4,13 +4,14 @@ import type { ResolvedRuntimeConfig, RuntimeConfig } from "../../config/runtimeC
 import type { AvailableModel, ReasoningLevel } from "../../config/settings.js";
 import { resolveVibeExecutable } from "../../core/executables/executableResolver.js";
 import type { CodexModelCapabilities } from "../../core/models/codexModelCapabilities.js";
-import { catalogContextKey } from "../../core/models/modelCatalog.js";
+import { providerConnectionKey } from "../../core/models/modelCatalog.js";
 import {
   isCatalogModelUnavailable,
   resolveCatalogModel,
 } from "../../core/models/modelSelection.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import { commandExistsOnPath, launchProviderCli } from "../../core/providerLauncher/launcher.js";
+import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import { findProvider } from "../../core/providerLauncher/registry.js";
 import type {
   LocalBackendId,
@@ -20,7 +21,6 @@ import type {
   ProviderWorkspaceConfig,
 } from "../../core/providerLauncher/types.js";
 import {
-  saveProviderWorkspaceConfig,
   setLocalBackendPreference,
   setProviderWorkspaceDefault,
 } from "../../core/providerLauncher/workspaceConfig.js";
@@ -75,7 +75,10 @@ interface UseProviderRouteContext {
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
   busy: boolean;
   providerRegistry: ProviderConfig[];
-  setProviderWorkspaceConfig: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
+  /** Saves a transform of the latest provider config; see useRuntimeSettings. */
+  updateProviderWorkspaceConfig: (
+    transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig,
+  ) => ProviderWorkspaceConfig;
   activeRouteProvider: ProviderConfig;
   model: string;
   providerRouteErrorsRef: React.RefObject<Record<string, string>>;
@@ -158,7 +161,7 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     appendEvent,
     busy,
     providerRegistry,
-    setProviderWorkspaceConfig,
+    updateProviderWorkspaceConfig,
     activeRouteProvider,
     model,
     providerRouteErrorsRef,
@@ -295,9 +298,7 @@ export function useProviderRoute(context: UseProviderRouteContext) {
       }
 
       try {
-        const nextConfig = setProviderWorkspaceDefault(providerWorkspaceConfig, providerId);
-        saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
-        setProviderWorkspaceConfig(nextConfig);
+        updateProviderWorkspaceConfig((latest) => setProviderWorkspaceDefault(latest, providerId));
         setScreen("main");
         const routeConfigured = isProviderRouteConfigured(providerId);
         appendEvent(
@@ -369,13 +370,10 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         }
 
         if (providerId === "local") {
-          const localBackend =
-            selectedLocalBackend ??
-            providerWorkspaceConfig.providers?.local?.localBackend ??
-            "lm-studio";
-          const preferredConfig = setLocalBackendPreference(providerWorkspaceConfig, localBackend);
-          saveProviderWorkspaceConfig(workspaceRoot, preferredConfig);
-          setProviderWorkspaceConfig(preferredConfig);
+          const localBackend = resolveLocalBackend(providerWorkspaceConfig, selectedLocalBackend);
+          updateProviderWorkspaceConfig((latest) =>
+            setLocalBackendPreference(latest, localBackend),
+          );
           void probeLocalBackend(localBackend)
             .then((validation) => {
               if (!isMountedRef.current || selectionCoordinator.navigationToken !== navigation)
@@ -421,9 +419,9 @@ export function useProviderRoute(context: UseProviderRouteContext) {
 
         const discovery = discoverProviderModels(providerId);
         const preferredModel = workspaceProviderConfig?.currentModel ?? provider.currentModel;
-        const connection = catalogContextKey(providerId, {
+        const connection = providerConnectionKey(providerId, {
           cwd: workspaceRoot,
-          providerConfig: workspaceProviderConfig,
+          config: providerWorkspaceConfig,
         });
         const rejected =
           selectionCoordinator.state(connection, preferredModel)?.status === "unavailable";

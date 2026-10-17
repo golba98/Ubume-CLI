@@ -10,7 +10,7 @@ import {
   formatHollowResponse,
   getBlockedCleanupFailure,
 } from "../../core/codex/codexPrompt.js";
-import { catalogContextKey } from "../../core/models/modelCatalog.js";
+import { providerConnectionKey } from "../../core/models/modelCatalog.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import * as perf from "../../core/perf/profiler.js";
 import * as renderDebug from "../../core/perf/renderDebug.js";
@@ -228,12 +228,10 @@ export function usePromptRun(context: UsePromptRunContext) {
         );
         return false;
       }
-      const modelConnection = catalogContextKey(activeProviderRoute.providerId, {
+      const modelConnection = providerConnectionKey(activeProviderRoute.providerId, {
         cwd: workspaceRoot,
-        providerConfig: providerWorkspaceConfig.providers?.[activeProviderRoute.providerId],
-        ...(activeProviderRoute.providerId === "local"
-          ? { localBackend: activeProviderRoute.localBackend }
-          : {}),
+        config: providerWorkspaceConfig,
+        routeLocalBackend: activeProviderRoute.localBackend,
       });
       const modelRevision = selectionCoordinator.revision(
         modelConnection,

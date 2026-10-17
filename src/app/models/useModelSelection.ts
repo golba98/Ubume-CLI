@@ -16,10 +16,11 @@ import {
   findModelCapability,
   normalizeReasoningForModelCapabilities,
 } from "../../core/models/codexModelCapabilities.js";
-import { catalogContextKey } from "../../core/models/modelCatalog.js";
+import { providerConnectionKey } from "../../core/models/modelCatalog.js";
 import { isSupportedReasoning } from "../../core/models/reasoningControl.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import { traceInputDebug } from "../../core/perf/debugLog.js";
+import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import type {
   LocalBackendId,
   ProviderConfig,
@@ -296,19 +297,19 @@ export function useModelSelection(context: UseModelSelectionContext) {
         reasoning: nextReasoning,
         backendKind: getProviderRuntime(providerId).backendKind,
         ...(providerId === "local"
-          ? { localBackend: localBackend ?? providerConfig?.localBackend ?? "lm-studio" }
+          ? { localBackend: resolveLocalBackend(providerWorkspaceConfig, localBackend) }
           : {}),
       };
-      const connection = catalogContextKey(providerId, {
+      const connection = providerConnectionKey(providerId, {
         cwd: workspaceRoot,
-        providerConfig,
-        ...(providerId === "local" ? { localBackend: route.localBackend } : {}),
+        config: providerWorkspaceConfig,
+        routeLocalBackend: route.localBackend,
       });
       const sameConnection = () =>
-        catalogContextKey(providerId, {
+        providerConnectionKey(providerId, {
           cwd: workspaceRoot,
-          providerConfig: latest.current.providerWorkspaceConfig.providers?.[providerId],
-          ...(providerId === "local" ? { localBackend: route.localBackend } : {}),
+          config: latest.current.providerWorkspaceConfig,
+          routeLocalBackend: route.localBackend,
         }) === connection;
       const transition = selectionCoordinator.begin(route, connection);
       modelSelectionInFlightRef.current = true;

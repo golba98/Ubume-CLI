@@ -9,7 +9,7 @@ import {
   type PartialRuntimeConfig,
   type RuntimeConfig,
 } from "../../config/runtimeConfig.js";
-
+import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import type {
   LocalBackendId,
   ProviderId,
@@ -88,6 +88,26 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
     [updateRuntimeConfig],
   );
 
+  /**
+   * Applies `transform` to the newest provider workspace config, saves it and
+   * publishes it to React state.
+   *
+   * Every write to `providers.json` goes through here so that it merges against
+   * the latest saved config (tracked in `configRef`) rather than a snapshot a
+   * callback captured when it was created. Throws when the save fails; callers
+   * own the user-facing error.
+   */
+  const updateProviderWorkspaceConfig = useCallback(
+    (transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig) => {
+      const nextConfig = transform(configRef.current);
+      saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
+      configRef.current = nextConfig;
+      setProviderWorkspaceConfig(nextConfig);
+      return nextConfig;
+    },
+    [workspaceRoot],
+  );
+
   const persistActiveRoute = useCallback(
     (
       providerId: ProviderId,
@@ -105,12 +125,7 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
           backendKind: backendKindOverride ?? runtime.backendKind,
           reasoning: nextReasoning,
           ...(providerId === "local"
-            ? {
-                localBackend:
-                  localBackend ??
-                  providerWorkspaceConfig.providers?.local?.localBackend ??
-                  "lm-studio",
-              }
+            ? { localBackend: resolveLocalBackend(providerWorkspaceConfig, localBackend) }
             : {}),
         });
         if (
@@ -123,17 +138,16 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
           providerId,
           nextReasoning,
         );
-        saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
-        configRef.current = nextConfig;
+        updateProviderWorkspaceConfig(() => nextConfig);
         setConversationRouteOverride(null);
         routeChoiceRequiredRef.current = null;
         const current = activeConversationRef.current;
-        if (current && nextConfig.activeRoute)
+        if (current && nextConfig.activeRoute) {
           activeConversationRef.current = {
             ...current,
             metadata: { ...current.metadata, ...nextConfig.activeRoute },
           };
-        setProviderWorkspaceConfig(nextConfig);
+        }
         return true;
       } catch (error) {
         const message = errorMessage(error, "Unable to save active route.");
@@ -141,28 +155,31 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
         return false;
       }
     },
-    [appendEvent, providerWorkspaceConfig, workspaceRoot],
+    [appendEvent, updateProviderWorkspaceConfig],
   );
 
   const persistProviderDefaultModelAndReasoning = useCallback(
     (providerId: ProviderId, modelId: string, nextReasoning: string) => {
       try {
-        const withModel = setProviderDefaultModel(configRef.current, providerId, modelId);
-        const nextConfig = setProviderDefaultReasoning(withModel, providerId, nextReasoning);
-        saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
-        configRef.current = nextConfig;
-        setProviderWorkspaceConfig(nextConfig);
+        updateProviderWorkspaceConfig((latest) =>
+          setProviderDefaultReasoning(
+            setProviderDefaultModel(latest, providerId, modelId),
+            providerId,
+            nextReasoning,
+          ),
+        );
       } catch (error) {
         const message = errorMessage(error, "Unable to save provider defaults.");
         appendEvent("error", "Provider defaults save failed", message);
       }
     },
-    [appendEvent, providerWorkspaceConfig, workspaceRoot],
+    [appendEvent, updateProviderWorkspaceConfig],
   );
   return {
     reloadBaseLayeredConfig,
     updateRuntimeConfig,
     updateRuntimePolicy,
+    updateProviderWorkspaceConfig,
     persistActiveRoute,
     persistProviderDefaultModelAndReasoning,
   };

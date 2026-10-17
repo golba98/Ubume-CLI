@@ -28,7 +28,7 @@ import {
   getSelectableModelCapabilities,
   normalizeReasoningForModelCapabilities,
 } from "../core/models/codexModelCapabilities.js";
-import { catalogContextKey } from "../core/models/modelCatalog.js";
+import { providerConnectionKey } from "../core/models/modelCatalog.js";
 import { traceModelStateDebug } from "../core/perf/debugLog.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import { buildProviderRegistry, findProvider } from "../core/providerLauncher/registry.js";
@@ -573,12 +573,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     [modelPickerProviderId, modelPickerRuntime, providerRegistry],
   );
   const modelPickerEmptyMessage = useMemo(() => {
-    const connection = catalogContextKey(modelPickerProviderId, {
+    const connection = providerConnectionKey(modelPickerProviderId, {
       cwd: workspaceRoot,
-      providerConfig: providerWorkspaceConfig.providers?.[modelPickerProviderId],
-      ...(modelPickerProviderId === "local"
-        ? { localBackend: providerWorkspaceConfig.providers?.local?.localBackend ?? "lm-studio" }
-        : {}),
+      config: providerWorkspaceConfig,
+      routeLocalBackend:
+        activeProviderRoute.providerId === modelPickerProviderId
+          ? activeProviderRoute.localBackend
+          : undefined,
     });
     if (
       appState.selectionCoordinator.state(connection, modelPickerCurrentModel)?.status ===
@@ -1133,6 +1134,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       resolvedRuntimeConfig,
       busyRef,
       externalCliLaunchHooks,
+      updateProviderWorkspaceConfig: runtimeSettings.updateProviderWorkspaceConfig,
     });
   const overlayRouting = useOverlayRouting({
     ...appState,
