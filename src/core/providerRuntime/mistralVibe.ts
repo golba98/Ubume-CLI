@@ -1031,7 +1031,7 @@ export const mistralVibeRuntime: ProviderRuntime = {
       const discovery = parseVibeEffectiveModels(payload);
       if (!signal?.aborted && contextKey === catalogContextKey("mistral", { cwd }))
         effectiveVibeModels.set(contextKey, discovery);
-      return discovery;
+      return { ...discovery, complete: true };
     } catch {
       const fallback = discoverMistralVibeModels(cwd);
       return {

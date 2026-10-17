@@ -28,6 +28,8 @@ test("saved routes keep model, reasoning and backend and require explicit choice
     providerId: "local" as const,
     backendKind: "local-openai-compatible" as const,
     status: "ready" as const,
+    freshness: "verified" as const,
+    complete: true,
     models: [
       {
         id: "fixture",

@@ -1,6 +1,5 @@
 import { useMemo, useRef } from "react";
-
-import type { ProviderRunControl } from "../core/providers/types.js";
+import type { GenerationMetadata, ProviderRunControl } from "../core/providers/types.js";
 
 import type { CheckpointStore, FileCheckpoint } from "../core/workspace/checkpoints.js";
 
@@ -36,6 +35,7 @@ export function useRunRefs() {
     text: string;
     tools: Map<string, string>;
     files: Map<string, PersistedFileActivity>;
+    generationMetadata?: GenerationMetadata;
   } | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const activeRunLifecycleRef = useRef<PromptRunLifecycle | null>(null);

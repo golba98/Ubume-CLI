@@ -259,6 +259,7 @@ test("model picker renders 'Choose a Google model' when activeProviderLabel is G
     await sleep(100);
     const stripped = stripAnsi(output);
     assert.match(stripped, /Choose a Google model to use inside Ubume/);
+    assert.match(stripped, /Select model · Google/);
     assert.ok(!stripped.includes("OpenAI"), "Should not mention OpenAI when picking Google models");
   } finally {
     cleanup();

@@ -1,4 +1,4 @@
-import type { ProviderModel } from "../providerRuntime/types.js";
+import type { ProviderModel, ProviderModelDiscoveryResult } from "../providerRuntime/types.js";
 import { isRecord } from "../shared/values.js";
 
 /** Aliases are provider-advertised or Vibe configuration mappings, never inferred from labels. */
@@ -16,4 +16,14 @@ export function resolveCatalogModel(
           (aliases) => Array.isArray(aliases) && aliases.includes(id),
         )),
   );
+}
+
+/** Failed discovery and partial alias lists cannot establish that a model disappeared. */
+export function isCatalogModelUnavailable(
+  catalog: ProviderModelDiscoveryResult,
+  id: string,
+): boolean {
+  if (catalog.freshness !== "verified") return false;
+  const model = resolveCatalogModel(catalog.models, id);
+  return model?.available === false || (catalog.complete === true && !model);
 }

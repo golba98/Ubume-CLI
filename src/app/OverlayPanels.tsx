@@ -13,7 +13,6 @@ import {
   type AuthPreference,
   type AvailableMode,
   type AvailableModel,
-  formatReasoningLabel,
   type ReasoningLevel,
   USER_SETTING_DEFINITIONS,
   type UserSettingValues,
@@ -33,6 +32,7 @@ import type {
   ProviderPickerAction,
   ProviderWorkspaceConfig,
 } from "../core/providerLauncher/types.js";
+import { saveProviderWorkspaceConfig } from "../core/providerLauncher/workspaceConfig.js";
 import { getProviderSetupPlan } from "../core/providerRuntime/registry.js";
 import type { ProviderRoute } from "../core/providerRuntime/types.js";
 import type {
@@ -55,12 +55,12 @@ import type { Screen, TimelineEvent } from "../session/types.js";
 import type { PromptQueue } from "../session/workbench.js";
 import { FOCUS_IDS } from "../ui/input/focus.js";
 import type { TerminalViewport } from "../ui/layout.js";
-
 import {
   AttachmentImportPanel,
   type PendingImportFile,
 } from "../ui/panels/AttachmentImportPanel.js";
 import { AuthPanel } from "../ui/panels/AuthPanel.js";
+import { CodexaSettingsPanel } from "../ui/panels/CodexaSettingsPanel.js";
 import { ExternalSessionViewer, SavedSessionViewer } from "../ui/panels/ExternalSessionViewer.js";
 import { ModelPickerScreen } from "../ui/panels/ModelPickerScreen.js";
 import { PermissionsPanel, type PermissionsPanelAction } from "../ui/panels/PermissionsPanel.js";
@@ -154,6 +154,7 @@ interface OverlayPanelsProps {
     selectedLocalBackend?: LocalBackendId,
   ) => void;
   providerWorkspaceConfig: ProviderWorkspaceConfig;
+  setProviderWorkspaceConfig?: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
   localBackendStatuses: Record<LocalBackendId, LocalBackendStatus>;
   probeLocalBackends: () => void;
   modelPickerOpenRef: React.RefObject<boolean>;
@@ -288,10 +289,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     modelPickerProviderId,
     modelCapabilitiesBusy,
     providerModelLoading,
-    routeSwitchBusy,
     modelPickerEmptyMessage,
     activeProviderRoute,
-    persistProviderDefaultModelAndReasoning,
     appendEvent,
     setModelAndReasoningWithNotice,
     returnToChatMode,
@@ -461,14 +460,13 @@ export function OverlayPanels(props: OverlayPanelsProps) {
           isLoading={
             modelPickerModels.length === 0 &&
             ((modelPickerProviderId === "openai" && modelCapabilitiesBusy) ||
-              providerModelLoading[modelPickerProviderId] ||
-              routeSwitchBusy)
+              providerModelLoading[modelPickerProviderId])
           }
           emptyMessage={modelPickerEmptyMessage}
           refreshMessage={
             providerModelLoading[modelPickerProviderId]
               ? "Refreshing model inventory…"
-              : /fail|unverified|cached|credentials|unable|timed|removed/i.test(
+              : /fail|unverified|cached|credentials|unable|timed|removed|unavailable|unsupported/i.test(
                     modelPickerEmptyMessage ?? "",
                   )
                 ? modelPickerEmptyMessage
@@ -479,26 +477,11 @@ export function OverlayPanels(props: OverlayPanelsProps) {
           }}
           onSelect={(m, r) => {
             modelPickerOpenRef.current = false;
-            if (
-              pendingRouteProviderId &&
-              pendingRouteProviderId !== activeProviderRoute.providerId
-            ) {
-              // Non-active provider: save as provider default without switching the active route.
-              // User must click "Use in Ubume" to validate and activate.
-              persistProviderDefaultModelAndReasoning(pendingRouteProviderId, m, r);
-              appendEvent(
-                "system",
-                "Provider model saved",
-                `${modelPickerProviderLabel} default model set to ${m} with reasoning ${formatReasoningLabel(r)}. Choose "Use in Ubume" to activate this provider.`,
-              );
-              setScreen("provider-picker");
-            } else {
-              void setModelAndReasoningWithNotice(
-                m as AvailableModel,
-                r as ReasoningLevel,
-                modelPickerProviderId,
-              );
-            }
+            void setModelAndReasoningWithNotice(
+              m as AvailableModel,
+              r as ReasoningLevel,
+              modelPickerProviderId,
+            );
           }}
           onCancel={() => {
             modelPickerOpenRef.current = false;
@@ -673,7 +656,37 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         />
       )}
 
-      {screen === "settings-panel" && (
+      {screen === "settings-panel" && activeProviderRoute.providerId === "codexa-native" && (
+        <CodexaSettingsPanel
+          options={providerWorkspaceConfig.providers?.["codexa-native"]?.codexaNative}
+          onCancel={() => setScreen("main")}
+          onSave={(options) => {
+            const next = {
+              ...providerWorkspaceConfig,
+              providers: {
+                ...providerWorkspaceConfig.providers,
+                "codexa-native": {
+                  ...providerWorkspaceConfig.providers?.["codexa-native"],
+                  codexaNative: options,
+                },
+              },
+            };
+            try {
+              saveProviderWorkspaceConfig(workspaceRoot, next);
+              props.setProviderWorkspaceConfig?.(next);
+              appendEvent(
+                "system",
+                "Codexa settings",
+                `Saved ${options.generation?.preset} preset; applies to the next message.`,
+              );
+              setScreen("main");
+            } catch (error) {
+              appendEvent("error", "Codexa settings", String(error));
+            }
+          }}
+        />
+      )}
+      {screen === "settings-panel" && activeProviderRoute.providerId !== "codexa-native" && (
         <SettingsPanel
           focusId={FOCUS_IDS.settingsPanel}
           settings={USER_SETTING_DEFINITIONS}

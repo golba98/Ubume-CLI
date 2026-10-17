@@ -4,7 +4,7 @@ import { formatModeLabel, formatReasoningLabel } from "../../config/settings.js"
 import type { CodexModelCapability } from "../../core/models/codexModelCapabilities.js";
 import { reconcileReasoning } from "../../core/models/reasoningControl.js";
 import { getAntigravityModelLabel } from "../../core/providerRuntime/antigravity.js";
-import { CODEXA_NATIVE_MODEL_ID } from "../../core/providerRuntime/codexaNative.js";
+import { codexaModelLabel } from "../../core/providerRuntime/codexaNativeConfig.js";
 import type {
   ModelContextMetadata,
   ModelSpec,
@@ -76,9 +76,8 @@ function getModelLabel(
     return capability?.label ?? route.modelId;
   }
   if (route.providerId === "codexa-native") {
-    // Older persisted routes may still contain the 900M checkpoint directory
-    // name; the user-facing Codexa Native model is the canonical 1B SFT v2 ID.
-    return CODEXA_NATIVE_MODEL_ID;
+    // Keep variant identity and leave unsupported legacy IDs visibly unchanged.
+    return codexaModelLabel(route.modelId);
   }
   if (route.providerId === "codexa-cupy") {
     return route.modelId;
@@ -142,7 +141,7 @@ export function buildActiveRuntimeDisplay({
         : `${providerLabel} / ${modelLabel}`,
     contextDisplay: isLocalRuntime ? contextDisplay : "",
     showContext: isLocalRuntime,
-    modeLabel: formatModeLabel(mode),
+    modeLabel: route.providerId === "codexa-native" ? "Chat · no tools" : formatModeLabel(mode),
     modelSpec,
   };
 }

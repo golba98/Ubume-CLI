@@ -19,6 +19,7 @@ import {
 import type { PromptRunTiming } from "../session/eventIds.js";
 
 export interface PromptRunLifecycle {
+  historyOverride?: readonly import("../core/workspace/conversationStore.js").ConversationMessage[];
   parseActionRequired?: boolean;
   disableModeAutoUpgrade?: boolean;
   runtimeOverride?: PartialRuntimeConfig;
@@ -83,9 +84,12 @@ export function preparePromptRun(
 ) {
   const requestedRuntime = mergeRuntimeConfig(runtimeConfig, lifecycle.runtimeOverride ?? {});
   const requestedMode = requestedRuntime.mode;
-  const executionModeDecision = lifecycle.disableModeAutoUpgrade
-    ? { mode: requestedMode, autoUpgraded: false }
-    : resolveExecutionMode(requestedMode, safeProviderPrompt);
+  const executionModeDecision =
+    activeProviderRoute.providerId === "codexa-native"
+      ? { mode: "suggest" as const, autoUpgraded: false }
+      : lifecycle.disableModeAutoUpgrade
+        ? { mode: requestedMode, autoUpgraded: false }
+        : resolveExecutionMode(requestedMode, safeProviderPrompt);
   const effectiveMode = executionModeDecision.mode;
   const runtimeConfigForTurn = {
     ...requestedRuntime,
@@ -98,6 +102,7 @@ export function preparePromptRun(
   };
   let runtimeForTurn = resolveRuntimeConfig(runtimeConfigForTurn);
   const fastCleanupRun =
+    activeProviderRoute.providerId !== "codexa-native" &&
     isClearlySafeGeneratedCleanupRequest(safeProviderPrompt) &&
     effectiveMode !== "suggest" &&
     runtimeForTurn.policy.sandboxMode !== "read-only";
@@ -116,15 +121,26 @@ export function selectProviderHistory(
   activeProviderRoute: ProviderRoute,
   activeContextMetadata: ModelContextMetadata | null,
 ) {
-  const storedConversation = toProviderConversationHistory(activeConversation?.messages ?? [], {
-    includeActivitySummaries:
-      activeProviderRoute.providerId !== "local" && activeProviderRoute.providerId !== "mistral",
-  });
+  const storedConversation = toProviderConversationHistory(
+    (activeConversation?.messages ?? []).map((message) =>
+      activeProviderRoute.providerId === "codexa-native" && message.generationMetadata
+        ? { ...message, content: message.generationMetadata.rawOutput }
+        : message,
+    ),
+    {
+      includeActivitySummaries:
+        activeProviderRoute.providerId !== "local" &&
+        activeProviderRoute.providerId !== "mistral" &&
+        activeProviderRoute.providerId !== "codexa-native",
+    },
+  );
   // Local models own request-window compaction so they can create a semantic
   // checkpoint before sliding old messages out. Other providers retain the
   // existing tail-selection behavior.
   const conversationHistory =
-    activeProviderRoute.providerId === "local" || activeProviderRoute.providerId === "mistral"
+    activeProviderRoute.providerId === "local" ||
+    activeProviderRoute.providerId === "mistral" ||
+    activeProviderRoute.providerId === "codexa-native"
       ? [...storedConversation]
       : selectConversationContext(
           storedConversation,

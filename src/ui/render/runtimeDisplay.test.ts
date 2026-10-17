@@ -172,7 +172,7 @@ test("Local route omits the non-adjustable reasoning suffix", () => {
   assert.doesNotMatch(display.footerModelDisplay, /\(Low\)/);
 });
 
-test("Codexa Native displays the canonical 1B model name for legacy 900M routes", () => {
+test("Codexa Native does not silently relabel unavailable legacy routes", () => {
   const route: ActiveProviderRoute = {
     providerId: "codexa-native",
     modelId: "codexa-900m-sft-v2-native",
@@ -186,7 +186,7 @@ test("Codexa Native displays the canonical 1B model name for legacy 900M routes"
     contextMetadata: context(route, null),
   });
 
-  assert.equal(display.footerModelDisplay, "Codexa Native / codexa-1b-sft-v2-native");
+  assert.equal(display.footerModelDisplay, "Codexa Native / codexa-900m-sft-v2-native");
 });
 
 test("Codexa CuPy is presented as a Codexa Native model route", () => {

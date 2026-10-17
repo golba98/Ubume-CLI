@@ -1,6 +1,7 @@
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import type { AvailableBackend } from "../../config/settings.js";
 import type { RunProgressSource, RunToolActivity } from "../../session/types.js";
+import type { ProviderFailure } from "../providerRuntime/failures.js";
 import type { ProviderImageAttachment } from "../providerRuntime/types.js";
 import type {
   ConversationContextCheckpoint,
@@ -44,9 +45,10 @@ export interface ProviderRunControl {
 }
 
 export interface BackendRunHandlers {
+  onGenerationMetadata?: (metadata: GenerationMetadata) => void;
   onRunControl?: (control: ProviderRunControl) => void;
   onResponse: (response: string) => void;
-  onError: (message: string, rawOutput?: string) => void;
+  onError: (message: string, rawOutput?: string, failure?: ProviderFailure) => void;
   /** Called with each new structured thinking/progress update while the process is still running. */
   onProgress?: (update: BackendProgressUpdate) => void;
   /** Called with each new assistant content delta while the process is still running. */
@@ -81,6 +83,25 @@ export interface BackendRunHandlers {
     onCleanupStart?: () => void;
     onCleanupComplete?: (context: { skipped: boolean }) => void;
   };
+}
+
+export interface GenerationMetadata {
+  providerId: string;
+  modelId: string;
+  checkpointSha256: string;
+  preset: string;
+  finishReason: string;
+  terminationCause: string;
+  generatedTokens: number;
+  elapsedSeconds: number;
+  firstTokenSeconds: number | null;
+  tokensPerSecond: number;
+  rawOutput: string;
+  generation: Record<string, unknown>;
+  loadingSeconds?: number;
+  gpuPeakAllocatedBytes?: number;
+  gpuPeakReservedBytes?: number;
+  hostPeakBytes?: number;
 }
 
 export interface BackendProvider {

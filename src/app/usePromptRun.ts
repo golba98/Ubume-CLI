@@ -10,16 +10,24 @@ import {
   formatHollowResponse,
   getBlockedCleanupFailure,
 } from "../core/codex/codexPrompt.js";
+import { catalogContextKey } from "../core/models/modelCatalog.js";
+import type { SelectionCoordinator } from "../core/models/selectionCoordinator.js";
 import * as perf from "../core/perf/profiler.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import type { ProviderConfig, ProviderWorkspaceConfig } from "../core/providerLauncher/types.js";
 import type { ModelContextMetadata } from "../core/providerRuntime/contextMetadata.js";
+import {
+  classifyProviderFailure,
+  isModelFailure,
+  modelRecoveryMessage,
+} from "../core/providerRuntime/failures.js";
 import { formatRuntimeProviderLabel } from "../core/providerRuntime/registry.js";
 import type { ProviderRoute } from "../core/providerRuntime/types.js";
 import { isNoiseLine } from "../core/providers/codexTranscript.js";
 import type {
   BackendProgressUpdate,
   BackendProvider,
+  GenerationMetadata,
   ProviderRunControl,
   ToolApprovalDecision,
   ToolApprovalRequest,
@@ -82,6 +90,8 @@ import {
 } from "./promptRunPrep.js";
 
 interface UsePromptRunContext {
+  selectionCoordinator: SelectionCoordinator;
+  pendingRouteProviderId: ProviderRoute["providerId"] | null;
   activeRunIdRef: React.RefObject<number | null>;
   recoveryRef: React.RefObject<boolean>;
   routeChoiceRequiredRef: React.RefObject<string | null>;
@@ -106,6 +116,7 @@ interface UsePromptRunContext {
     text: string;
     tools: Map<string, string>;
     files: Map<string, PersistedFileActivity>;
+    generationMetadata?: GenerationMetadata;
   } | null>;
   rolloverResponseCharsRef: React.RefObject<number>;
   activeTurnIdRef: React.RefObject<number | null>;
@@ -150,6 +161,8 @@ interface UsePromptRunContext {
 
 export function usePromptRun(context: UsePromptRunContext) {
   const {
+    selectionCoordinator,
+    pendingRouteProviderId,
     activeRunIdRef,
     recoveryRef,
     routeChoiceRequiredRef,
@@ -207,6 +220,48 @@ export function usePromptRun(context: UsePromptRunContext) {
         appendEvent("error", "Select a route first", routeChoiceRequiredRef.current);
         return false;
       }
+      if (pendingRouteProviderId && pendingRouteProviderId !== activeProviderRoute.providerId) {
+        appendEvent(
+          "error",
+          "Choose a model",
+          `Choose a model for ${pendingRouteProviderId} with /model, or change provider with /providers.`,
+        );
+        return false;
+      }
+      const modelConnection = catalogContextKey(activeProviderRoute.providerId, {
+        cwd: workspaceRoot,
+        providerConfig: providerWorkspaceConfig.providers?.[activeProviderRoute.providerId],
+        ...(activeProviderRoute.providerId === "local"
+          ? { localBackend: activeProviderRoute.localBackend }
+          : {}),
+      });
+      const modelRevision = selectionCoordinator.revision(
+        modelConnection,
+        activeProviderRoute.modelId,
+      );
+      const retryDelay = selectionCoordinator.retryDelay(
+        modelConnection,
+        activeProviderRoute.modelId,
+      );
+      if (retryDelay > 0) {
+        appendEvent(
+          "error",
+          "Retry later",
+          `The provider requested a retry delay. Retry in ${Math.ceil(retryDelay / 1000)} seconds, or change model or provider.`,
+        );
+        return false;
+      }
+      if (
+        selectionCoordinator.state(modelConnection, activeProviderRoute.modelId)?.status ===
+        "unavailable"
+      ) {
+        appendEvent(
+          "error",
+          "Model unavailable",
+          modelRecoveryMessage(activeProviderRoute.modelId),
+        );
+        return false;
+      }
       const submitTiming = lifecycle.submitTiming ?? createPromptRunTiming();
       const safeDisplayPrompt = sanitizeTerminalInput(displayPrompt).trim();
       const safeProviderPrompt = sanitizeTerminalInput(providerPrompt).trim();
@@ -224,7 +279,7 @@ export function usePromptRun(context: UsePromptRunContext) {
         workspaceRoot,
         allowedWritableRoots,
       );
-      if (guardMessage) {
+      if (guardMessage && activeProviderRoute.providerId !== "codexa-native") {
         appendEvent("error", "Workspace boundary", guardMessage);
         return false;
       }
@@ -301,11 +356,13 @@ export function usePromptRun(context: UsePromptRunContext) {
       const turnId = createTurnId();
       // Local Harness session reuse hashes the history, so local requests get the
       // exact saved reply text; other providers also see what earlier runs did.
-      const conversationHistory = selectProviderHistory(
-        activeConversationRef.current,
-        activeProviderRoute,
-        activeContextMetadata,
-      );
+      const conversationHistory =
+        lifecycle.historyOverride ??
+        selectProviderHistory(
+          activeConversationRef.current,
+          activeProviderRoute,
+          activeContextMetadata,
+        );
       const userEvent: UserPromptEvent = {
         id: createEventId(),
         type: "user",
@@ -334,7 +391,10 @@ export function usePromptRun(context: UsePromptRunContext) {
       perf.setMeta("reasoning", runtimeForTurn.reasoningLevel);
       activeRunIdRef.current = runId;
       activeTurnIdRef.current = turnId;
-      activeRunLifecycleRef.current = lifecycle;
+      activeRunLifecycleRef.current =
+        activeProviderRoute.providerId === "codexa-native"
+          ? { ...lifecycle, parseActionRequired: false }
+          : lifecycle;
       activeRunTimingRef.current = { ...submitTiming, runId, turnId };
       if (externalCliStatusRef.current === "idle") {
         dispatchSession({ type: "SET_EXTERNAL_CLI_STATUS", status: "starting" });
@@ -548,6 +608,20 @@ export function usePromptRun(context: UsePromptRunContext) {
             imageAttachments,
           },
           {
+            onGenerationMetadata: (metadata) => {
+              if (
+                isCurrentRun(activeRunIdRef.current, runId) &&
+                activeRunCaptureRef.current?.runId === runId
+              ) {
+                activeRunCaptureRef.current.generationMetadata = metadata;
+                if (activeProviderRoute.providerId === "codexa-native")
+                  appendEvent(
+                    "system",
+                    "Codexa response",
+                    `${metadata.modelId} · ${metadata.finishReason} · ${metadata.generatedTokens} tokens · ${metadata.preset}`,
+                  );
+              }
+            },
             onAssistantDelta: (chunk) => {
               if (!chunk || !isCurrentRun(activeRunIdRef.current, runId)) {
                 return;
@@ -636,6 +710,7 @@ export function usePromptRun(context: UsePromptRunContext) {
               if (!isCurrentRun(activeRunIdRef.current, runId)) {
                 return;
               }
+              selectionCoordinator.validate(modelConnection, activeProviderRoute, modelRevision);
               perf.mark("response_cb_start");
 
               // Force one final synchronous workspace poll before finalizing the run.
@@ -675,7 +750,10 @@ export function usePromptRun(context: UsePromptRunContext) {
                 // Validate response quality for write-intent/destructive prompts:
                 // If the backend returned filler like "Hello." instead of execution
                 // feedback, inject a warning so the user isn't silently misled.
-                if (effectiveMode !== "suggest") {
+                if (
+                  effectiveMode !== "suggest" &&
+                  activeProviderRoute.providerId !== "codexa-native"
+                ) {
                   const hollow = detectHollowResponse(safeProviderPrompt, safeResponse);
                   if (hollow.isHollow) {
                     const formatted = formatHollowResponse(hollow, safeResponse);
@@ -707,7 +785,7 @@ export function usePromptRun(context: UsePromptRunContext) {
 
               finishAfterLiveFlush(flushedLiveUpdates, finalizeResponse);
             },
-            onError: (message, rawOutput) => {
+            onError: (message, rawOutput, evidence) => {
               if (!isCurrentRun(activeRunIdRef.current, runId)) return;
               rolloverResponseCharsRef.current = 0;
               const flushedLiveUpdates = flushLiveUpdates();
@@ -720,7 +798,16 @@ export function usePromptRun(context: UsePromptRunContext) {
                 const codexAuthFailure =
                   activeProviderRoute.providerId === "openai" &&
                   isLikelyAuthFailure(combinedOutput);
-                const failureMessage = formatCodexAuthFailure(safeMessage, codexAuthFailure);
+                const failure = evidence ?? classifyProviderFailure(safeMessage);
+                selectionCoordinator.reject(
+                  modelConnection,
+                  activeProviderRoute.modelId,
+                  failure,
+                  modelRevision,
+                );
+                const failureMessage = isModelFailure(failure)
+                  ? `${modelRecoveryMessage(activeProviderRoute.modelId)}\n${safeMessage}`
+                  : formatCodexAuthFailure(safeMessage, codexAuthFailure);
 
                 if (codexAuthFailure) {
                   // Re-probe instead of assuming signed-out: a misclassified error
@@ -866,6 +953,8 @@ export function usePromptRun(context: UsePromptRunContext) {
     },
     [
       activeProviderRoute,
+      selectionCoordinator,
+      pendingRouteProviderId,
       allowedWritableRoots,
       providerOverride,
       activeRouteProvider,

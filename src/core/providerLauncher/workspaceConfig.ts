@@ -1,10 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import {
-  getProviderRuntime,
-  isProviderRoutableInUbume,
-  isProviderRouteConfigured,
-} from "../providerRuntime/registry.js";
+import { getProviderRuntime, isProviderRoutableInUbume } from "../providerRuntime/registry.js";
 import { isRecord } from "../shared/values.js";
 import { resolveUbumeWorkspaceDataDir } from "../workspace/appData.js";
 import { normalizeWorkspaceRoot } from "../workspace/workspaceRoot.js";
@@ -50,6 +46,9 @@ function parseLaunchCommand(value: unknown): ProviderWorkspaceOverride["command"
 function parseProviderOverride(value: unknown): ProviderWorkspaceOverride | undefined {
   if (!isRecord(value)) return undefined;
   const override: ProviderWorkspaceOverride = {};
+  if (isRecord(value.codexaNative)) {
+    override.codexaNative = value.codexaNative as ProviderWorkspaceOverride["codexaNative"];
+  }
   if ((value.backendKind ?? value.backend_kind) === "antigravity-cli-auth")
     override.backendKind = "antigravity-cli-auth";
 
@@ -318,6 +317,7 @@ export function serializeProviderWorkspaceConfig(
           ? { current_reasoning: override.currentReasoning }
           : {}),
         ...(override.enabled !== undefined ? { enabled: override.enabled } : {}),
+        ...(override.codexaNative !== undefined ? { codexaNative: override.codexaNative } : {}),
         ...(override.type !== undefined ? { type: override.type } : {}),
         ...(override.baseUrl !== undefined ? { base_url: override.baseUrl } : {}),
         ...(override.deployment ? { deployment: override.deployment } : {}),
@@ -507,10 +507,7 @@ export function setProviderActiveRoute(
   config: ProviderWorkspaceConfig,
   activeRoute: ProviderActiveRoute,
 ): ProviderWorkspaceConfig {
-  if (
-    !isProviderRoutableInUbume(activeRoute.providerId) ||
-    !isProviderRouteConfigured(activeRoute.providerId)
-  ) {
+  if (!isProviderRoutableInUbume(activeRoute.providerId)) {
     return config;
   }
 

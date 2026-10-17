@@ -1,4 +1,5 @@
 import type { ModelCapabilityProfile } from "../providerRuntime/capabilityProfile.js";
+import type { CodexaNativeOptions } from "../providerRuntime/codexaNativeConfig.js";
 import type { ProviderBackendKind } from "../providerRuntime/types.js";
 
 export type ProviderId =
@@ -80,6 +81,7 @@ export interface ProviderActiveRoute {
 }
 
 export interface ProviderWorkspaceOverride {
+  codexaNative?: CodexaNativeOptions;
   backendKind?: "antigravity-cli-auth";
   currentModel?: string;
   currentReasoning?: string;

@@ -391,7 +391,7 @@ test("active Anthropic route persists without secrets", () => {
   }
 });
 
-test("setProviderActiveRoute rejects unconfigured Google routes", () => {
+test("setProviderActiveRoute saves Google preferences independently of runtime readiness", () => {
   resetAntigravityRouteValidationCacheForTests();
   const config = setProviderActiveRoute(
     {
@@ -411,9 +411,9 @@ test("setProviderActiveRoute rejects unconfigured Google routes", () => {
   );
 
   assert.deepEqual(config.activeRoute, {
-    providerId: "openai",
-    modelId: "gpt-5.5",
-    backendKind: "codex-cli-auth",
+    providerId: "google",
+    modelId: "gemini-3.5-flash",
+    backendKind: "antigravity-cli-auth",
     reasoning: "high",
   });
 });
@@ -804,4 +804,25 @@ test("Local model maxOutputTokens: 4096 round-trips; invalid values are rejected
   assert.equal(config.providers?.local?.models?.zero, undefined);
   assert.equal(config.providers?.local?.models?.negative, undefined);
   assert.equal(config.providers?.local?.models?.decimal, undefined);
+});
+
+test("Codexa local paths and generation controls survive serialization without changing other providers", () => {
+  const input = {
+    providers: {
+      openai: { current_model: "gpt-5.5" },
+      "codexa-native": {
+        current_model: "codexa-934m-balanced",
+        codexaNative: {
+          modelRoot: "/local/model",
+          python: "/local/python",
+          device: "cuda",
+          generation: { preset: "evaluation", max_new_tokens: 128, seed: 42 },
+        },
+      },
+    },
+  };
+  const parsed = parseProviderWorkspaceConfig(input);
+  const again = parseProviderWorkspaceConfig(serializeProviderWorkspaceConfig(parsed));
+  assert.deepEqual(again.providers?.["codexa-native"], parsed.providers?.["codexa-native"]);
+  assert.equal(again.providers?.openai?.currentModel, "gpt-5.5");
 });

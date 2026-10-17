@@ -29,6 +29,7 @@ import {
   isLargePaste,
   moveAcrossPastedContent,
 } from "../../input/pastedContent.js";
+import { getSlashCommandSuggestions } from "../../input/slashCommands.js";
 import { THEMES, useTheme } from "../../theme.js";
 import {
   BRACKETED_PASTE_END,
@@ -646,7 +647,13 @@ export function useComposerInput({
           commitInputChange(text.slice(0, position - 1) + "\n" + text.slice(position), position);
           return;
         }
-        if (showSuggestions && suggestions.length > 0) {
+        const exactCommand = getSlashCommandSuggestions(text.trim()).some(
+          (command) =>
+            command.cmd === text.trim().toLowerCase() ||
+            ("aliases" in command &&
+              command.aliases?.some((alias) => alias === text.trim().toLowerCase())),
+        );
+        if (!exactCommand && showSuggestions && suggestions.length > 0) {
           const selected = suggestions[selectedIndex];
           if (
             selected &&
