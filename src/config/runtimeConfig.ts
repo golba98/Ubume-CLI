@@ -1,4 +1,25 @@
-import { join, posix, win32 } from "path";
+/**
+ * @fileoverview Ubume Runtime Configuration & Policy Management
+ *
+ * Defines the runtime configuration schemas, security policies, sandbox modes,
+ * approval policies, mode inheritance resolution, writable root path management,
+ * configuration diffing, and runtime status formatters.
+ *
+ * ## Security & Policy Hierarchy
+ * - **Sandbox Modes**:
+ *   - `inherit`: Inherited from the active mode (`suggest` -> `read-only`, `auto-edit` / `full-auto` -> `workspace-write`).
+ *   - `read-only`: Read-only access to filesystem.
+ *   - `workspace-write`: Write access permitted only within the workspace root and explicit writable roots.
+ *   - `danger-full-access`: Unrestricted host filesystem access.
+ *
+ * - **Approval Policies**:
+ *   - `inherit`: Inherited from the active mode (resolves to `on-request`).
+ *   - `untrusted`: Ask before running any tool unless the repo is trusted.
+ *   - `on-request`: Ask user approval when tool execution requires confirmation.
+ *   - `never`: Fully automated execution without prompting for tool confirmation.
+ */
+
+import { join, posix, win32 } from "node:path";
 import type { ProjectInstructionsLoadResult } from "../core/workspace/projectInstructions.js";
 import {
   AVAILABLE_BACKENDS,
@@ -15,6 +36,8 @@ import {
   formatReasoningLabel,
   type ReasoningLevel,
 } from "./settings.js";
+
+// ─── Available Option Definitions ─────────────────────────────────────────────
 
 export const AVAILABLE_APPROVAL_POLICIES = [
   { id: "inherit", label: "Inherit" },
@@ -48,12 +71,14 @@ export const AVAILABLE_PERSONALITIES = [
 ] as const;
 
 export type RuntimeApprovalPolicy = (typeof AVAILABLE_APPROVAL_POLICIES)[number]["id"];
-type ResolvedApprovalPolicy = Exclude<RuntimeApprovalPolicy, "inherit">;
+export type ResolvedApprovalPolicy = Exclude<RuntimeApprovalPolicy, "inherit">;
 export type RuntimeSandboxMode = (typeof AVAILABLE_SANDBOX_MODES)[number]["id"];
-type ResolvedSandboxMode = Exclude<RuntimeSandboxMode, "inherit">;
+export type ResolvedSandboxMode = Exclude<RuntimeSandboxMode, "inherit">;
 export type RuntimeNetworkAccess = (typeof AVAILABLE_NETWORK_ACCESS_VALUES)[number]["id"];
 export type RuntimeServiceTier = (typeof AVAILABLE_SERVICE_TIERS)[number]["id"];
 export type RuntimePersonality = (typeof AVAILABLE_PERSONALITIES)[number]["id"];
+
+// ─── Configuration Interfaces ─────────────────────────────────────────────────
 
 export interface RuntimePolicyConfig {
   approvalPolicy: RuntimeApprovalPolicy;
@@ -122,6 +147,8 @@ export interface RuntimeSummary {
   writableRootsLabel: string;
 }
 
+// ─── Default Configurations ───────────────────────────────────────────────────
+
 const DEFAULT_RUNTIME_POLICY: RuntimePolicyConfig = {
   approvalPolicy: "inherit",
   sandboxMode: "inherit",
@@ -142,9 +169,9 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   policy: DEFAULT_RUNTIME_POLICY,
 };
 
+// ─── Path & Normalization Helpers ─────────────────────────────────────────────
+
 function detectPathApi(value: string): typeof win32 | typeof posix {
-  // Alternatives: drive-letter (C:\ or C:/), UNC (\\server), or any forward-slash (Unix).
-  // The forward-slash alternative is intentionally unanchored to catch mixed-separator paths.
   return /^[a-zA-Z]:[\\/]|^\\\\|\\/.test(value) ? win32 : posix;
 }
 
@@ -159,7 +186,6 @@ function stripTrailingSeparators(value: string, pathApi: typeof win32 | typeof p
   if (value === parsed.root) {
     return value;
   }
-
   return value.replace(/[\\/]+$/, "");
 }
 
@@ -231,6 +257,10 @@ function normalizeRuntimePolicy(
   };
 }
 
+/**
+ * Normalizes a partial runtime configuration into a fully resolved RuntimeConfig,
+ * filling in defaults for any unspecified fields.
+ */
 export function normalizeRuntimeConfig(
   input: PartialRuntimeConfig | null | undefined,
 ): RuntimeConfig {
@@ -263,6 +293,9 @@ export function normalizeRuntimeConfig(
   };
 }
 
+/**
+ * Merges a partial runtime config onto a base configuration, deeply merging policies.
+ */
 export function mergeRuntimeConfig(
   base: RuntimeConfig,
   override: PartialRuntimeConfig | null | undefined,
@@ -285,10 +318,13 @@ function arraysEqual(left: readonly string[], right: readonly string[]): boolean
   if (left.length !== right.length) {
     return false;
   }
-
   return left.every((value, index) => value === right[index]);
 }
 
+/**
+ * Computes the minimal diff between a base RuntimeConfig and a target RuntimeConfig.
+ * Only properties that differ are included in the returned partial.
+ */
 export function diffRuntimeConfig(
   base: RuntimeConfig,
   target: RuntimeConfig,
@@ -340,6 +376,8 @@ export function diffRuntimeConfig(
   };
 }
 
+// ─── Mode Inheritance Resolution ──────────────────────────────────────────────
+
 function resolveInheritedApprovalPolicy(mode: AvailableMode): ResolvedApprovalPolicy {
   switch (mode) {
     case "suggest":
@@ -361,6 +399,10 @@ function resolveInheritedSandboxMode(mode: AvailableMode): ResolvedSandboxMode {
   }
 }
 
+/**
+ * Resolves a RuntimeConfig with inherited policies into a fully concrete ResolvedRuntimeConfig.
+ * Inherited sandbox mode and approval policy are computed based on the selected `mode`.
+ */
 export function resolveRuntimeConfig(config: RuntimeConfig): ResolvedRuntimeConfig {
   const normalized = normalizeRuntimeConfig(config);
   const sandboxMode =
@@ -393,6 +435,8 @@ export function resolveRuntimeConfig(config: RuntimeConfig): ResolvedRuntimeConf
     },
   };
 }
+
+// ─── Writable Roots Manipulation ──────────────────────────────────────────────
 
 export function addWritableRoot(config: RuntimeConfig, root: string): RuntimeConfig {
   const nextRoots = dedupeWritableRoots([...config.policy.writableRoots, root]);
@@ -429,6 +473,8 @@ export function clearWritableRoots(config: RuntimeConfig): RuntimeConfig {
     },
   };
 }
+
+// ─── Formatters & Summaries ───────────────────────────────────────────────────
 
 function labelForId(items: ReadonlyArray<{ id: string; label: string }>, id: string): string {
   return items.find((item) => item.id === id)?.label ?? id;

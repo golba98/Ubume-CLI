@@ -66,3 +66,30 @@ test("serializeTomlDocument produces valid parseable TOML for paths with spaces 
     plan_mode: false,
   });
 });
+
+test("serializeTomlDocument handles arrays of primitives, empty arrays, and inline tables", () => {
+  const input = {
+    empty_list: [],
+    tags: ["typescript", "cli", "ai"],
+    numbers: [1, 2, 42],
+    booleans: [true, false],
+    inline_map: { a: "alpha", b: 123 },
+    array_of_tables: [
+      { name: "item1", score: 10 },
+      { name: "item2", score: 20 },
+    ],
+  };
+
+  const serialized = serializeTomlDocument(input);
+  const parsed = parseTomlDocument(serialized);
+
+  assert.deepEqual(parsed.empty_list, []);
+  assert.deepEqual(parsed.tags, ["typescript", "cli", "ai"]);
+  assert.deepEqual(parsed.numbers, [1, 2, 42]);
+  assert.deepEqual(parsed.booleans, [true, false]);
+  assert.deepEqual(parsed.inline_map, { a: "alpha", b: 123 });
+  assert.deepEqual(parsed.array_of_tables, [
+    { name: "item1", score: 10 },
+    { name: "item2", score: 20 },
+  ]);
+});

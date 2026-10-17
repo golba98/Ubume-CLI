@@ -1,14 +1,25 @@
+/**
+ * @fileoverview Ubume Application Settings, Defaults & Path Resolution
+ *
+ * Defines core application identity constants, runtime defaults, configuration paths,
+ * available modes, user preferences schemas, theme definitions, and workspace display formatters.
+ */
+
 import { homedir } from "node:os";
 import { basename, join, parse, win32 } from "node:path";
 import { getAppVersion } from "../core/version/channel.js";
 import { isWindowsStylePath } from "../core/workspace/workspaceRoot.js";
 
+// ─── Path Utilities ───────────────────────────────────────────────────────────
+
+/** Performs a path join using the appropriate platform semantics (Windows vs POSIX). */
 function smartJoin(base: string, ...parts: string[]): string {
   return isWindowsStylePath(base) ? win32.join(base, ...parts) : join(base, ...parts);
 }
 
-// Authoritative runtime version: resolved from the installed package.json at
-// startup (buildInfo.ts is only the committed fallback and can drift).
+// ─── 1. Application Identity & Runtime Defaults ──────────────────────────────
+
+/** Authoritative runtime version resolved dynamically from package.json at startup. */
 export const APP_VERSION: string = getAppVersion();
 export const APP_NAME = "Ubume";
 export const DEFAULT_BACKEND = "codex-subprocess";
@@ -23,28 +34,51 @@ export const DEFAULT_SHOW_BUSY_LOADER = true;
 export const DEFAULT_AUTH_PREFERENCE = "chatgpt-login-goal";
 export const MAX_CHAT_LINES = 2000;
 
+// ─── 2. Filesystem Paths & Environment Resolution ─────────────────────────────
+
+/**
+ * Resolves the user home directory respecting environment overrides (USERPROFILE, HOME).
+ *
+ * @param env - Optional environment object (defaults to process.env).
+ */
 export function getHomeDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.USERPROFILE ?? env.HOME ?? homedir();
 }
 
-export function getCodexHome(): string {
-  return process.env.CODEX_HOME?.trim() || join(getHomeDir(), ".codex");
+/**
+ * Resolves the root directory for Codex configuration files (~/.codex or CODEX_HOME).
+ *
+ * @param env - Optional environment object (defaults to process.env).
+ */
+export function getCodexHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CODEX_HOME?.trim() || join(getHomeDir(env), ".codex");
 }
 
-export function getCodexConfigFile(): string {
-  return smartJoin(getCodexHome(), "config.toml");
+/**
+ * Resolves the path to the main Codex TOML configuration file (~/.codex/config.toml).
+ */
+export function getCodexConfigFile(env: NodeJS.ProcessEnv = process.env): string {
+  return smartJoin(getCodexHome(env), "config.toml");
 }
 
-export function getUbumeTrustStoreFile(): string {
-  return smartJoin(getCodexHome(), "ubume-trust.json");
+/**
+ * Resolves the path to the trusted repository store file (~/.codex/ubume-trust.json).
+ */
+export function getUbumeTrustStoreFile(env: NodeJS.ProcessEnv = process.env): string {
+  return smartJoin(getCodexHome(env), "ubume-trust.json");
 }
 
-export function getLegacyCodexaTrustStoreFile(): string {
-  return smartJoin(getCodexHome(), "codexa-trust.json");
+/**
+ * Resolves the legacy trust store file path (~/.codex/codexa-trust.json) for migration.
+ */
+export function getLegacyCodexaTrustStoreFile(env: NodeJS.ProcessEnv = process.env): string {
+  return smartJoin(getCodexHome(env), "codexa-trust.json");
 }
 
 export const SETTINGS_FILE = join(homedir(), ".ubume-settings.json");
 export const LEGACY_SETTINGS_FILE = join(homedir(), ".codexa-settings.json");
+
+// ─── 3. Backends & Fallback Models ────────────────────────────────────────────
 
 export const AVAILABLE_BACKENDS = [
   {
@@ -56,8 +90,7 @@ export const AVAILABLE_BACKENDS = [
 
 export type AvailableBackend = (typeof AVAILABLE_BACKENDS)[number]["id"];
 
-// Static model list used when runtime model discovery is unavailable; dynamic
-// discovery is the preferred source of truth.
+/** Static model list used when runtime model discovery is unavailable. */
 export const LEGACY_FALLBACK_MODELS = [
   "gpt-5.5",
   "gpt-5.4",
@@ -80,15 +113,109 @@ const AVAILABLE_REASONING_LEVELS = [
 
 export type ReasoningLevel = string;
 
+// ─── 4. Modes & Mode Rotation ─────────────────────────────────────────────────
+
+export const AVAILABLE_MODES = [
+  { key: "suggest", label: "Read-only" },
+  { key: "auto-edit", label: "Auto" },
+  { key: "full-auto", label: "Full Access" },
+] as const;
+
+export type AvailableMode = (typeof AVAILABLE_MODES)[number]["key"];
+
+const MODE_COMMAND_ALIASES = {
+  default: DEFAULT_MODE,
+  ask: "suggest",
+  add: "auto-edit",
+  auto: "auto-edit",
+} as const;
+
+type ModeCommandAlias = keyof typeof MODE_COMMAND_ALIASES;
+
+/** Formats a user-friendly label for a mode key (e.g. 'suggest' -> 'Read-only'). */
+export function formatModeLabel(mode: string): string {
+  const found = AVAILABLE_MODES.find((m) => m.key === mode);
+  return found?.label ?? mode.toUpperCase();
+}
+
+/** Resolves a CLI or slash-command mode argument into a canonical AvailableMode. */
+export function resolveModeCommand(mode: string): AvailableMode | null {
+  const normalized = mode.toLowerCase();
+  const canonical = AVAILABLE_MODES.find((item) => item.key === normalized);
+  if (canonical) {
+    return canonical.key;
+  }
+
+  return MODE_COMMAND_ALIASES[normalized as ModeCommandAlias] ?? null;
+}
+
+export function formatModeCommandHelp(): string {
+  return "plan, suggest, auto-edit, full-auto; aliases: default, ask, add, auto";
+}
+
+/**
+ * Returns the next execution mode in the Ctrl+Y cycle order.
+ * Cycle order: suggest -> auto-edit -> full-auto -> suggest.
+ */
+export function getNextMode(mode: AvailableMode): AvailableMode {
+  const currentIndex = AVAILABLE_MODES.findIndex((item) => item.key === mode);
+  if (currentIndex < 0) {
+    return AVAILABLE_MODES[0].key;
+  }
+
+  return AVAILABLE_MODES[(currentIndex + 1) % AVAILABLE_MODES.length].key;
+}
+
+export interface RotatingModeState {
+  mode: AvailableMode;
+  planMode: boolean;
+}
+
+/**
+ * Shift+Tab uses one predictable loop for planning and execution safety.
+ * Plan is deliberately separate from `mode`: it forces a read-only planning
+ * turn, while the selected execution mode is persisted for later runs.
+ */
+export function getNextRotatingMode(mode: AvailableMode, planMode: boolean): RotatingModeState {
+  if (planMode) {
+    return { mode: "suggest", planMode: false };
+  }
+  if (mode === "full-auto") {
+    return { mode, planMode: true };
+  }
+  return { mode: getNextMode(mode), planMode: false };
+}
+
+export function formatBackendLabel(backend: string): string {
+  const found = AVAILABLE_BACKENDS.find((item) => item.id === backend);
+  return found?.label ?? backend;
+}
+
+export function formatReasoningLabel(reasoning: string): string {
+  const found = AVAILABLE_REASONING_LEVELS.find((item) => item.id === reasoning);
+  if (found) {
+    return found.label;
+  }
+
+  return (
+    reasoning
+      .split(/[-_\s]+/)
+      .filter(Boolean)
+      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+      .join(" ") || reasoning
+  );
+}
+
+// ─── 5. UI Preferences & User Settings ────────────────────────────────────────
+
 export const WORKSPACE_DISPLAY_MODES = ["dir", "name", "simple"] as const;
 export const LEGACY_DIRECTORY_DISPLAY_MODES = ["normal", "simple"] as const;
 
 export type WorkspaceDisplayMode = (typeof WORKSPACE_DISPLAY_MODES)[number];
-type LegacyDirectoryDisplayMode = (typeof LEGACY_DIRECTORY_DISPLAY_MODES)[number];
+export type LegacyDirectoryDisplayMode = (typeof LEGACY_DIRECTORY_DISPLAY_MODES)[number];
 export type TerminalTitleMode = WorkspaceDisplayMode;
 
 export const BUSY_LOADER_SETTING_VALUES = ["true", "false"] as const;
-
 export type BusyLoaderSettingValue = (typeof BUSY_LOADER_SETTING_VALUES)[number];
 
 export interface SettingOption<TValue extends string> {
@@ -153,23 +280,6 @@ export function estimateTokens(chars: number): number {
   return Math.ceil(chars / 4);
 }
 
-export const AVAILABLE_MODES = [
-  { key: "suggest", label: "Read-only" },
-  { key: "auto-edit", label: "Auto" },
-  { key: "full-auto", label: "Full Access" },
-] as const;
-
-export type AvailableMode = (typeof AVAILABLE_MODES)[number]["key"];
-
-const MODE_COMMAND_ALIASES = {
-  default: DEFAULT_MODE,
-  ask: "suggest",
-  add: "auto-edit",
-  auto: "auto-edit",
-} as const;
-
-type ModeCommandAlias = keyof typeof MODE_COMMAND_ALIASES;
-
 export const AUTH_PREFERENCES = [
   {
     id: "chatgpt-login-goal",
@@ -191,72 +301,56 @@ export const AUTH_PREFERENCES = [
 
 export type AuthPreference = (typeof AUTH_PREFERENCES)[number]["id"];
 
-export function formatModeLabel(mode: string): string {
-  const found = AVAILABLE_MODES.find((m) => m.key === mode);
-  return found?.label ?? mode.toUpperCase();
+export function formatAuthPreferenceLabel(preference: string): string {
+  const found = AUTH_PREFERENCES.find((item) => item.id === preference);
+  return found?.label ?? preference;
 }
 
-export function resolveModeCommand(mode: string): AvailableMode | null {
-  const normalized = mode.toLowerCase();
-  const canonical = AVAILABLE_MODES.find((item) => item.key === normalized);
-  if (canonical) {
-    return canonical.key;
-  }
-
-  return MODE_COMMAND_ALIASES[normalized as ModeCommandAlias] ?? null;
+export interface HeaderConfig {
+  showBrand: boolean;
+  showWorkspace: boolean;
+  showProvider: boolean;
+  showModel: boolean;
+  showReasoning: boolean;
+  showContext: boolean;
+  showAuthStatus: boolean;
 }
 
-export function formatModeCommandHelp(): string {
-  return "plan, suggest, auto-edit, full-auto; aliases: default, ask, add, auto";
-}
+export const HEADER_CONFIG_DEFAULTS: HeaderConfig = {
+  showBrand: true,
+  showWorkspace: true,
+  showProvider: true,
+  showModel: true,
+  showReasoning: false,
+  showContext: false,
+  showAuthStatus: false,
+};
 
-export function getNextMode(mode: AvailableMode): AvailableMode {
-  const currentIndex = AVAILABLE_MODES.findIndex((item) => item.key === mode);
-  if (currentIndex < 0) {
-    return AVAILABLE_MODES[0].key;
-  }
+// ─── 6. Themes ────────────────────────────────────────────────────────────────
 
-  return AVAILABLE_MODES[(currentIndex + 1) % AVAILABLE_MODES.length].key;
-}
-
-interface RotatingModeState {
-  mode: AvailableMode;
-  planMode: boolean;
-}
-
-/**
- * Shift+Tab uses one predictable loop for planning and execution safety.
- * Plan is deliberately separate from `mode`: it forces a read-only planning
- * turn, while the selected execution mode is persisted for later runs.
- */
-export function getNextRotatingMode(mode: AvailableMode, planMode: boolean): RotatingModeState {
-  if (planMode) {
-    return { mode: "suggest", planMode: false };
-  }
-  if (mode === "full-auto") {
-    return { mode, planMode: true };
-  }
-  return { mode: getNextMode(mode), planMode: false };
-}
-
-export function formatBackendLabel(backend: string): string {
-  const found = AVAILABLE_BACKENDS.find((item) => item.id === backend);
-  return found?.label ?? backend;
-}
-
-export function formatReasoningLabel(reasoning: string): string {
-  const found = AVAILABLE_REASONING_LEVELS.find((item) => item.id === reasoning);
-  if (found) {
-    return found.label;
-  }
-
-  return (
-    reasoning
-      .split(/[-_\s]+/)
-      .filter(Boolean)
-      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-      .join(" ") || reasoning
-  );
+export interface Theme {
+  bg: string;
+  surface: string;
+  surfaceMuted: string;
+  border: string;
+  borderFocused: string;
+  text: string;
+  textMuted: string;
+  textDim: string;
+  accent: string;
+  accentMuted: string;
+  success: string;
+  warning: string;
+  error: string;
+  info: string;
+  command: string;
+  prompt: string;
+  model: string;
+  provider: string;
+  context: string;
+  logoPrimary: string;
+  logoSecondary: string;
+  logoShadow: string;
 }
 
 export const AVAILABLE_THEMES = [
@@ -276,6 +370,8 @@ export function formatThemeLabel(themeId: string): string {
   return found?.label ?? themeId;
 }
 
+// ─── 7. Path & Display Formatters ─────────────────────────────────────────────
+
 export function formatWorkspaceDisplayModeLabel(mode: WorkspaceDisplayMode): string {
   if (mode === "name") return "Name";
   if (mode === "simple") return "Simple";
@@ -286,7 +382,7 @@ export function formatTerminalTitleModeLabel(mode: TerminalTitleMode): string {
   return formatWorkspaceDisplayModeLabel(mode);
 }
 
-// Maps the old "normal" value (pre-rename) to the current "dir" equivalent.
+/** Maps legacy "normal" directory display setting to the modern "dir" equivalent. */
 export function normalizeLegacyDirectoryDisplayMode(
   mode: LegacyDirectoryDisplayMode,
 ): WorkspaceDisplayMode {
@@ -310,7 +406,8 @@ function formatWorkspaceLeaf(workspaceRoot: string): string {
   const api = isWindowsStylePath(trimmed) ? win32 : { parse, basename };
   const { root } = api.parse(trimmed);
   let normalized = trimmed;
-  // Stop at filesystem root — root.length > 0 prevents stripping the root itself
+
+  // Strip trailing slashes, but stop at filesystem root
   while (normalized.length > root.length && /[\\/]+$/.test(normalized)) {
     normalized = normalized.slice(0, -1);
   }
@@ -346,54 +443,4 @@ export function formatTerminalTitlePath(
   }
 
   return formatWorkspaceLeaf(workspaceRoot);
-}
-
-export interface HeaderConfig {
-  showBrand: boolean;
-  showWorkspace: boolean;
-  showProvider: boolean;
-  showModel: boolean;
-  showReasoning: boolean;
-  showContext: boolean;
-  showAuthStatus: boolean;
-}
-
-export const HEADER_CONFIG_DEFAULTS: HeaderConfig = {
-  showBrand: true,
-  showWorkspace: true,
-  showProvider: true,
-  showModel: true,
-  showReasoning: false,
-  showContext: false,
-  showAuthStatus: false,
-};
-
-export function formatAuthPreferenceLabel(preference: string): string {
-  const found = AUTH_PREFERENCES.find((item) => item.id === preference);
-  return found?.label ?? preference;
-}
-
-export interface Theme {
-  bg: string;
-  surface: string;
-  surfaceMuted: string;
-  border: string;
-  borderFocused: string;
-  text: string;
-  textMuted: string;
-  textDim: string;
-  accent: string;
-  accentMuted: string;
-  success: string;
-  warning: string;
-  error: string;
-  info: string;
-  command: string;
-  prompt: string;
-  model: string;
-  provider: string;
-  context: string;
-  logoPrimary: string;
-  logoSecondary: string;
-  logoShadow: string;
 }

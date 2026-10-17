@@ -26,3 +26,17 @@ test("applyLegacyEnvAliases leaves Codexa model-family variables unaliased", () 
   assert.equal(env.UBUME_CUPY_DEVICE, undefined);
   assert.equal(env.UBUME_NUMPY_PYTHON, undefined);
 });
+
+test("applyLegacyEnvAliases handles empty, undefined, and non-prefixed variables gracefully", () => {
+  const env: NodeJS.ProcessEnv = {
+    PATH: "/usr/bin",
+    CODEXA_: "empty-suffix",
+    CODEXA_EMPTY: "",
+    CODEXA_UNDEFINED: undefined,
+  };
+  applyLegacyEnvAliases(env);
+  assert.equal(env.UBUME_, "empty-suffix");
+  assert.equal(env.UBUME_EMPTY, "");
+  assert.equal(env.UBUME_UNDEFINED, undefined);
+  assert.equal(env.PATH, "/usr/bin");
+});

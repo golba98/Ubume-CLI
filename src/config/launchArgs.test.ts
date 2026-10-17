@@ -102,6 +102,15 @@ test("parses inline model flag assignment", () => {
   assert.deepEqual(parsed.value.configOverrides, ['model="gpt-5.5"']);
   assert.deepEqual(parsed.value.passthroughArgs, ["--model=gpt-5.5"]);
   assert.equal(parsed.value.modelOverride, "gpt-5.5");
+
+  // Short -m= inline form
+  const parsedShort = parseLaunchArgs(["-m=gpt-5.4", "task"]);
+  assert.equal(parsedShort.ok, true);
+  if (!parsedShort.ok) return;
+  assert.equal(parsedShort.value.initialPrompt, "task");
+  assert.deepEqual(parsedShort.value.configOverrides, ['model="gpt-5.4"']);
+  assert.deepEqual(parsedShort.value.passthroughArgs, ["-m=gpt-5.4"]);
+  assert.equal(parsedShort.value.modelOverride, "gpt-5.4");
 });
 
 test("modelOverride is null when no --model flag is given", () => {
@@ -116,8 +125,21 @@ test("modelOverride is null when no --model flag is given", () => {
 test("rejects missing model flag values", () => {
   const parsed = parseLaunchArgs(["--model"]);
   assert.equal(parsed.ok, false);
-  if (parsed.ok) return;
-  assert.match(parsed.error, /--model/i);
+  if (!parsed.ok) {
+    assert.match(parsed.error, /--model/i);
+  }
+
+  const parsedShort = parseLaunchArgs(["-m"]);
+  assert.equal(parsedShort.ok, false);
+  if (!parsedShort.ok) {
+    assert.match(parsedShort.error, /-m/i);
+  }
+
+  const parsedInlineEmpty = parseLaunchArgs(["-m="]);
+  assert.equal(parsedInlineEmpty.ok, false);
+  if (!parsedInlineEmpty.ok) {
+    assert.match(parsedInlineEmpty.error, /-m/i);
+  }
 });
 
 test("parses help and version flags without passthrough", () => {
@@ -202,4 +224,26 @@ test("interactive provider flag cannot become a prompt for the default backend",
   const parsed = parseLaunchArgs(["--provider", "google", "--model", "gemini-3.8-flash-low"]);
   assert.equal(parsed.ok, false);
   if (!parsed.ok) assert.match(parsed.error, /ubume exec/);
+});
+
+test("handles empty argv and whitespace-only flags appropriately", () => {
+  const empty = parseLaunchArgs([]);
+  assert.equal(empty.ok, true);
+  if (empty.ok) {
+    assert.equal(empty.value.help, false);
+    assert.equal(empty.value.initialPrompt, null);
+    assert.deepEqual(empty.value.configOverrides, []);
+  }
+
+  const whitespaceProfile = parseLaunchArgs(["--profile", "   "]);
+  assert.equal(whitespaceProfile.ok, false);
+
+  const whitespaceModel = parseLaunchArgs(["--model", "   "]);
+  assert.equal(whitespaceModel.ok, false);
+
+  const leadingEqualsConfig = parseLaunchArgs(["--config", "=value"]);
+  assert.equal(leadingEqualsConfig.ok, false);
+
+  const trailingEqualsConfig = parseLaunchArgs(["--config", "key="]);
+  assert.equal(trailingEqualsConfig.ok, false);
 });
