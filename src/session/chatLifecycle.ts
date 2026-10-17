@@ -34,7 +34,7 @@ export type UIStateAction =
   | { type: "RUN_FAILED"; turnId: number; message: string }
   | { type: "RUN_CANCELED"; turnId: number }
   | { type: "AWAITING_USER_ACTION"; turnId: number; question: string }
-  | { type: "DISMISS_TRANSIENT" }
+  | { type: "DISMISS_TRANSIENT"; onlyError?: boolean }
   | { type: "SHELL_STARTED"; shellId: number }
   | { type: "SHELL_FINISHED"; shellId: number };
 
@@ -149,7 +149,7 @@ export function reduceUIState(state: UIState, action: UIStateAction): UIState {
     case "AWAITING_USER_ACTION":
       return { kind: "AWAITING_USER_ACTION", turnId: action.turnId, question: action.question };
     case "DISMISS_TRANSIENT":
-      if (state.kind === "ERROR" || state.kind === "AWAITING_USER_ACTION") {
+      if (state.kind === "ERROR" || (!action.onlyError && state.kind === "AWAITING_USER_ACTION")) {
         return { kind: "IDLE" };
       }
       return state;

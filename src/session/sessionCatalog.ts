@@ -11,7 +11,7 @@ import {
   externalTranscriptToConversationMessages,
   listExternalSessions,
 } from "../core/externalSessions/index.js";
-import { resolveCatalogModel } from "../core/models/modelSelection.js";
+import { isCatalogModelUnavailable } from "../core/models/modelSelection.js";
 import {
   LEGACY_GOOGLE_MESSAGE,
   resolveProviderIdentity,
@@ -309,11 +309,7 @@ export function assessSavedRoute(
         discovery.message ??
         "The saved route is not configured. Select a working provider and model before sending.",
     };
-  if (
-    discovery?.status === "ready" &&
-    discovery.freshness !== "unverified" &&
-    !resolveCatalogModel(discovery.models, route.modelId)
-  ) {
+  if (discovery?.status === "ready" && isCatalogModelUnavailable(discovery, route.modelId)) {
     return {
       status: "unavailable",
       route,

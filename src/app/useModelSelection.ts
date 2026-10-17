@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { LaunchArgs } from "../config/launchArgs.js";
 import { saveRuntimeModePreference } from "../config/persistence.js";
 import type { RuntimeConfig } from "../config/runtimeConfig.js";
@@ -16,7 +16,9 @@ import {
   findModelCapability,
   normalizeReasoningForModelCapabilities,
 } from "../core/models/codexModelCapabilities.js";
+import { catalogContextKey } from "../core/models/modelCatalog.js";
 import { isSupportedReasoning } from "../core/models/reasoningControl.js";
+import type { SelectionCoordinator } from "../core/models/selectionCoordinator.js";
 import { traceInputDebug } from "../core/perf/debugLog.js";
 import type {
   LocalBackendId,
@@ -25,6 +27,11 @@ import type {
   ProviderWorkspaceConfig,
 } from "../core/providerLauncher/types.js";
 import { getAgyModelSelector } from "../core/providerRuntime/antigravity.js";
+import {
+  classifyProviderFailure,
+  isModelFailure,
+  modelRecoveryMessage,
+} from "../core/providerRuntime/failures.js";
 
 import { providerModelsToCodexCapabilities } from "../core/providerRuntime/models.js";
 import {
@@ -37,12 +44,15 @@ import {
 import type { ProviderRoute, RuntimeAvailability } from "../core/providerRuntime/types.js";
 
 import { errorMessage } from "../core/shared/values.js";
-
+import type { SessionAction } from "../session/appSession.js";
 import { type PlanFlowState, resetPlanFlow } from "../session/planFlow.js";
-
 import type { Screen } from "../session/types.js";
 
 interface UseModelSelectionContext {
+  dispatchSession: (action: SessionAction) => void;
+  selectionCoordinator: SelectionCoordinator;
+  pendingRouteProviderId: ProviderId | null;
+  ensureProviderModels: (providerId: ProviderId, forceRefresh?: boolean) => Promise<unknown>;
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
@@ -67,7 +77,7 @@ interface UseModelSelectionContext {
     nextReasoning: string,
     backendKindOverride?: ReturnType<typeof getProviderRuntime>["backendKind"],
     localBackend?: LocalBackendId,
-  ) => void;
+  ) => boolean | void;
   modelSelectionInFlightRef: React.RefObject<boolean>;
   getInputDebugSnapshot: (extra?: Record<string, unknown>) => {
     screen: Screen;
@@ -105,6 +115,7 @@ interface UseModelSelectionContext {
 
 export function useModelSelection(context: UseModelSelectionContext) {
   const {
+    dispatchSession,
     updateRuntimeConfig,
     setScreen,
     appendEvent,
@@ -123,9 +134,7 @@ export function useModelSelection(context: UseModelSelectionContext) {
     modelSelectionInFlightRef,
     getInputDebugSnapshot,
     reasoningLevel,
-    activeRouteModelCapabilities,
     workspaceRoot,
-    activeRouteProvider,
     returnToChatMode,
     modelCapabilities,
     setPendingRouteProviderId,
@@ -135,7 +144,14 @@ export function useModelSelection(context: UseModelSelectionContext) {
     setRegistryNonce,
     providerRouteErrorsRef,
     modelPickerOpenRef,
+    selectionCoordinator,
+    pendingRouteProviderId,
+    ensureProviderModels,
   } = context;
+
+  const latest = useRef({ providerWorkspaceConfig, ensureProviderModels });
+  latest.current = { providerWorkspaceConfig, ensureProviderModels };
+  useEffect(() => () => selectionCoordinator.cancel(), [selectionCoordinator]);
 
   const setModeWithNotice = useCallback(
     (nextMode: AvailableMode) => {
@@ -266,291 +282,183 @@ export function useModelSelection(context: UseModelSelectionContext) {
     setPlanModeWithNotice(!planMode);
   }, [planMode, setPlanModeWithNotice]);
 
-  const setModelWithNotice = useCallback(
-    async (nextModel: AvailableModel) => {
-      modelSelectionInFlightRef.current = true;
-      traceInputDebug(
-        "model_selection_app_start",
-        getInputDebugSnapshot({
-          handler: "setModelWithNotice",
-          model: nextModel,
-        }),
-      );
-
-      try {
-        const routeProviderId = activeProviderRoute.providerId;
-        const normalizedReasoning = normalizeReasoningForModelCapabilities(
-          nextModel,
-          reasoningLevel,
-          activeRouteModelCapabilities,
-        );
-        const validation = await validateProviderRouteActivation({
-          providerConfig: providerWorkspaceConfig.providers?.[routeProviderId],
-          route: {
-            providerId: routeProviderId,
-            modelId: nextModel,
-            backendKind: getProviderRuntime(routeProviderId).backendKind,
-            reasoning: normalizedReasoning,
-          },
-          workspaceRoot,
-          antigravityCommandPath: providerWorkspaceConfig.providers?.google?.antigravityCommandPath,
-          claudeCommandPath: providerWorkspaceConfig.providers?.anthropic?.claudeCommandPath,
-          localConfig: providerWorkspaceConfig.providers?.local,
-        });
-        if (validation.status !== "ready") {
-          appendEvent(
-            "system",
-            "Provider route unavailable",
-            `${validation.message ?? getProviderRouteSetupMessage(routeProviderId)} Previous active route remains ${activeRouteProvider?.displayName ?? "OpenAI"} / ${activeProviderRoute.modelId}.`,
-          );
-          return;
-        }
-        updateRuntimeConfig((current) => ({
-          ...current,
-          model: nextModel,
-          reasoningLevel: normalizeReasoningForModelCapabilities(
-            nextModel,
-            current.reasoningLevel,
-            activeRouteModelCapabilities,
-          ),
-        }));
-        persistActiveRoute(routeProviderId, nextModel, normalizedReasoning, validation.backendKind);
-        traceInputDebug(
-          "model_selection_app_success",
-          getInputDebugSnapshot({
-            handler: "setModelWithNotice",
-            model: nextModel,
-          }),
-        );
-        appendEvent(
-          "system",
-          "Model updated",
-          `Active model is now ${nextModel}. Reasoning set to ${formatReasoningLabel(normalizedReasoning)}.`,
-        );
-      } catch (error) {
-        const message = errorMessage(error);
-        traceInputDebug(
-          "model_selection_app_failure",
-          getInputDebugSnapshot({
-            handler: "setModelWithNotice",
-            model: nextModel,
-            error: message,
-          }),
-        );
-        appendEvent("error", "Model selection failed", message);
-      } finally {
-        modelSelectionInFlightRef.current = false;
-        returnToChatMode("selection");
-      }
-    },
-    [
-      activeProviderRoute.modelId,
-      activeProviderRoute.providerId,
-      activeRouteModelCapabilities,
-      activeRouteProvider,
-      appendEvent,
-      appendEvent,
-      busy,
-      getInputDebugSnapshot,
-      persistActiveRoute,
-      providerWorkspaceConfig.providers,
-      reasoningLevel,
-      returnToChatMode,
-      updateRuntimeConfig,
-      workspaceRoot,
-    ],
-  );
-
   const setModelAndReasoningWithNotice = useCallback(
     async (
       nextModel: AvailableModel,
       nextReasoning: ReasoningLevel,
-      providerId: ProviderId = activeProviderRoute.providerId,
+      providerId: ProviderId = pendingRouteProviderId ?? activeProviderRoute.providerId,
       localBackend?: LocalBackendId,
     ) => {
-      const routeCapabilities =
-        providerId === "openai"
-          ? modelCapabilities
-          : providerModelsToCodexCapabilities(discoverProviderModels(providerId).models, nextModel);
-      const selectedCapability = findModelCapability(routeCapabilities, nextModel);
-      const supported = selectedCapability?.supportedReasoningLevels;
-      if (
-        supported &&
-        supported.length > 0 &&
-        !supported.some((item) => item.id === nextReasoning)
-      ) {
-        appendEvent(
-          "error",
-          "Reasoning unavailable",
-          `${nextModel} does not advertise ${formatReasoningLabel(nextReasoning)} reasoning in the detected Codex runtime.`,
-        );
-        returnToChatMode("selection-invalid");
-        return;
-      }
-
+      const providerConfig = providerWorkspaceConfig.providers?.[providerId];
+      const route: ProviderRoute = {
+        providerId,
+        modelId: nextModel,
+        reasoning: nextReasoning,
+        backendKind: getProviderRuntime(providerId).backendKind,
+        ...(providerId === "local"
+          ? { localBackend: localBackend ?? providerConfig?.localBackend ?? "lm-studio" }
+          : {}),
+      };
+      const connection = catalogContextKey(providerId, {
+        cwd: workspaceRoot,
+        providerConfig,
+        ...(providerId === "local" ? { localBackend: route.localBackend } : {}),
+      });
+      const sameConnection = () =>
+        catalogContextKey(providerId, {
+          cwd: workspaceRoot,
+          providerConfig: latest.current.providerWorkspaceConfig.providers?.[providerId],
+          ...(providerId === "local" ? { localBackend: route.localBackend } : {}),
+        }) === connection;
+      const transition = selectionCoordinator.begin(route, connection);
       modelSelectionInFlightRef.current = true;
-      // Reflect the target provider in the model picker immediately: route
-      // validation below can take seconds (subprocess probes), and until it
-      // persists the new active route, modelPickerProviderId would otherwise
-      // keep resolving to the stale route.
       setPendingRouteProviderId(providerId);
       setRouteSwitchBusy(true);
-      traceInputDebug(
-        "model_selection_app_start",
-        getInputDebugSnapshot({
-          handler: "setModelAndReasoningWithNotice",
-          model: nextModel,
-          reasoning: nextReasoning,
-        }),
-      );
-
+      let recovery = false;
+      const recover = (message: string) => {
+        if (!selectionCoordinator.isCurrent(transition)) return;
+        appendEvent("error", "Selection unavailable", message);
+        if (selectionCoordinator.ownsNavigation(transition)) {
+          recovery = true;
+          modelPickerOpenRef.current = true;
+          setPendingRouteProviderId(providerId);
+          setScreen("model-picker");
+          void latest.current.ensureProviderModels(providerId);
+        }
+      };
       try {
-        const normalizedReasoning = normalizeReasoningForModelCapabilities(
+        const discovery = discoverProviderModels(providerId);
+        const routeCapabilities =
+          providerId === "openai"
+            ? modelCapabilities
+            : providerModelsToCodexCapabilities(discovery.models, nextModel);
+        const capability = findModelCapability(routeCapabilities, nextModel);
+        if (
+          nextReasoning &&
+          (capability?.reasoningControl?.kind === "levels" ||
+            capability?.reasoningControl?.kind === "budget") &&
+          !isSupportedReasoning(capability.reasoningControl, nextReasoning)
+        ) {
+          recover(
+            `${nextModel} does not support the selected reasoning setting. Choose a model and supported reasoning setting.`,
+          );
+          return;
+        }
+        route.reasoning = normalizeReasoningForModelCapabilities(
           nextModel,
           nextReasoning,
           routeCapabilities,
         );
-        let validation;
-        try {
-          if (providerId === "local") {
-            markProviderAvailability("local", "checking", "provider-validation");
-          }
-          validation = await validateProviderRouteActivation({
-            providerConfig: providerWorkspaceConfig.providers?.[providerId],
-            route: {
-              providerId,
-              modelId: nextModel,
-              backendKind: getProviderRuntime(providerId).backendKind,
-              reasoning: normalizedReasoning,
-              ...(providerId === "local"
-                ? {
-                    localBackend:
-                      localBackend ??
-                      providerWorkspaceConfig.providers?.local?.localBackend ??
-                      "lm-studio",
-                  }
-                : {}),
-            },
-            workspaceRoot,
-            antigravityCommandPath:
-              providerWorkspaceConfig.providers?.google?.antigravityCommandPath,
-            claudeCommandPath: providerWorkspaceConfig.providers?.anthropic?.claudeCommandPath,
-            localConfig:
-              providerId === "local"
-                ? {
-                    ...providerWorkspaceConfig.providers?.local,
-                    localBackend:
-                      localBackend ??
-                      providerWorkspaceConfig.providers?.local?.localBackend ??
-                      "lm-studio",
-                  }
-                : providerWorkspaceConfig.providers?.local,
-          });
-          if (validation.diagnostics) {
-            providerDiagnosticsRef.current[providerId] = validation.diagnostics as Record<
-              string,
-              string | number | boolean | null
-            >;
-          }
-          setRegistryNonce((n) => n + 1);
-        } finally {
-          // Runtime status is rendered from provider diagnostics; no title guard is active here.
-        }
-        if (validation.status !== "ready") {
-          traceInputDebug(
-            "model_selection_app_failure",
-            getInputDebugSnapshot({
-              handler: "setModelAndReasoningWithNotice",
-              model: nextModel,
-              reasoning: nextReasoning,
-              error: validation.message ?? getProviderRouteSetupMessage(providerId),
-            }),
+        traceInputDebug(
+          "model_selection_app_start",
+          getInputDebugSnapshot({ model: nextModel, providerId, transition: transition.id }),
+        );
+        if (providerId === "local")
+          markProviderAvailability("local", "checking", "provider-validation");
+        const validation = await validateProviderRouteActivation({
+          signal: transition.signal,
+          providerConfig,
+          route,
+          workspaceRoot,
+          antigravityCommandPath: providerWorkspaceConfig.providers?.google?.antigravityCommandPath,
+          claudeCommandPath: providerWorkspaceConfig.providers?.anthropic?.claudeCommandPath,
+          localConfig:
+            providerId === "local"
+              ? { ...providerConfig, localBackend: route.localBackend }
+              : providerWorkspaceConfig.providers?.local,
+        });
+        if (!selectionCoordinator.isCurrent(transition)) return;
+        if (!sameConnection()) {
+          recover(
+            "The provider connection changed during validation. Choose a model again using the current connection.",
           );
-          const routeError = validation.message ?? getProviderRouteSetupMessage(providerId);
-          if (providerRouteErrorsRef.current[providerId] !== routeError) {
-            appendEvent(
-              "system",
-              "Provider route unavailable",
-              `${routeError} Previous active route remains ${activeRouteProvider?.displayName ?? "OpenAI"} / ${activeProviderRoute.modelId}.`,
-            );
-            providerRouteErrorsRef.current[providerId] = routeError;
-          }
-          if (!modelPickerOpenRef.current) setPendingRouteProviderId(null);
           return;
         }
-
-        if (providerRouteErrorsRef.current[providerId]) {
-          appendEvent(
-            "system",
-            "Provider route available",
-            validation.message ??
-              (providerId === "google"
-                ? "Google is available via Google Antigravity CLI (agy)."
-                : providerId === "anthropic"
-                  ? "Anthropic/Claude is available via Claude Code."
-                  : `${getProviderRuntime(providerId).label} is available via ${validation.backendKind}.`),
-          );
-          delete providerRouteErrorsRef.current[providerId];
+        if (validation.diagnostics)
+          providerDiagnosticsRef.current[providerId] = validation.diagnostics;
+        setRegistryNonce((n) => n + 1);
+        if (validation.status !== "ready") {
+          const message = validation.message ?? getProviderRouteSetupMessage(providerId);
+          const failure = validation.failure ?? classifyProviderFailure(message);
+          selectionCoordinator.reject(connection, nextModel, failure);
+          if (!isModelFailure(failure)) providerRouteErrorsRef.current[providerId] = message;
+          recover(isModelFailure(failure) ? modelRecoveryMessage(nextModel) : message);
+          return;
         }
-
+        // Write before publishing runtime state. A failed save cannot partially commit a route.
+        if (
+          persistActiveRoute(
+            providerId,
+            nextModel,
+            route.reasoning ?? "",
+            validation.backendKind,
+            localBackend,
+          ) === false
+        ) {
+          recover(
+            "Unable to save the selection. The previous active route and preferences were preserved.",
+          );
+          return;
+        }
+        selectionCoordinator.commit(transition);
+        dispatchSession({
+          type: "UI_ACTION",
+          action: { type: "DISMISS_TRANSIENT", onlyError: true },
+        });
         updateRuntimeConfig((current) => ({
           ...current,
           model: nextModel,
-          reasoningLevel: normalizedReasoning,
+          reasoningLevel: route.reasoning ?? "",
         }));
-        persistActiveRoute(
-          providerId,
-          nextModel,
-          normalizedReasoning,
-          validation.backendKind,
-          localBackend,
-        );
-        if (!modelPickerOpenRef.current) setPendingRouteProviderId(null);
+        delete providerRouteErrorsRef.current[providerId];
+        if (selectionCoordinator.ownsNavigation(transition) && !modelPickerOpenRef.current)
+          setPendingRouteProviderId(null);
         traceInputDebug(
           "model_selection_app_success",
-          getInputDebugSnapshot({
-            handler: "setModelAndReasoningWithNotice",
-            model: nextModel,
-            reasoning: normalizedReasoning,
-          }),
+          getInputDebugSnapshot({ model: nextModel, providerId, transition: transition.id }),
         );
-
-        // Route changes are reflected reactively in the BottomComposer metadata row.
       } catch (error) {
+        if (!selectionCoordinator.isCurrent(transition)) return;
+        if (!sameConnection()) {
+          recover(
+            "The provider connection changed during validation. Choose a model again using the current connection.",
+          );
+          return;
+        }
         const message = errorMessage(error);
-        traceInputDebug(
-          "model_selection_app_failure",
-          getInputDebugSnapshot({
-            handler: "setModelAndReasoningWithNotice",
-            model: nextModel,
-            reasoning: nextReasoning,
-            error: message,
-          }),
-        );
-        if (!modelPickerOpenRef.current) setPendingRouteProviderId(null);
-        appendEvent("error", "Model selection failed", message);
+        selectionCoordinator.reject(connection, nextModel, classifyProviderFailure(message));
+        recover(message);
       } finally {
-        setRouteSwitchBusy(false);
-        modelSelectionInFlightRef.current = false;
-        returnToChatMode("selection");
+        if (selectionCoordinator.isCurrent(transition)) {
+          selectionCoordinator.finish(transition);
+          setRouteSwitchBusy(false);
+          modelSelectionInFlightRef.current = false;
+          if (!recovery && selectionCoordinator.ownsNavigation(transition))
+            returnToChatMode("selection");
+        }
       }
     },
     [
-      activeProviderRoute.modelId,
       activeProviderRoute.providerId,
-      activeRouteProvider,
+      pendingRouteProviderId,
       appendEvent,
-      appendEvent,
-      busy,
+      ensureProviderModels,
+      dispatchSession,
       getInputDebugSnapshot,
       markProviderAvailability,
       modelCapabilities,
       persistActiveRoute,
       providerWorkspaceConfig.providers,
       returnToChatMode,
+      selectionCoordinator,
       updateRuntimeConfig,
       workspaceRoot,
     ],
+  );
+
+  const setModelWithNotice = useCallback(
+    (nextModel: AvailableModel) => setModelAndReasoningWithNotice(nextModel, reasoningLevel),
+    [setModelAndReasoningWithNotice, reasoningLevel],
   );
   return {
     setModeWithNotice,

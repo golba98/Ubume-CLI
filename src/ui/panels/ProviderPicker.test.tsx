@@ -229,7 +229,7 @@ test("provider picker renders compact aligned provider rows", async () => {
     const providerNames = visibleProviderNames(buildProviderRegistry({ activeModel: "gpt-5.4" }));
 
     assert.match(frame, /Providers/);
-    assert.match(frame, /Enter use · Esc close/);
+    assert.match(frame, /Enter use · M models · Esc close/);
     for (const providerName of providerNames) {
       assert.match(frame, new RegExp(providerName));
     }
@@ -1196,6 +1196,20 @@ test("provider picker omits extra current-provider metadata outside the visible 
     await sleep(80);
     const output = harness.getOutput();
     assert.doesNotMatch(output, /Current:/);
+  } finally {
+    await harness.cleanup();
+  }
+});
+
+test("M opens the highlighted provider's model controls independently of activation", async () => {
+  const harness = createInkHarness(<ProviderPickerHarness />);
+  try {
+    await sleep(80);
+    harness.stdin.write("\u001b[B");
+    await sleep(40);
+    harness.stdin.write("m");
+    await sleep(80);
+    assert.match(harness.getOutput(), /action:anthropic:select-model/);
   } finally {
     await harness.cleanup();
   }

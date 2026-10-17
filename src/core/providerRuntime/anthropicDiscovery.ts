@@ -118,7 +118,13 @@ export async function fetchAnthropicModels(options: {
       const body: unknown = await response.json();
       for (const model of parseAnthropicModels(body)) models.set(model.modelId, model);
       if (!isRecord(body) || body.has_more !== true)
-        return { ...initial, status: "ready", freshness: "verified", models: [...models.values()] };
+        return {
+          ...initial,
+          status: "ready",
+          freshness: "verified",
+          complete: true,
+          models: [...models.values()],
+        };
       if (typeof body.last_id !== "string" || !body.last_id || cursors.has(body.last_id))
         throw new Error("Invalid Claude pagination.");
       cursor = body.last_id;

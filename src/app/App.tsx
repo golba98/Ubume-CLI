@@ -1,5 +1,13 @@
 import { useApp, useFocusManager, useStdin, useStdout } from "ink";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { LaunchArgs } from "../config/launchArgs.js";
 import { applyLayeredRuntimeOverride } from "../config/layeredConfig.js";
 import { saveSettings } from "../config/persistence.js";
@@ -20,12 +28,14 @@ import {
   getSelectableModelCapabilities,
   normalizeReasoningForModelCapabilities,
 } from "../core/models/codexModelCapabilities.js";
+import { catalogContextKey } from "../core/models/modelCatalog.js";
 import { traceModelStateDebug } from "../core/perf/debugLog.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import { buildProviderRegistry, findProvider } from "../core/providerLauncher/registry.js";
 import type { LocalBackendId, ProviderId } from "../core/providerLauncher/types.js";
 import { resolveModelContextLength } from "../core/providerRuntime/contextMetadata.js";
 import { isLocalRuntime } from "../core/providerRuntime/deployment.js";
+import { modelRecoveryMessage } from "../core/providerRuntime/failures.js";
 import { type checkLocalProvider, setLocalProviderConfig } from "../core/providerRuntime/local.js";
 import { closeLocalHarnessSession } from "../core/providerRuntime/localHarness/runtime.js";
 import { providerModelsToCodexCapabilities } from "../core/providerRuntime/models.js";
@@ -97,6 +107,10 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   const { exit, suspendTerminal } = useApp();
   const focusManager = useFocusManager();
   const appState = useAppState({ providerOverride, launchArgs });
+  const selectionVersion = useSyncExternalStore(
+    appState.selectionCoordinator.subscribe,
+    appState.selectionCoordinator.getSnapshot,
+  );
   const {
     workspaceRoot,
     initialSettings,
@@ -354,7 +368,9 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     // When --model was given on the CLI, override the stored activeRoute's modelId so
     // the actual run uses the CLI model instead of whatever is persisted in providers.json.
     // The providers.json entry is left unchanged so it survives this session.
-    const cliModel = launchArgs.modelOverride;
+    const cliModel = appState.selectionCoordinator.interactiveSelection
+      ? null
+      : launchArgs.modelOverride;
     if (conversationRouteOverride) return conversationRouteOverride;
     const configuredRoute = providerWorkspaceConfig.activeRoute;
     const effectiveRoute =
@@ -373,6 +389,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     providerWorkspaceConfig.googleMigrationRequired,
     reasoningLevel,
     registryNonce,
+    providerWorkspaceConfig,
+    selectionVersion,
   ]);
   const previousProviderRouteRef = useRef(activeProviderRoute);
   useEffect(() => {
@@ -555,6 +573,18 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     [modelPickerProviderId, modelPickerRuntime, providerRegistry],
   );
   const modelPickerEmptyMessage = useMemo(() => {
+    const connection = catalogContextKey(modelPickerProviderId, {
+      cwd: workspaceRoot,
+      providerConfig: providerWorkspaceConfig.providers?.[modelPickerProviderId],
+      ...(modelPickerProviderId === "local"
+        ? { localBackend: providerWorkspaceConfig.providers?.local?.localBackend ?? "lm-studio" }
+        : {}),
+    });
+    if (
+      appState.selectionCoordinator.state(connection, modelPickerCurrentModel)?.status ===
+      "unavailable"
+    )
+      return modelRecoveryMessage(modelPickerCurrentModel);
     if (modelPickerProviderId === "openai") {
       return modelCapabilities?.error
         ? `No models available: ${modelCapabilities.error}`
@@ -562,13 +592,17 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     }
     if (modelPickerDiscovery?.status === "ready" && modelPickerDiscovery.models.length === 0) {
       const setup = getProviderRouteSetupMessage(modelPickerProviderId);
-      return `No ${modelPickerProviderLabel} models available because the route is not configured. ${setup}`;
+      return `No ${modelPickerProviderLabel} models are currently advertised. Refresh models or change provider. ${setup}`;
     }
     if (providerModelErrors[modelPickerProviderId]) {
       return `${providerModelErrors[modelPickerProviderId]} Press Refresh models to retry.`;
     }
     return modelPickerDiscovery?.message ?? "No models available.";
   }, [
+    selectionVersion,
+    modelPickerCurrentModel,
+    providerWorkspaceConfig.providers,
+    workspaceRoot,
     modelCapabilities,
     modelPickerDiscovery,
     modelPickerProviderId,
@@ -1049,6 +1083,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     providerDiagnosticsRef,
     providerRouteErrorsRef,
     modelPickerOpenRef,
+    ensureProviderModels,
   });
   const {
     setModeWithNotice,

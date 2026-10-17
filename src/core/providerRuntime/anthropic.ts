@@ -23,6 +23,7 @@ import {
   getClaudeModelDefaultEffort,
   modelSupportsClaudeEffort,
 } from "./claudeCodeDiscovery.js";
+import { apiRequestError, failureFromError, retryAfterDelay } from "./failures.js";
 import { ANTHROPIC_FALLBACK_MODELS } from "./models.js";
 import type {
   ProviderBackendKind,
@@ -279,7 +280,11 @@ async function runAnthropicApi(
   );
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`Anthropic API request failed (HTTP ${response.status}).`);
+    throw apiRequestError(
+      response.status,
+      body,
+      retryAfterDelay(response.headers.get("retry-after")),
+    );
   }
 
   const parsed = JSON.parse(body) as {
@@ -518,7 +523,7 @@ export function runClaudeCodeWithRunner(
         control.finish();
         if (canceled) return;
         const message = errorMessage(error, "Claude Code execution failed.");
-        handlers.onError(message);
+        handlers.onError(message, undefined, failureFromError(error, message));
       });
   };
 
@@ -675,12 +680,23 @@ export const anthropicRuntime: ProviderRuntime = {
   routeSetupMessage: ANTHROPIC_ROUTE_SETUP_MESSAGE,
   launchAvailable: true,
   isRouteConfigured: isAnthropicRouteConfigured,
-  validateRoute: async ({ workspaceRoot, claudeCommandPath, providerConfig, route }) => {
+  validateRoute: async ({ workspaceRoot, claudeCommandPath, providerConfig, route, signal }) => {
     if (providerConfig?.apiKey || route.backendKind === "anthropic-api-key") {
-      const discovery = await fetchAnthropicModels({ providerConfig });
+      const discovery = await fetchAnthropicModels({ providerConfig, signal });
       anthropicApiValidated = discovery.freshness === "verified";
       if (anthropicApiValidated) discoveredAnthropicModels = discovery.models;
+      const modelUnavailable =
+        anthropicApiValidated && !discovery.models.some((model) => model.modelId === route.modelId);
       return {
+        ...(modelUnavailable
+          ? {
+              failure: {
+                kind: "model-unavailable" as const,
+                message: `Model ${route.modelId} is unavailable.`,
+                retryable: false,
+              },
+            }
+          : {}),
         status:
           anthropicApiValidated && discovery.models.some((model) => model.modelId === route.modelId)
             ? "ready"
@@ -690,7 +706,9 @@ export const anthropicRuntime: ProviderRuntime = {
         message:
           discovery.message ??
           (anthropicApiValidated
-            ? "Claude API model inventory verified."
+            ? modelUnavailable
+              ? `Model ${route.modelId} is unavailable.`
+              : "Claude API model inventory verified."
             : ANTHROPIC_ROUTE_SETUP_MESSAGE),
       };
     }
@@ -768,6 +786,7 @@ export const anthropicRuntime: ProviderRuntime = {
       backendKind: getAnthropicRuntimeBackendKind(),
       models: discoveredAnthropicModels,
       freshness: discovery.modelSource === "fallback" ? "unverified" : "verified",
+      complete: false,
       refreshState: discovery.modelSource === "fallback" ? "failed" : "refreshed",
       message:
         discovery.modelSource === "fallback"
@@ -810,7 +829,7 @@ export const anthropicRuntime: ProviderRuntime = {
         .catch((error) => {
           if (cancelled) return;
           const message = errorMessage(error, "Anthropic/Claude in-Ubume routing failed.");
-          handlers.onError(message);
+          handlers.onError(message, undefined, failureFromError(error, message));
         });
       control.track(work);
       void work.finally(() => control.finish());

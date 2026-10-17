@@ -13,6 +13,7 @@ import type {
   NativeSessionReference,
 } from "../workspace/conversationStore.js";
 import type { ProjectInstructions } from "../workspace/projectInstructions.js";
+import type { ProviderFailure } from "./failures.js";
 
 export type { ProviderId, ResolvedRuntimeConfig };
 
@@ -111,6 +112,8 @@ export type ReasoningControl =
     };
 
 export interface ProviderModelDiscoveryResult {
+  /** Only complete live inventories establish rejection through absence. */
+  complete?: boolean;
   status: "ready" | "not-configured";
   providerId: ProviderId;
   backendKind: ProviderBackendKind;
@@ -167,6 +170,7 @@ export interface ProviderRouteValidationRequest {
 }
 
 export interface ProviderRouteValidationResult {
+  failure?: ProviderFailure;
   status: "ready" | "not-configured";
   providerId: ProviderId;
   backendKind: ProviderBackendKind;

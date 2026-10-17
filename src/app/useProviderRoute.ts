@@ -4,7 +4,9 @@ import type { ResolvedRuntimeConfig, RuntimeConfig } from "../config/runtimeConf
 import type { AvailableModel, ReasoningLevel } from "../config/settings.js";
 import { resolveVibeExecutable } from "../core/executables/executableResolver.js";
 import type { CodexModelCapabilities } from "../core/models/codexModelCapabilities.js";
-import { resolveCatalogModel } from "../core/models/modelSelection.js";
+import { catalogContextKey } from "../core/models/modelCatalog.js";
+import { isCatalogModelUnavailable, resolveCatalogModel } from "../core/models/modelSelection.js";
+import type { SelectionCoordinator } from "../core/models/selectionCoordinator.js";
 import { commandExistsOnPath, launchProviderCli } from "../core/providerLauncher/launcher.js";
 import { findProvider } from "../core/providerLauncher/registry.js";
 import type {
@@ -47,6 +49,8 @@ import { FOCUS_IDS } from "../ui/input/focus.js";
 import type { LocalBackendStatus } from "../ui/panels/ProviderPicker.js";
 
 interface UseProviderRouteContext {
+  selectionCoordinator: SelectionCoordinator;
+  setRouteSwitchBusy: React.Dispatch<React.SetStateAction<boolean>>;
   localBackendCheckInFlightRef: React.RefObject<
     Map<LocalBackendId, Promise<ProviderRouteValidationResult>>
   >;
@@ -121,14 +125,21 @@ interface UseProviderRouteContext {
 export function isUsableSavedModel(
   model: string | undefined,
   catalog: readonly ProviderModel[],
+  catalogVerified = false,
 ): boolean {
   if (!model) return false;
+  if (catalogVerified) {
+    const descriptor = resolveCatalogModel(catalog, model);
+    return descriptor !== undefined && descriptor.available !== false;
+  }
   if (!model.endsWith("default")) return true;
   return resolveCatalogModel(catalog, model) !== undefined;
 }
 
 export function useProviderRoute(context: UseProviderRouteContext) {
   const {
+    selectionCoordinator,
+    setRouteSwitchBusy,
     localBackendCheckInFlightRef,
     setLocalBackendStatuses,
     providerWorkspaceConfig,
@@ -233,11 +244,7 @@ export function useProviderRoute(context: UseProviderRouteContext) {
 
   const openProviderPicker = useCallback(() => {
     modelPickerOpenRef.current = false;
-    // Mid route switch, keep the pending id so initialProviderId highlights
-    // the provider being activated instead of the stale route.
-    if (!modelSelectionInFlightRef.current) {
-      setPendingRouteProviderId(null);
-    }
+    selectionCoordinator.navigate();
     setScreen("provider-picker");
     providerDiagnosticsRef.current.mistral = {
       ...providerDiagnosticsRef.current.mistral,
@@ -266,7 +273,7 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         };
         setRegistryNonce((n) => n + 1);
       });
-  }, [appendEvent, busy, workspaceRoot]);
+  }, [appendEvent, busy, workspaceRoot, selectionCoordinator]);
 
   const setWorkspaceDefaultProviderWithNotice = useCallback(
     (providerId: ProviderId) => {
@@ -313,6 +320,13 @@ export function useProviderRoute(context: UseProviderRouteContext) {
       action: ProviderPickerAction,
       selectedLocalBackend?: LocalBackendId,
     ) => {
+      if (action === "use-in-ubume" || action === "select-model" || action === "cancel") {
+        selectionCoordinator.navigate(providerId);
+        selectionCoordinator.cancel();
+        modelSelectionInFlightRef.current = false;
+        setRouteSwitchBusy(false);
+      }
+      const navigation = selectionCoordinator.navigationToken;
       if (action === "cancel") {
         modelPickerOpenRef.current = false;
         setScreen("main");
@@ -353,7 +367,8 @@ export function useProviderRoute(context: UseProviderRouteContext) {
           setProviderWorkspaceConfig(preferredConfig);
           void probeLocalBackend(localBackend)
             .then((validation) => {
-              if (!isMountedRef.current) return;
+              if (!isMountedRef.current || selectionCoordinator.navigationToken !== navigation)
+                return;
               if (validation.diagnostics) {
                 providerDiagnosticsRef.current["local"] = validation.diagnostics as Record<
                   string,
@@ -393,10 +408,22 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         const activeRoute = providerWorkspaceConfig.activeRoute;
         const isCurrentActive = activeRoute?.providerId === providerId;
 
-        const isRealModel = isUsableSavedModel(
-          provider.currentModel,
-          discoverProviderModels(providerId).models,
-        );
+        const discovery = discoverProviderModels(providerId);
+        const preferredModel = workspaceProviderConfig?.currentModel ?? provider.currentModel;
+        const connection = catalogContextKey(providerId, {
+          cwd: workspaceRoot,
+          providerConfig: workspaceProviderConfig,
+        });
+        const rejected =
+          selectionCoordinator.state(connection, preferredModel)?.status === "unavailable";
+        const isRealModel =
+          !rejected &&
+          !isCatalogModelUnavailable(discovery, preferredModel) &&
+          isUsableSavedModel(
+            preferredModel,
+            discovery.models,
+            discovery.freshness === "verified" && discovery.complete === true,
+          );
 
         const providerReasoning =
           workspaceProviderConfig?.currentReasoning ??
@@ -408,7 +435,7 @@ export function useProviderRoute(context: UseProviderRouteContext) {
               )?.defaultReasoningLevel ?? "")
             : reasoningLevel);
 
-        if (isRealModel || isCurrentActive) {
+        if (isRealModel) {
           intendedInputModeRef.current = "chat/input";
           intendedFocusTargetRef.current = FOCUS_IDS.composer;
           setScreen("main");
@@ -621,6 +648,7 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     },
     [
       activeProviderRoute,
+      selectionCoordinator,
       appendEvent,
       appendEvent,
       ensureProviderModels,

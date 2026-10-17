@@ -1063,6 +1063,7 @@ export const localRuntime: ProviderRuntime = {
         ? { freshness: "verified" as const }
         : {}),
       providerId: "local",
+      complete: true,
       localBackend: backend,
       backendKind: validation.backendKind,
       models:

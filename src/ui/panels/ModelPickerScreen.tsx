@@ -695,8 +695,8 @@ export function ModelPickerScreen({
 
   const title = clampVisualText(
     windowResult.mode === "windowed"
-      ? `Models · ${windowResult.selectedIndex + 1}/${models.length}`
-      : `Select model   ${help}`,
+      ? `Models · ${windowResult.selectedIndex + 1}/${models.length} · ${activeProviderLabel}`
+      : `Select model · ${activeProviderLabel}   ${help}`,
     innerWidth,
   );
 
@@ -842,7 +842,7 @@ function ModelPickerRow({
   const checkWidth = 2;
   const nameWidth = Math.max(8, width - markerWidth - checkWidth);
   const name = clampVisualText(
-    isHighlighted ? getModelName(model) : getCompactModelName(model),
+    `${model.available === false && model.source === "runtime" ? "[Unavailable] " : ""}${isHighlighted ? getModelName(model) : getCompactModelName(model)}`,
     nameWidth,
   );
 

@@ -14,6 +14,7 @@ import { createRunControl } from "../providers/runControl.js";
 import type { BackendRunHandlers } from "../providers/types.js";
 import { errorMessage } from "../shared/values.js";
 import { sanitizeTerminalOutput } from "../terminal/terminalSanitize.js";
+import { classifyProviderFailure } from "./failures.js";
 import type {
   ProviderChatRequest,
   ProviderModel,
@@ -362,6 +363,7 @@ export function migrateAntigravityLegacyModelId(modelId: string): {
 let agyRouteValidated = false;
 let resolvedAgyExecutable: string = "agy";
 let discoveredAgyModels: readonly ProviderModel[] | null = null;
+let agyCatalogVerified = false;
 let activeAgyContext = "";
 let discoveryGeneration = 0;
 
@@ -402,14 +404,17 @@ export async function discoverAgyModels(options: {
     result.exitCode === 0 &&
     (models.length > 0 || !result.stdout.trim())
   ) {
-    if (!options.signal?.aborted && generation === discoveryGeneration)
+    if (!options.signal?.aborted && generation === discoveryGeneration) {
       discoveredAgyModels = models;
+      agyCatalogVerified = true;
+    }
     return {
       status: "ready",
       providerId: "google",
       backendKind: "antigravity-cli-auth",
       models,
       freshness: "verified",
+      complete: true,
       verifiedAt: Date.now(),
       message: `Loaded ${models.length} models from agy models.`,
       diagnostics: {
@@ -419,6 +424,7 @@ export async function discoverAgyModels(options: {
       },
     };
   }
+  if (!options.signal?.aborted && generation === discoveryGeneration) agyCatalogVerified = false;
   const cached = normalizeCachedAgyModels(
     (loadCachedProviderModels("google") ?? loadCachedProviderModels("antigravity"))?.models ?? [],
   );
@@ -449,6 +455,7 @@ export function resetAntigravityRouteValidationCacheForTests(): void {
   agyRouteValidated = false;
   resolvedAgyExecutable = "agy";
   discoveredAgyModels = null;
+  agyCatalogVerified = false;
   activeAgyContext = "";
   discoveryGeneration++;
   resetAgyExecutableCacheForTests();
@@ -491,6 +498,7 @@ export async function validateAntigravityRoute(options: {
     activeAgyContext = contextKey;
     agyRouteValidated = false;
     discoveredAgyModels = null;
+    agyCatalogVerified = false;
     discoveryGeneration++;
   }
   if (!options.forceRefresh && agyRouteValidated && discoveredAgyModels?.length)
@@ -502,6 +510,7 @@ export async function validateAntigravityRoute(options: {
       diagnostics: {
         resolvedCommand: resolved,
         modelSource: "session-cache",
+        modelCatalogVerified: agyCatalogVerified,
         discoveredModelCount: discoveredAgyModels.length,
       },
     };
@@ -534,7 +543,6 @@ export async function validateAntigravityRoute(options: {
   });
   const ready =
     modelDiscovery.status === "ready" &&
-    modelDiscovery.models.length > 0 &&
     modelDiscovery.refreshState !== "auth-required" &&
     !options.signal?.aborted &&
     activeAgyContext === contextKey;
@@ -544,9 +552,22 @@ export async function validateAntigravityRoute(options: {
     providerId: "google",
     backendKind: "antigravity-cli-auth",
     message: ready ? `Google Antigravity CLI found at: ${resolved}` : modelDiscovery.message,
+    ...(!ready && modelDiscovery.message
+      ? {
+          failure:
+            modelDiscovery.refreshState === "auth-required"
+              ? {
+                  kind: "authentication" as const,
+                  message: modelDiscovery.message,
+                  retryable: false,
+                }
+              : classifyProviderFailure(modelDiscovery.message),
+        }
+      : {}),
     diagnostics: {
       resolvedCommand: resolved,
       modelSource: modelDiscovery.diagnostics?.modelSource ?? "unavailable",
+      modelCatalogVerified: modelDiscovery.freshness === "verified",
       discoveredModelCount: modelDiscovery.models.length,
     },
   };
@@ -621,6 +642,7 @@ export function runAntigravityWithRunner(
         handlers.onError(
           message,
           `agy command: ${JSON.stringify([spawnSpec.executable, ...spawnSpec.args])}`,
+          classifyProviderFailure(message),
         );
         return;
       }
@@ -743,11 +765,26 @@ export const antigravityRuntime: ProviderRuntime = {
     if (result.status !== "ready") return result;
     const validatedContext = activeAgyContext;
     const model = resolveCatalogModel(getActiveAgyModels(), route.modelId);
+    if (!model && result.diagnostics?.modelCatalogVerified !== true) {
+      const message =
+        "Google model availability could not be verified. Refresh the catalog or select a cached model.";
+      return {
+        ...result,
+        status: "not-configured",
+        message,
+        failure: { kind: "unknown", message, retryable: true },
+      };
+    }
     if (!model)
       return {
         ...result,
         status: "not-configured",
         message: `Google model ${route.modelId} is unavailable. Refresh models and select a model explicitly.`,
+        failure: {
+          kind: "model-unavailable",
+          message: `Google model ${route.modelId} is unavailable.`,
+          retryable: false,
+        },
       };
     if (route.reasoning && (!model.reasoningControl || model.reasoningControl.kind === "unknown")) {
       const hydrated = await resolveAgyReasoningCapability(model, {
@@ -773,6 +810,11 @@ export const antigravityRuntime: ProviderRuntime = {
         ...result,
         status: "not-configured",
         message: `Google has no supported selector for ${route.modelId}${route.reasoning ? ` / ${route.reasoning}` : ""}. Refresh models and select a supported model and reasoning setting.`,
+        failure: {
+          kind: "model-configuration",
+          message: "The model and reasoning selector are unsupported.",
+          retryable: false,
+        },
       };
     return result;
   },
@@ -803,6 +845,7 @@ export const antigravityRuntime: ProviderRuntime = {
       if (contextKey !== activeAgyContext) {
         activeAgyContext = contextKey;
         discoveredAgyModels = null;
+        agyCatalogVerified = false;
         agyRouteValidated = false;
         discoveryGeneration++;
       }
@@ -886,7 +929,11 @@ export const antigravityRuntime: ProviderRuntime = {
         }
         if (validation.status !== "ready" || !executable) {
           control.finish();
-          handlers.onError(validation.message ?? ANTIGRAVITY_ROUTE_SETUP_MESSAGE);
+          handlers.onError(
+            validation.message ?? ANTIGRAVITY_ROUTE_SETUP_MESSAGE,
+            undefined,
+            validation.failure,
+          );
           return;
         }
         cancelChild = runAntigravityWithRunner(
@@ -900,9 +947,9 @@ export const antigravityRuntime: ProviderRuntime = {
               control.finish();
               handlers.onResponse(text);
             },
-            onError: (message, detail) => {
+            onError: (message, detail, failure) => {
               control.finish();
-              handlers.onError(message, detail);
+              handlers.onError(message, detail, failure);
             },
           },
           runCommand,

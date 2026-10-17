@@ -9,7 +9,7 @@ import {
   saveCachedProviderModels,
 } from "../models/modelCache.js";
 import { type CatalogContext, providerCatalog } from "../models/modelCatalog.js";
-import { resolveCatalogModel } from "../models/modelSelection.js";
+import { isCatalogModelUnavailable, resolveCatalogModel } from "../models/modelSelection.js";
 import { reconcileReasoning } from "../models/reasoningControl.js";
 import { LEGACY_GOOGLE_MESSAGE } from "../providerLauncher/providerIdentity.js";
 import type {
@@ -28,6 +28,7 @@ import type {
 import { anthropicRuntime } from "./anthropic.js";
 import { antigravityRuntime, getAgyModelSelector } from "./antigravity.js";
 import { CODEXA_NATIVE_MODEL_ID, codexaCupyRuntime, codexaNativeRuntime } from "./codexaNative.js";
+import { classifyProviderFailure, isModelFailure, type ProviderFailure } from "./failures.js";
 import { localRuntime } from "./local.js";
 import { mistralVibeRuntime } from "./mistralVibe.js";
 import { ANTHROPIC_FALLBACK_MODELS } from "./models.js";
@@ -65,6 +66,7 @@ const openAiRuntime: ProviderRuntime = {
       providerId: "openai",
       backendKind: "codex-cli-auth",
       freshness: verified ? "verified" : "unverified",
+      complete: verified,
       models: capabilities.models
         .filter((model) => !model.hidden)
         .map((model) => ({
@@ -194,6 +196,7 @@ export async function refreshProviderModels(
 }
 
 export async function validateProviderRouteActivation(options: {
+  signal?: AbortSignal;
   providerConfig?: ProviderWorkspaceOverride;
   route: ProviderRoute;
   workspaceRoot: string;
@@ -211,8 +214,22 @@ export async function validateProviderRouteActivation(options: {
     };
   }
 
+  const catalog = discoverProviderModels(options.route.providerId);
+  if (isCatalogModelUnavailable(catalog, options.route.modelId)) {
+    const message = `The selected model ${options.route.modelId} is unavailable. Select a model explicitly before sending.`;
+    return {
+      status: "not-configured",
+      providerId: options.route.providerId,
+      backendKind: runtime.backendKind,
+      message,
+      failure: { kind: "model-unavailable", message, retryable: false },
+    };
+  }
   if (runtime.validateRoute) {
-    return runtime.validateRoute(options);
+    const result = await runtime.validateRoute(options);
+    if (result.status !== "ready" && !result.failure && result.message)
+      return { ...result, failure: classifyProviderFailure(result.message) };
+    return result;
   }
 
   if (!isProviderRouteConfigured(options.route.providerId)) {
@@ -303,6 +320,36 @@ export function getDefaultRouteModel(providerId: ProviderId, currentOpenAiModel:
 }
 
 /** Common adapter for interactive and non-interactive requests. */
+/** Classify once at the routing boundary; never discard provider error evidence. */
+function handleFailure(
+  route: ProviderRoute,
+  cwd: string,
+  providerConfig: ProviderWorkspaceOverride | undefined,
+  handlers: BackendRunHandlers,
+): BackendRunHandlers["onError"] {
+  let refreshed = false;
+  const requestCatalog = providerCatalog.get(route.providerId);
+  return (message, rawOutput, evidence?: ProviderFailure) => {
+    const failure = evidence ?? classifyProviderFailure(message);
+    handlers.onError(message, rawOutput, failure);
+    if (
+      isModelFailure(failure) &&
+      !refreshed &&
+      providerCatalog.get(route.providerId) === requestCatalog
+    ) {
+      refreshed = true;
+      void refreshProviderModels(route.providerId, {
+        cwd,
+        providerConfig,
+        ...(route.providerId === "local"
+          ? { localConfig: providerConfig, localBackend: route.localBackend }
+          : {}),
+        forceRefresh: true,
+      });
+    }
+  };
+}
+
 export function createRoutedProvider(
   route: ProviderRoute,
   backend: BackendProvider,
@@ -326,12 +373,15 @@ export function createRoutedProvider(
       run: backend.run
         ? (prompt, options, handlers) => {
             const catalog = discoverProviderModels("openai");
-            if (
-              catalog.freshness === "verified" &&
-              !resolveCatalogModel(catalog.models, route.modelId)
-            ) {
+            if (isCatalogModelUnavailable(catalog, route.modelId)) {
               handlers.onError(
                 `The selected model ${route.modelId} is unavailable. Select a model explicitly before sending.`,
+                undefined,
+                {
+                  kind: "model-unavailable",
+                  message: `Model ${route.modelId} is unavailable.`,
+                  retryable: false,
+                },
               );
               return () => undefined;
             }
@@ -345,19 +395,7 @@ export function createRoutedProvider(
               },
               {
                 ...handlers,
-                onError: (message) => {
-                  handlers.onError(message);
-                  if (
-                    /model.{0,80}(?:not found|unavailable|removed|does not exist|invalid)/i.test(
-                      message,
-                    )
-                  )
-                    void refreshProviderModels("openai", {
-                      cwd: options.workspaceRoot,
-                      providerConfig: override,
-                      forceRefresh: true,
-                    });
-                },
+                onError: handleFailure(route, options.workspaceRoot, override, handlers),
               },
             );
           }
@@ -375,12 +413,15 @@ export function createRoutedProvider(
     run: provider.run
       ? (prompt, options, handlers) => {
           const catalog = discoverProviderModels(route.providerId);
-          if (
-            catalog.freshness === "verified" &&
-            !resolveCatalogModel(catalog.models, route.modelId)
-          ) {
+          if (isCatalogModelUnavailable(catalog, route.modelId)) {
             handlers.onError(
               `The selected model ${route.modelId} is unavailable. Select a model explicitly before sending.`,
+              undefined,
+              {
+                kind: "model-unavailable",
+                message: `Model ${route.modelId} is unavailable.`,
+                retryable: false,
+              },
             );
             return () => undefined;
           }
@@ -450,21 +491,7 @@ export function createRoutedProvider(
             },
             {
               ...handlers,
-              onError: (message) => {
-                handlers.onError(message);
-                if (
-                  /model.{0,80}(?:not found|not available|unavailable|removed|does not exist|invalid)|(?:not found|unavailable).{0,80}model/i.test(
-                    message,
-                  )
-                ) {
-                  void refreshProviderModels(route.providerId, {
-                    cwd: options.workspaceRoot,
-                    providerConfig: override,
-                    localConfig: route.providerId === "local" ? override : undefined,
-                    forceRefresh: true,
-                  });
-                }
-              },
+              onError: handleFailure(route, options.workspaceRoot, override, handlers),
             },
           );
         }

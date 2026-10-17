@@ -1,10 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import {
-  getProviderRuntime,
-  isProviderRoutableInUbume,
-  isProviderRouteConfigured,
-} from "../providerRuntime/registry.js";
+import { getProviderRuntime, isProviderRoutableInUbume } from "../providerRuntime/registry.js";
 import { isRecord } from "../shared/values.js";
 import { resolveUbumeWorkspaceDataDir } from "../workspace/appData.js";
 import { normalizeWorkspaceRoot } from "../workspace/workspaceRoot.js";
@@ -507,10 +503,7 @@ export function setProviderActiveRoute(
   config: ProviderWorkspaceConfig,
   activeRoute: ProviderActiveRoute,
 ): ProviderWorkspaceConfig {
-  if (
-    !isProviderRoutableInUbume(activeRoute.providerId) ||
-    !isProviderRouteConfigured(activeRoute.providerId)
-  ) {
+  if (!isProviderRoutableInUbume(activeRoute.providerId)) {
     return config;
   }
 

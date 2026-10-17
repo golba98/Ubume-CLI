@@ -285,7 +285,11 @@ test("runtime resolver preserves Google selection even while access is unavailab
     modelId: "gemini-99.8-pro",
     backendKind: "antigravity-cli-auth",
   });
-  assert.equal(result.activeRoute?.providerId, "openai", "Unconfigured activation is rejected");
+  assert.equal(
+    result.activeRoute?.providerId,
+    "google",
+    "Provider preferences do not depend on runtime readiness",
+  );
   const route = resolveActiveProviderRoute({
     workspaceConfigActiveRoute: {
       providerId: "google",

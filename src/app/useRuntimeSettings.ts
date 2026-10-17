@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import type { LaunchArgs } from "../config/launchArgs.js";
 import { type LayeredConfigResult, resolveLayeredConfig } from "../config/layeredConfig.js";
@@ -59,6 +59,9 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
     appendEvent,
   } = context;
 
+  const configRef = useRef(providerWorkspaceConfig);
+  configRef.current = providerWorkspaceConfig;
+
   const reloadBaseLayeredConfig = useCallback(() => {
     const nextConfig = resolveLayeredConfig({ workspaceRoot, launchArgs });
     baseRuntimeConfigRef.current = nextConfig.runtime;
@@ -94,6 +97,7 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
       localBackend?: LocalBackendId,
     ) => {
       try {
+        const providerWorkspaceConfig = configRef.current;
         const runtime = getProviderRuntime(providerId);
         let nextConfig = setProviderActiveRoute(providerWorkspaceConfig, {
           providerId,
@@ -109,12 +113,18 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
               }
             : {}),
         });
+        if (
+          nextConfig.activeRoute?.providerId !== providerId ||
+          nextConfig.activeRoute.modelId !== nextModel
+        )
+          throw new Error("The provider route cannot be selected in this channel.");
         nextConfig = setProviderDefaultReasoning(
           setProviderDefaultModel(nextConfig, providerId, nextModel),
           providerId,
           nextReasoning,
         );
         saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
+        configRef.current = nextConfig;
         setConversationRouteOverride(null);
         routeChoiceRequiredRef.current = null;
         const current = activeConversationRef.current;
@@ -124,9 +134,11 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
             metadata: { ...current.metadata, ...nextConfig.activeRoute },
           };
         setProviderWorkspaceConfig(nextConfig);
+        return true;
       } catch (error) {
         const message = errorMessage(error, "Unable to save active route.");
         appendEvent("error", "Route save failed", message);
+        return false;
       }
     },
     [appendEvent, providerWorkspaceConfig, workspaceRoot],
@@ -135,9 +147,10 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
   const persistProviderDefaultModelAndReasoning = useCallback(
     (providerId: ProviderId, modelId: string, nextReasoning: string) => {
       try {
-        const withModel = setProviderDefaultModel(providerWorkspaceConfig, providerId, modelId);
+        const withModel = setProviderDefaultModel(configRef.current, providerId, modelId);
         const nextConfig = setProviderDefaultReasoning(withModel, providerId, nextReasoning);
         saveProviderWorkspaceConfig(workspaceRoot, nextConfig);
+        configRef.current = nextConfig;
         setProviderWorkspaceConfig(nextConfig);
       } catch (error) {
         const message = errorMessage(error, "Unable to save provider defaults.");
