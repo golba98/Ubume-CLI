@@ -1,3 +1,20 @@
+/**
+ * The session state machine: one pure reducer over the whole interactive
+ * session.
+ *
+ * `SessionState` holds everything that belongs to the current conversation
+ * view: the committed static transcript, the live in-flight events, the UI
+ * state machine, the composer draft with its input history, and the
+ * external-CLI status. `reduceSessionState` reduces `SessionAction`s without
+ * side effects; all provider-facing work happens elsewhere and lands here as
+ * actions.
+ *
+ * `useAppSessionState` wraps the reducer with a batching dispatcher: actions
+ * reduce synchronously into a live ref (so async callbacks always read the
+ * latest state), while the React state update is coalesced into one microtask
+ * per batch to keep renders cheap while a run streams.
+ */
+
 import { useCallback, useRef, useState } from "react";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import type { BackendProgressUpdate } from "../core/providers/types.js";
@@ -13,7 +30,6 @@ import {
   failRunEvent,
   finalizePlanBlock,
   finalizeResponseSegments,
-  markResponseSegmentsCompleted,
   reduceUIState,
   type UIStateAction,
   upsertRunToolActivity,
@@ -155,6 +171,26 @@ export function findUserPrompt(events: TimelineEvent[], turnId: number): UserPro
     (entry): entry is UserPromptEvent => entry.type === "user" && entry.turnId === turnId,
   );
   return event ?? null;
+}
+
+/**
+ * Applies `update` to the run event with `runId` in `events`.
+ *
+ * Returns null when no such run exists, so callers can leave the state
+ * untouched: an update for a run that already ended is dropped, never applied
+ * to a different event. Event ids are unique, so at most one event matches.
+ */
+function updateRunEvent(
+  events: TimelineEvent[],
+  runId: number,
+  update: (run: RunEvent) => RunEvent,
+): TimelineEvent[] | null {
+  if (!events.some((event) => event.id === runId && event.type === "run")) {
+    return null;
+  }
+  return events.map((event) =>
+    event.id === runId && event.type === "run" ? update(event) : event,
+  );
 }
 
 function reconcileAssistantContent(
@@ -304,6 +340,117 @@ function eventCount(state: SessionState): number {
   return state.staticEvents.length + state.activeEvents.length;
 }
 
+// ─── Run finalization ─────────────────────────────────────────────────────────
+
+/** Everything the finalize helpers need from the state and the action. */
+interface FinalizeContext {
+  state: SessionState;
+  action: Extract<SessionAction, { type: "FINALIZE_RUN" }>;
+  userEvent: UserPromptEvent | null;
+  runEvent: RunEvent;
+  assistantEvent: AssistantEvent | null;
+  /** The live region after the finished turn's events were removed. */
+  remainingEvents: TimelineEvent[];
+}
+
+/** The run event with its outcome (completed, failed or canceled) applied. */
+function finalizeBaseRun(
+  runEvent: RunEvent,
+  action: Extract<SessionAction, { type: "FINALIZE_RUN" }>,
+): RunEvent {
+  if (action.status === "completed") {
+    return completeRunEvent(runEvent, action.durationMs);
+  }
+  if (action.status === "failed") {
+    return failRunEvent(
+      runEvent,
+      action.message ?? "Run failed",
+      action.message ?? "Run failed",
+      action.durationMs,
+    );
+  }
+  return cancelRunEvent(runEvent, action.durationMs);
+}
+
+/**
+ * Commits a finished plan-mode turn: the turn's events move to the static
+ * transcript with the plan text finalized into the run's plan block.
+ */
+function finalizePlanPresentation(context: FinalizeContext): SessionState {
+  const { state, action, runEvent, userEvent, remainingEvents } = context;
+
+  // The plan is the text streamed after the last tool call (earlier text
+  // was demoted to prose segments). The backend's final response contains
+  // that chatter too, so only fall back to it when nothing was streamed.
+  const streamedPlan = getRunPlanText(runEvent.plan);
+  const planContent = streamedPlan.trim()
+    ? streamedPlan
+    : reconcileAssistantContent("", action.response, action.status);
+  const finalizedRun = finalizePlanBlock(
+    finalizeResponseSegments(finalizeBaseRun(runEvent, action)),
+    planContent,
+  );
+
+  const additions: TimelineEvent[] = [];
+  if (userEvent) additions.push(userEvent);
+  additions.push(finalizedRun);
+
+  return {
+    ...state,
+    staticEvents: appendStaticEvents(state.staticEvents, additions),
+    activeEvents: remainingEvents,
+    uiState: reduceFinalizeUIState(state.uiState, action),
+  };
+}
+
+/**
+ * Commits a finished turn as an assistant reply: the turn's events move to
+ * the static transcript, the streamed text is reconciled with the
+ * authoritative final response, and the assistant event is finalized (or
+ * created) with that reconciled content.
+ */
+function finalizeAssistantPresentation(context: FinalizeContext): SessionState {
+  const { state, action, runEvent, userEvent, assistantEvent, remainingEvents } = context;
+
+  const streamedContent = getAssistantContent(assistantEvent);
+  const assistantContent = reconcileAssistantContent(
+    streamedContent,
+    action.response,
+    action.status,
+  );
+
+  // Reconcile response segments with the authoritative final text.
+  // If the authoritative text differs from streamed (or no segments exist),
+  // rewrite/synthesize the trailing segment so the rendered timeline
+  // shows the final answer in chronological position.
+  const trimmedFinal = assistantContent.trim();
+  const streamedTrim = streamedContent.trim();
+  const overrideSegmentText =
+    trimmedFinal && trimmedFinal !== streamedTrim ? assistantContent : undefined;
+  const finalizedRun = finalizeResponseSegments(
+    finalizeBaseRun(runEvent, action),
+    overrideSegmentText,
+  );
+
+  const additions: TimelineEvent[] = [];
+  if (userEvent) additions.push(userEvent);
+  additions.push(finalizedRun);
+  if (assistantContent.trim()) {
+    additions.push(
+      assistantEvent
+        ? { ...assistantEvent, content: assistantContent, contentChunks: [] }
+        : action.assistantFactory(),
+    );
+  }
+
+  return {
+    ...state,
+    staticEvents: appendStaticEvents(state.staticEvents, additions),
+    activeEvents: remainingEvents,
+    uiState: reduceFinalizeUIState(state.uiState, action),
+  };
+}
+
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
 export function reduceSessionState(state: SessionState, action: SessionAction): SessionState {
@@ -434,48 +581,27 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
       }
       return { ...state, activeEvents: action.events };
     case "RUN_APPEND_ACTIVITY": {
-      if (!state.activeEvents.some((event) => event.id === action.runId && event.type === "run")) {
-        return state;
-      }
-      return {
-        ...state,
-        activeEvents: state.activeEvents.map((event) =>
-          event.id === action.runId && event.type === "run"
-            ? appendRunActivity(event as RunEvent, action.activity)
-            : event,
-        ),
-      };
+      const nextEvents = updateRunEvent(state.activeEvents, action.runId, (run) =>
+        appendRunActivity(run, action.activity),
+      );
+      return nextEvents ? { ...state, activeEvents: nextEvents } : state;
     }
     case "RUN_APPLY_PROGRESS_UPDATES": {
-      if (!state.activeEvents.some((event) => event.id === action.runId && event.type === "run")) {
-        return state;
-      }
-      return {
-        ...state,
-        activeEvents: state.activeEvents.map((event) =>
-          event.id === action.runId && event.type === "run"
-            ? appendRunThinking(event as RunEvent, action.updates)
-            : event,
-        ),
-      };
+      const nextEvents = updateRunEvent(state.activeEvents, action.runId, (run) =>
+        appendRunThinking(run, action.updates),
+      );
+      return nextEvents ? { ...state, activeEvents: nextEvents } : state;
     }
     case "RUN_UPSERT_TOOL_ACTIVITY": {
-      if (!state.activeEvents.some((event) => event.id === action.runId && event.type === "run")) {
-        return state;
-      }
-      renderDebug.traceEvent("action", "upsert", {
-        runId: action.runId,
-        actionId: action.activity.id,
-        status: action.activity.status,
+      const nextEvents = updateRunEvent(state.activeEvents, action.runId, (run) => {
+        renderDebug.traceEvent("action", "upsert", {
+          runId: action.runId,
+          actionId: action.activity.id,
+          status: action.activity.status,
+        });
+        return upsertRunToolActivity(run, action.activity);
       });
-      return {
-        ...state,
-        activeEvents: state.activeEvents.map((event) =>
-          event.id === action.runId && event.type === "run"
-            ? upsertRunToolActivity(event as RunEvent, action.activity)
-            : event,
-        ),
-      };
+      return nextEvents ? { ...state, activeEvents: nextEvents } : state;
     }
     case "RUN_APPEND_PLAN_DELTA": {
       const existingRun = state.activeEvents.find(
@@ -631,18 +757,18 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
         return state;
       }
 
+      const nextEvents = updateRunEvent(state.activeEvents, action.runId, (run) =>
+        // Plan runs keep their text in the plan block; passing the final
+        // response here would synthesize a duplicate response segment.
+        finalizeResponseSegments(
+          run,
+          run.responsePresentation === "plan" ? undefined : action.response,
+        ),
+      );
+
       return {
         ...state,
-        activeEvents: state.activeEvents.map((event) =>
-          event.id === action.runId && event.type === "run"
-            ? markResponseSegmentsCompleted(
-                event as RunEvent,
-                // Plan runs keep their text in the plan block; passing the final
-                // response here would synthesize a duplicate response segment.
-                (event as RunEvent).responsePresentation === "plan" ? undefined : action.response,
-              )
-            : event,
-        ),
+        activeEvents: nextEvents ?? state.activeEvents,
         uiState: reduceTracedUIState(
           state.uiState,
           { type: "FINAL_ANSWER_VISIBLE", turnId: action.turnId },
@@ -663,6 +789,8 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
           event.type === "assistant" && event.turnId === action.turnId,
       );
 
+      // The finished turn leaves the live region; the presentation helpers
+      // below commit its events to the static transcript.
       const remainingEvents = state.activeEvents.filter(
         (event) =>
           !(event.type === "run" && event.id === action.runId) &&
@@ -670,6 +798,8 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
           !(event.type === "user" && event.turnId === action.turnId),
       );
 
+      // A run event that already left the live region (e.g. a duplicate
+      // finalize after a cancel) still finishes the turn's UI state.
       if (!runEvent) {
         renderDebug.traceEvent("transcript", "finalizeWithoutRunEvent", {
           runId: action.runId,
@@ -683,78 +813,19 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
         };
       }
 
-      const baseFinalizedRun =
-        action.status === "completed"
-          ? completeRunEvent(runEvent, action.durationMs)
-          : action.status === "failed"
-            ? failRunEvent(
-                runEvent,
-                action.message ?? "Run failed",
-                action.message ?? "Run failed",
-                action.durationMs,
-              )
-            : cancelRunEvent(runEvent, action.durationMs);
-
-      const planPresentation = action.responsePresentation === "plan";
-      if (planPresentation) {
-        // The plan is the text streamed after the last tool call (earlier text
-        // was demoted to prose segments). The backend's final response contains
-        // that chatter too, so only fall back to it when nothing was streamed.
-        const streamedPlan = getRunPlanText(runEvent.plan);
-        const planContent = streamedPlan.trim()
-          ? streamedPlan
-          : reconcileAssistantContent("", action.response, action.status);
-        const finalizedRun = finalizePlanBlock(
-          finalizeResponseSegments(baseFinalizedRun),
-          planContent,
-        );
-
-        const additions: TimelineEvent[] = [];
-        if (userEvent) additions.push(userEvent);
-        additions.push(finalizedRun);
-
-        return {
-          ...state,
-          staticEvents: appendStaticEvents(state.staticEvents, additions),
-          activeEvents: remainingEvents,
-          uiState: reduceFinalizeUIState(state.uiState, action),
-        };
-      }
-
-      const streamedContent = getAssistantContent(assistantEvent);
-      const assistantContent = reconcileAssistantContent(
-        streamedContent,
-        action.response,
-        action.status,
-      );
-
-      // Reconcile response segments with the authoritative final text.
-      // If the authoritative text differs from streamed (or no segments exist),
-      // rewrite/synthesize the trailing segment so the rendered timeline
-      // shows the final answer in chronological position.
-      const trimmedFinal = assistantContent.trim();
-      const streamedTrim = streamedContent.trim();
-      const overrideSegmentText =
-        trimmedFinal && trimmedFinal !== streamedTrim ? assistantContent : undefined;
-      const finalizedRun = finalizeResponseSegments(baseFinalizedRun, overrideSegmentText);
-
-      const additions: TimelineEvent[] = [];
-      if (userEvent) additions.push(userEvent);
-      additions.push(finalizedRun);
-      if (assistantContent.trim()) {
-        additions.push(
-          assistantEvent
-            ? { ...assistantEvent, content: assistantContent, contentChunks: [] }
-            : action.assistantFactory(),
-        );
-      }
-
-      return {
-        ...state,
-        staticEvents: appendStaticEvents(state.staticEvents, additions),
-        activeEvents: remainingEvents,
-        uiState: reduceFinalizeUIState(state.uiState, action),
+      const finalizeContext: FinalizeContext = {
+        state,
+        action,
+        userEvent: userEvent ?? null,
+        runEvent,
+        assistantEvent: assistantEvent ?? null,
+        remainingEvents,
       };
+
+      if (action.responsePresentation === "plan") {
+        return finalizePlanPresentation(finalizeContext);
+      }
+      return finalizeAssistantPresentation(finalizeContext);
     }
     case "FINALIZE_SHELL":
       return {

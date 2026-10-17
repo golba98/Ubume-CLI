@@ -1,3 +1,12 @@
+/**
+ * Copy-the-conversation support: turns the transcript into clipboard text.
+ *
+ * Pairs each user prompt with its latest assistant reply in submission order
+ * and formats them as a readable dialogue. Returns null when there is
+ * nothing to copy (a fresh or just-cleared session) so the caller can stay
+ * quiet instead of showing an error.
+ */
+
 import { useCallback } from "react";
 import { copyToClipboard } from "../core/shared/clipboard.js";
 import type { TimelineEvent } from "./types.js";

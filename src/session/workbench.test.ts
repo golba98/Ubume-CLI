@@ -3,7 +3,8 @@ import { expect, test } from "bun:test";
 import { normalizeRuntimeConfig, resolveRuntimeConfig } from "../config/runtimeConfig.js";
 import { createInitialSessionState, reduceSessionState } from "./appSession.js";
 import { toProviderConversationHistory } from "./conversation.js";
-import type { RunEvent } from "./types.js";
+import type { PlanFlowState } from "./planFlow.js";
+import type { RunEvent, UIState } from "./types.js";
 import {
   eventsBeforeTurn,
   PromptQueue,
@@ -227,4 +228,139 @@ test("conversation rewind drops later events without turn IDs", () => {
     { type: "system" as const, id: 4, createdAt: 4, title: "later", content: "discard" },
   ];
   expect(eventsBeforeTurn(events, 2).map((entry) => entry.id)).toEqual([1, 2]);
+});
+
+// ─── Snapshot validation (parseWorkbench) ─────────────────────────────────────
+
+/** A snapshot with one field family replaced by an intentionally bad value. */
+function corruptSnapshot(patch: Record<string, unknown>): unknown {
+  return { ...emptySnapshot(), ...patch };
+}
+
+test("snapshot validation rejects every corrupt field family", () => {
+  // A cursor beyond the draft would corrupt editing after restore.
+  expect(parseWorkbench(corruptSnapshot({ cursor: 99 }))).toBeUndefined();
+
+  expect(parseWorkbench(corruptSnapshot({ history: ["ok", 5] }))).toBeUndefined();
+
+  expect(parseWorkbench(corruptSnapshot({ pastes: [["token", ["line", 7]]] }))).toBeUndefined();
+
+  expect(
+    parseWorkbench(corruptSnapshot({ images: [["token", { path: "/p", name: "n" }]] })),
+  ).toBeUndefined();
+
+  expect(
+    parseWorkbench(
+      corruptSnapshot({
+        checkpoints: [
+          { id: "cp", turnId: 0, messageCount: 0, prompt: "p", before: { complete: true } },
+        ],
+      }),
+    ),
+  ).toBeUndefined();
+
+  expect(
+    parseWorkbench(
+      corruptSnapshot({
+        restoredFileBoundary: { complete: "yes", skipped: [], files: {} },
+      }),
+    ),
+  ).toBeUndefined();
+});
+
+test("snapshot checkpoints validate their file boundaries", () => {
+  const validBoundary = {
+    complete: true,
+    skipped: [],
+    files: { "a.txt": { hash: "a".repeat(64), mode: 0o644 } },
+  };
+  const checkpoint = {
+    id: "cp-1",
+    turnId: 2,
+    messageCount: 2,
+    prompt: "do it",
+    before: validBoundary,
+  };
+
+  expect(parseWorkbench(corruptSnapshot({ checkpoints: [checkpoint] }))?.checkpoints).toEqual([
+    checkpoint,
+  ]);
+
+  expect(
+    parseWorkbench(
+      corruptSnapshot({
+        checkpoints: [
+          {
+            ...checkpoint,
+            before: { ...validBoundary, files: { "a.txt": { hash: "zz", mode: 6 } } },
+          },
+        ],
+      }),
+    ),
+  ).toBeUndefined();
+});
+
+test("restore keeps only the ui and plan states that survive a restart", () => {
+  // An awaiting question survives; mid-run states restart idle.
+  const awaiting: UIState = { kind: "AWAITING_USER_ACTION", turnId: 4, question: "Which file?" };
+  expect(parseWorkbench(corruptSnapshot({ uiState: awaiting }))?.uiState).toEqual(awaiting);
+  expect(
+    parseWorkbench(corruptSnapshot({ uiState: { kind: "RESPONDING", turnId: 9 } }))?.uiState,
+  ).toEqual({ kind: "IDLE" });
+
+  // The user-facing plan review states survive; a generating plan restarts idle.
+  const reviewPlan: PlanFlowState = {
+    kind: "awaiting_action",
+    originalPrompt: "p",
+    executionMode: "auto-edit",
+    constraints: [],
+    planFilePath: null,
+    currentPlan: "the plan",
+  };
+  expect(parseWorkbench(corruptSnapshot({ plan: reviewPlan }))?.plan).toEqual(reviewPlan);
+  expect(
+    parseWorkbench(
+      corruptSnapshot({
+        plan: {
+          kind: "generating",
+          originalPrompt: "p",
+          executionMode: "suggest",
+          constraints: [],
+          planFilePath: null,
+          currentPlan: null,
+          pendingFeedback: null,
+        },
+      }),
+    )?.plan,
+  ).toEqual({ kind: "idle" });
+});
+
+test("unknown snapshot fields from a newer version survive a parse round-trip", () => {
+  const parsed = parseWorkbench(corruptSnapshot({ futureField: { nested: true } }));
+  expect((parsed as Record<string, unknown> | undefined)?.futureField).toEqual({ nested: true });
+});
+
+test("restoring queue contents pauses draining until the queue is unpaused", async () => {
+  const queue = new PromptQueue();
+  queue.restore([queuedPrompt("display", "submitted")]);
+
+  expect(queue.paused).toBe(true);
+  expect(queue.items).toHaveLength(1);
+
+  const started: string[] = [];
+  const pausedDrain = await queue.drain((item) => {
+    started.push(item.submitted);
+    return true;
+  });
+  expect(pausedDrain).toBe(false);
+  expect(started).toEqual([]);
+
+  queue.paused = false;
+  const activeDrain = await queue.drain((item) => {
+    started.push(item.submitted);
+    return true;
+  });
+  expect(activeDrain).toBe(true);
+  expect(started).toEqual(["submitted"]);
+  expect(queue.items).toHaveLength(0);
 });

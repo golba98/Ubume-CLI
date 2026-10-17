@@ -1,3 +1,13 @@
+/**
+ * Conversions between persisted conversation messages and the timeline.
+ *
+ * Saved conversations store plain `ConversationMessage` records (see
+ * `core/workspace/conversationStore`); the timeline renders richer
+ * `TimelineEvent`s. This module maps between the two for /resume, builds the
+ * plain role/content history providers receive, and reconstructs the provider
+ * route a saved conversation should resume with.
+ */
+
 import type { ProviderId } from "../core/providerLauncher/types.js";
 import type { ProviderBackendKind, ProviderRoute } from "../core/providerRuntime/types.js";
 import type {
