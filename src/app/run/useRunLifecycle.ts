@@ -1,3 +1,12 @@
+/**
+ * Ending runs and returning home: finalizing a completed or failed run,
+ * canceling the active run (prompt or shell), Esc/Ctrl+C handling, quitting,
+ * copying the transcript and saving plan files.
+ *
+ * Only the current run can be finalized or canceled; a late provider callback
+ * for an older run is ignored (`isCurrentRun`).
+ */
+
 import type { useFocusManager } from "ink";
 import { useCallback } from "react";
 import * as perf from "../../core/perf/profiler.js";
@@ -110,6 +119,10 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
     dispatchSession({ type: "RESET_INPUT" });
   }, [dispatchSession]);
 
+  /**
+   * Replaces the transcript with `seedEvents` (the startup notices) and resets
+   * the composer, usage totals and focus. Used by /clear.
+   */
   const resetToHomeScreen = useCallback(
     (seedEvents: TimelineEvent[] = []) => {
       dispatchSession({
@@ -390,6 +403,11 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
     uiState.kind,
   ]);
 
+  /**
+   * Quits after canceling the active run and letting providers stop, the
+   * Codexa model unload and the workbench save. During a conversation switch
+   * the quit waits until the switch finishes.
+   */
   const handleQuit = useCallback(() => {
     const quit = () => {
       pipelineGenerationRef.current++;

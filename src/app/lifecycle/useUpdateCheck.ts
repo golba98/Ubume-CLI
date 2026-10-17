@@ -1,3 +1,12 @@
+/**
+ * Update checks for the interactive session.
+ *
+ * Owns the update scheduler: the startup check (which holds the first
+ * interactive frame on the update prompt), periodic background checks, and
+ * on-demand `/update check` requests that share the scheduler's in-flight
+ * request. A failed check never clears an update that was already detected.
+ */
+
 import { useCallback, useEffect, useRef } from "react";
 import { APP_VERSION } from "../../config/settings.js";
 import {
@@ -74,7 +83,9 @@ export function useUpdateCheck(context: UseUpdateCheckContext) {
     // Only the startup gate is closed here; a late result must never close an
     // overlay the user opened after startup.
     const leaveStartupOverlay = () => {
-      if (screenRef.current === "update-prompt") returnFromUpdateOverlayRef.current();
+      if (screenRef.current === "update-prompt") {
+        returnFromUpdateOverlayRef.current();
+      }
     };
 
     const scheduler = createUpdateCheckScheduler({
@@ -82,14 +93,18 @@ export function useUpdateCheck(context: UseUpdateCheckContext) {
       ...schedulerDepsRef.current,
       onResult: (result) => {
         if (isVerifiedUpdateResult(result)) {
-          if (!isEquivalentUpdateResult(updateCheckResultRef.current, result)) publish(result);
+          if (!isEquivalentUpdateResult(updateCheckResultRef.current, result)) {
+            publish(result);
+          }
           saveUpdateCheckCache({
             lastChecked: result.checkedAt,
             currentVersion: result.currentVersion,
             latestVersion: result.latestVersion,
             updateAvailable: result.status === "update-available",
           });
-          if (result.status !== "update-available") leaveStartupOverlay();
+          if (result.status !== "update-available") {
+            leaveStartupOverlay();
+          }
           return;
         }
 
@@ -107,11 +122,15 @@ export function useUpdateCheck(context: UseUpdateCheckContext) {
       },
     });
     schedulerRef.current = scheduler;
-    if (startupUpdateEnabled.current) scheduler.start();
+    if (startupUpdateEnabled.current) {
+      scheduler.start();
+    }
 
     return () => {
       scheduler.dispose();
-      if (schedulerRef.current === scheduler) schedulerRef.current = null;
+      if (schedulerRef.current === scheduler) {
+        schedulerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

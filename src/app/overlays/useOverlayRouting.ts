@@ -1,3 +1,13 @@
+/**
+ * Opening overlays: the model, mode, reasoning, theme, settings, auth and
+ * permissions screens, and routing actions inside the permissions panel.
+ *
+ * The model picker opens immediately and shows a loading state while its
+ * provider's models are discovered; it targets the pending provider when one
+ * is set (see useModelPickerModel). The picker's open/closed state is tracked
+ * explicitly in `modelPickerOpenRef` so async work never infers it.
+ */
+
 import type { useFocusManager } from "ink";
 import { useCallback } from "react";
 import { formatWritableRoots } from "../../commands/handler.js";
@@ -20,20 +30,7 @@ import type { PermissionsPanelAction } from "../../ui/panels/PermissionsPanel.js
 
 interface UseOverlayRoutingContext {
   selectionCoordinator: SelectionCoordinator;
-  modelSelectionInFlightRef: React.RefObject<boolean>;
-  setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
-  getInputDebugSnapshot: (extra?: Record<string, unknown>) => {
-    screen: Screen;
-    mode: "chat/input" | "model-picker";
-    modelPickerOpen: boolean;
-    composerEnabled: boolean;
-    inputLocked: boolean;
-    busy: boolean;
-    modelLoading: boolean;
-    modelSelection: boolean;
-    focusTarget: string;
-    stdin: Record<string, unknown>;
-  };
+  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
   screen: Screen;
   modelPickerOpenRef: React.RefObject<boolean>;
   intendedInputModeRef: React.RefObject<"chat/input" | "model-picker">;
@@ -81,6 +78,12 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
     clearWritableRootsWithNotice,
   } = context;
 
+  /**
+   * Opens (or re-focuses) the model picker for the pending provider, or the
+   * active one. It takes navigation ownership: a selection still validating
+   * no longer owns navigation, so if it fails it cannot reopen a picker over
+   * this one or move focus.
+   */
   const openModelPicker = useCallback(() => {
     selectionCoordinator.navigate(pendingRouteProviderId ?? activeProviderRoute.providerId);
     traceInputDebug(
@@ -138,8 +141,6 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
   }, [
     activeProviderRoute.providerId,
     selectionCoordinator,
-    appendEvent,
-    busy,
     ensureProviderModels,
     focusManager,
     getInputDebugSnapshot,
@@ -151,8 +152,12 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
 
   const openModePicker = useCallback(() => {
     setScreen("mode-picker");
-  }, [appendEvent, busy]);
+  }, []);
 
+  /**
+   * Opens the reasoning picker, but only when the model reports its reasoning
+   * levels; Ubume never shows guessed levels. Otherwise it re-runs discovery.
+   */
   const openReasoningPicker = useCallback(() => {
     if (!currentModelCapability?.supportedReasoningLevels?.length) {
       if (!modelCapabilitiesBusy) {
@@ -167,22 +172,15 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
     }
 
     setScreen("reasoning-picker");
-  }, [
-    appendEvent,
-    busy,
-    currentModelCapability,
-    model,
-    modelCapabilitiesBusy,
-    refreshModelCapabilities,
-  ]);
+  }, [appendEvent, currentModelCapability, model, modelCapabilitiesBusy, refreshModelCapabilities]);
 
   const openThemePicker = useCallback(() => {
     setScreen("theme-picker");
-  }, [appendEvent, busy]);
+  }, []);
 
   const openSettingsPanel = useCallback(() => {
     setScreen("settings-panel");
-  }, [appendEvent, busy]);
+  }, []);
 
   const openAuthPanel = useCallback(() => {
     if (busy) {
@@ -195,7 +193,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
 
   const openPermissionsPanel = useCallback(() => {
     setScreen("permissions-panel");
-  }, [appendEvent, busy]);
+  }, []);
 
   const openPermissionsApprovalPicker = useCallback(() => {
     setScreen("permissions-approval-picker");
@@ -222,6 +220,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
     setScreen("permissions-remove-writable-root");
   }, [appendEvent, runtimeConfig.policy.writableRoots.length]);
 
+  /** Routes a permissions panel row to its sub-picker or immediate action. */
   const handlePermissionsPanelAction = useCallback(
     (action: PermissionsPanelAction) => {
       switch (action) {
@@ -265,6 +264,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
       runtimeConfig.policy.writableRoots,
     ],
   );
+
   return {
     openModelPicker,
     openModePicker,

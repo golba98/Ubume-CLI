@@ -1,3 +1,19 @@
+/**
+ * Stable refs describing the active run and the session's background work.
+ *
+ * These are refs rather than state because they are read and written by
+ * async provider callbacks and must never trigger renders:
+ * - which run/turn is current, its lifecycle options and timing;
+ * - `stoppingRef` / `processStoppedRef`: promises that settle when the last
+ *   provider or shell process has fully stopped (switches and queue drains
+ *   wait on them);
+ * - `submissionRef` / `recoveryRef` / `pipelineGenerationRef`: guards that
+ *   serialize submissions, conversation switches and cancellation;
+ * - checkpoint and capture refs used to save a finished run.
+ *
+ * The returned object is memoized once, so hooks may depend on it freely.
+ */
+
 import { useMemo, useRef } from "react";
 import type { GenerationMetadata, ProviderRunControl } from "../../core/providers/types.js";
 

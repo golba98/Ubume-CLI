@@ -4,6 +4,7 @@
  */
 
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
+import type { FileCheckpoint } from "../../core/workspace/checkpoints.js";
 import type {
   ConversationMessage,
   ConversationMetadata,
@@ -105,4 +106,31 @@ export function buildRunAssistantMessage(
     return { role: "assistant", content: generationMetadata.rawOutput, generationMetadata };
   }
   return null;
+}
+
+/**
+ * Checkpoints the rewind view offers. Conversations saved before file
+ * checkpoints existed have none, so every user prompt becomes a
+ * conversation-only checkpoint (no files to restore).
+ */
+export function rewindCheckpoints(
+  checkpoints: FileCheckpoint[],
+  messages: readonly ConversationMessage[],
+): FileCheckpoint[] {
+  if (checkpoints.length > 0) {
+    return checkpoints;
+  }
+  return messages.flatMap((message, index): FileCheckpoint[] =>
+    message.role === "user"
+      ? [
+          {
+            id: `legacy-${index}`,
+            turnId: message.turnId ?? index,
+            messageCount: index,
+            prompt: message.submittedContent ?? message.content,
+            before: { files: {}, complete: false, skipped: [] },
+          },
+        ]
+      : [],
+  );
 }

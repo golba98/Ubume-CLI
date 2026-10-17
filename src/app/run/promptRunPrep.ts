@@ -1,3 +1,9 @@
+/**
+ * Pure helpers for preparing and finishing a prompt run: the per-turn
+ * runtime config, the conversation history sent to the provider, and which
+ * final response text to render.
+ */
+
 import type { PartialRuntimeConfig } from "../../config/runtimeConfig.js";
 import {
   mergeRuntimeConfig,
@@ -18,6 +24,11 @@ import {
 } from "../../session/conversation.js";
 import type { PromptRunTiming } from "../../session/eventIds.js";
 
+/**
+ * Options and callbacks for one prompt run. Normal prompts use the defaults;
+ * plan generation, approved-plan execution, queued prompts, follow-up answers
+ * and Codexa replays each set the fields they need.
+ */
 export interface PromptRunLifecycle {
   historyOverride?: readonly import("../../core/workspace/conversationStore.js").ConversationMessage[];
   parseActionRequired?: boolean;
@@ -36,6 +47,13 @@ export interface PromptRunLifecycle {
   onCanceled?: (result: { turnId: number; runId: number }) => void;
 }
 
+/**
+ * The response text to render when a run completes, or `undefined` to keep
+ * what was already streamed (avoiding a visible re-render). Streamed text
+ * "covers" the response when it matches after whitespace normalization, or
+ * is a prefix of more than 80% of it. Plan runs prefer the trailing plan
+ * section captured since the last tool call.
+ */
 export function chooseFinalResponse(
   streamedAssistantContent: string,
   safeResponse: string,
@@ -57,6 +75,7 @@ export function chooseFinalResponse(
       : safeResponse;
 }
 
+/** Adds `codex login` recovery steps to an authentication failure message. */
 export function formatCodexAuthFailure(safeMessage: string, codexAuthFailure: boolean): string {
   return codexAuthFailure
     ? [
@@ -73,8 +92,16 @@ export function formatCodexAuthFailure(safeMessage: string, codexAuthFailure: bo
 // churn during streaming/action updates.
 export const LIVE_UPDATE_FLUSH_MS = 50;
 
+/** Flush interval when only progress/tool updates are pending (no assistant text). */
 export const PROGRESS_ONLY_FLUSH_MS = 175;
 
+/**
+ * Resolves the runtime config for one turn: lifecycle overrides, the active
+ * route's model and reasoning, and the execution mode. Prompts that look like
+ * edits may auto-upgrade a read-only mode (unless the lifecycle disables it);
+ * clearly safe cleanup prompts run with low reasoning. Codexa always runs in
+ * `suggest` mode.
+ */
 export function preparePromptRun(
   runtimeConfig: RuntimeConfig,
   lifecycle: PromptRunLifecycle,
@@ -116,6 +143,12 @@ export function preparePromptRun(
   return { runtimeForTurn, fastCleanupRun, executionModeDecision, effectiveMode };
 }
 
+/**
+ * The conversation history to send with a prompt. Local, Mistral and Codexa
+ * receive the full history (they compact their own context window); other
+ * providers receive the most recent messages that fit the model's context.
+ * Codexa receives its raw generation output instead of rendered replies.
+ */
 export function selectProviderHistory(
   activeConversation: ConversationRecord | null,
   activeProviderRoute: ProviderRoute,
@@ -152,7 +185,14 @@ export function selectProviderHistory(
   return conversationHistory;
 }
 
+/**
+ * Runs `finish` after the live updates just flushed have rendered: deferred
+ * by one tick when something was flushed, immediately otherwise.
+ */
 export function finishAfterLiveFlush(flushedLiveUpdates: boolean, finish: () => void): void {
-  if (flushedLiveUpdates) setTimeout(finish, 0);
-  else finish();
+  if (flushedLiveUpdates) {
+    setTimeout(finish, 0);
+  } else {
+    finish();
+  }
 }

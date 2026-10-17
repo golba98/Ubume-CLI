@@ -1,3 +1,12 @@
+/**
+ * Builds the element shown in the composer slot: the plan action picker
+ * while a plan awaits review, the plan feedback entry while collecting a
+ * revision note, and the normal prompt composer otherwise.
+ *
+ * The element is memoized so that streaming updates, which re-render App
+ * constantly, do not rebuild the composer.
+ */
+
 import { useMemo } from "react";
 import { estimateTokens } from "../../config/settings.js";
 import type { ModelSpec } from "../../core/providerRuntime/contextMetadata.js";
@@ -32,7 +41,6 @@ interface UseAppComposerContext {
   modelDisplayName: string;
   activeRuntimeDisplay: ReturnType<typeof buildActiveRuntimeDisplay>;
   activeThemeName: string;
-  composerReasoningLevel: "";
   planMode: boolean;
   showBusyLoader: boolean;
   interruptHint: InterruptHint | null;
@@ -79,7 +87,6 @@ export function useAppComposer(context: UseAppComposerContext) {
     modelDisplayName,
     activeRuntimeDisplay,
     activeThemeName,
-    composerReasoningLevel,
     planMode,
     showBusyLoader,
     interruptHint,
@@ -155,7 +162,8 @@ export function useAppComposer(context: UseAppComposerContext) {
         model={modelDisplayName}
         footerModelDisplay={activeRuntimeDisplay.footerModelDisplay}
         themeName={activeThemeName}
-        reasoningLevel={composerReasoningLevel}
+        // The footer shows reasoning through the runtime display.
+        reasoningLevel=""
         contextDisplay={activeRuntimeDisplay.contextDisplay}
         showContext={activeRuntimeDisplay.showContext}
         planMode={planMode}
@@ -215,7 +223,6 @@ export function useAppComposer(context: UseAppComposerContext) {
     activeRuntimeDisplay.contextDisplay,
     activeRuntimeDisplay.showContext,
     activeThemeName,
-    composerReasoningLevel,
     planMode,
     showBusyLoader,
     conversationChars,

@@ -1,3 +1,12 @@
+/**
+ * State for the `/usage` panel: the usage adapter and scope for the active
+ * route, the latest snapshot, and refreshing it.
+ *
+ * Usage results are cached per scope by a shared usage service, so switching
+ * providers shows what is already known for the new scope, and a late result
+ * for a scope the user has left is kept in the cache but not shown.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
 import type { ModelContextMetadata } from "../../core/providerRuntime/contextMetadata.js";
@@ -85,7 +94,9 @@ export function useProviderUsage({
     setView(service.peek(scopeKey));
     void pending.then((next) => {
       // Results for a scope the user has since left stay cached but never render.
-      if (mountedRef.current && scopeRef.current === next.scopeKey) setView(next);
+      if (mountedRef.current && scopeRef.current === next.scopeKey) {
+        setView(next);
+      }
     });
   }, [
     localFacts,

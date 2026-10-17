@@ -1,3 +1,18 @@
+/**
+ * Startup initialization and the app's top-level state.
+ *
+ * Runs once per App render, before any other hook, and returns every state
+ * slot and ref that more than one hook shares: the session reducer, settings
+ * and provider config loaded at startup, screen and overlay state, workbench
+ * registries, provider/model loading state and the run refs (`useRunRefs`).
+ *
+ * Invariants:
+ * - Values read from disk at startup are read exactly once.
+ * - `screenRef`, `terminalLayoutColsRef` and `staticRepaintGenerationRef` are
+ *   assigned during render, so code running at frame-write time (the
+ *   clear-frame boundary) and in async callbacks sees the committing values.
+ */
+
 import { useMemo, useRef, useState } from "react";
 import type { LaunchArgs } from "../../config/launchArgs.js";
 import { type LayeredConfigResult, resolveLayeredConfig } from "../../config/layeredConfig.js";

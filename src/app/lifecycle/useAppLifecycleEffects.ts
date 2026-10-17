@@ -21,7 +21,7 @@ import type { HeaderConfig, Theme } from "../../config/settings.js";
 import { shutdownLocalHarness } from "../../core/providerRuntime/localHarness/runtime.js";
 import type { BackendProvider } from "../../core/providers/types.js";
 import type { ThemeSelectionState } from "../../ui/theme.js";
-import { buildSettingsPayload } from "../models/useSettings.js";
+import { buildSettingsPayload } from "../settings/useSettings.js";
 
 interface UseAppLifecycleEffectsContext {
   baseRuntimeConfigRef: React.RefObject<RuntimeConfig>;

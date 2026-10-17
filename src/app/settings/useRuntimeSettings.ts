@@ -1,3 +1,17 @@
+/**
+ * Runtime configuration for the session, and provider route persistence.
+ *
+ * - The effective runtime config is the layered TOML config
+ *   (`baseLayeredConfig`) plus a session override patch. `updateRuntimeConfig`
+ *   stores only the difference from the base, so a config reload is not
+ *   shadowed by values the user never changed.
+ * - `providers.json` (workspace provider config) is written only through
+ *   `updateProviderWorkspaceConfig`, which applies changes to the latest saved
+ *   config. `persistActiveRoute` builds on it: it saves the route first and
+ *   returns false (after reporting the error) when the save fails, so a
+ *   caller never publishes a route that is not on disk.
+ */
+
 import { useCallback, useRef } from "react";
 
 import type { LaunchArgs } from "../../config/launchArgs.js";
@@ -59,9 +73,11 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
     appendEvent,
   } = context;
 
+  // The newest provider config, including writes React has not rendered yet.
   const configRef = useRef(providerWorkspaceConfig);
   configRef.current = providerWorkspaceConfig;
 
+  /** Re-reads the layered TOML config (for example after a trust change). */
   const reloadBaseLayeredConfig = useCallback(() => {
     const nextConfig = resolveLayeredConfig({ workspaceRoot, launchArgs });
     baseRuntimeConfigRef.current = nextConfig.runtime;
@@ -69,6 +85,7 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
     return nextConfig;
   }, [launchArgs, workspaceRoot]);
 
+  /** Applies `updater` to the effective runtime config for this session. */
   const updateRuntimeConfig = useCallback((updater: (current: RuntimeConfig) => RuntimeConfig) => {
     setSessionRuntimeOverride((currentPatch) => {
       const baseRuntime = baseRuntimeConfigRef.current;
@@ -108,6 +125,14 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
     [workspaceRoot],
   );
 
+  /**
+   * Saves `providerId`/`nextModel` as the active route and as that provider's
+   * default model and reasoning. Also clears a resumed conversation's route
+   * override and records the route in the active conversation's metadata.
+   *
+   * Returns false when the route is not selectable in this channel or the
+   * save failed; the previous route and preferences are then unchanged.
+   */
   const persistActiveRoute = useCallback(
     (
       providerId: ProviderId,
@@ -158,6 +183,7 @@ export function useRuntimeSettings(context: UseRuntimeSettingsContext) {
     [appendEvent, updateProviderWorkspaceConfig],
   );
 
+  /** Saves a provider's default model and reasoning without changing the active route. */
   const persistProviderDefaultModelAndReasoning = useCallback(
     (providerId: ProviderId, modelId: string, nextReasoning: string) => {
       try {

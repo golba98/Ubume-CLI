@@ -1,3 +1,27 @@
+/**
+ * The interactive app's root component.
+ *
+ * App composes the hooks under `src/app/` and renders two roots:
+ * `TranscriptShell` for the main chat and `AppShell` (with `OverlayPanels`)
+ * for overlays. It owns very little logic itself; read
+ * docs/architecture/app.md for the full map.
+ *
+ * Invariants (do not "simplify" these away):
+ * - Hook call order is significant. Effects run in declaration order, and
+ *   several hooks were split out of larger ones at exactly their original
+ *   positions to keep that order. Move a hook only if you have checked the
+ *   effects it contains and the ones around it.
+ * - The terminal and clear-frame wiring stays inline here: creating and
+ *   disposing the clear-frame boundary controller, syncing it with session
+ *   state, the alternate-screen fallback, and `armTranscriptReplacement`.
+ *   The frame write that owns screen transitions happens before effects run.
+ * - Render-time ref assignments (`snapshotRef`, `inputValueRef`, `busyRef`, …)
+ *   stay in render, never in effects, so async callbacks and the frame writer
+ *   see the values of the render being committed.
+ * - `OverlayPanels` is not memoized; `AppShell` is, with a custom comparator,
+ *   so avoid adding props to it that change during streaming.
+ */
+
 import { useApp, useFocusManager, useStdin, useStdout } from "ink";
 import {
   useCallback,
@@ -10,27 +34,20 @@ import {
 } from "react";
 import type { LaunchArgs } from "../config/launchArgs.js";
 import { applyLayeredRuntimeOverride } from "../config/layeredConfig.js";
-import { saveSettings } from "../config/persistence.js";
 import { buildRuntimeSummary, resolveRuntimeConfig } from "../config/runtimeConfig.js";
 import {
   estimateTokens,
   formatBusyLoaderSettingValue,
-  formatReasoningLabel,
-  formatThemeLabel,
   formatWorkspaceDisplayPath,
   type HeaderConfig,
   type UserSettingValues,
 } from "../config/settings.js";
-import {
-  type CodexModelCapabilities,
-  findModelCapability,
-  normalizeReasoningForModelCapabilities,
-} from "../core/models/codexModelCapabilities.js";
+import type { CodexModelCapabilities } from "../core/models/codexModelCapabilities.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import type { LocalBackendId, ProviderId } from "../core/providerLauncher/types.js";
 import { isLocalRuntime } from "../core/providerRuntime/deployment.js";
 import type { checkLocalProvider } from "../core/providerRuntime/local.js";
-import { createRoutedProvider, discoverProviderModels } from "../core/providerRuntime/registry.js";
+import { createRoutedProvider } from "../core/providerRuntime/registry.js";
 import { getBackendProvider } from "../core/providers/registry.js";
 import type { BackendProvider } from "../core/providers/types.js";
 import { createClearFrameBoundaryController } from "../core/terminal/clearFrameBoundary.js";
@@ -42,7 +59,7 @@ import { createTerminalModeController } from "../core/terminal/terminalControl.j
 import { sanitizeTerminalOutput } from "../core/terminal/terminalSanitize.js";
 import { detectGlobalPackageManager, getUpdateCommand } from "../core/version/packageManager.js";
 import type { UpdateCheckResult } from "../core/version/updateCheck.js";
-import { CheckpointStore, type FileCheckpoint } from "../core/workspace/checkpoints.js";
+import { CheckpointStore } from "../core/workspace/checkpoints.js";
 import { createEventId } from "../session/eventIds.js";
 import { createInitialPlanFlowState, type PlanFlowState } from "../session/planFlow.js";
 import type { Screen, TimelineEvent } from "../session/types.js";
@@ -56,8 +73,9 @@ import { getContentWidth, resolveStartupHeaderMode } from "../ui/layout.js";
 import { measurePlanActionPickerRows } from "../ui/panels/PlanActionPicker.js";
 import { measureTextEntryPanelRows } from "../ui/panels/TextEntryPanel.js";
 import { buildActiveRuntimeDisplay, runtimeDisplayToSummary } from "../ui/render/runtimeDisplay.js";
-import { commitThemeSelection, getDisplayedThemeName, THEMES, ThemeProvider } from "../ui/theme.js";
+import { getDisplayedThemeName, THEMES, ThemeProvider } from "../ui/theme.js";
 import { TranscriptShell } from "../ui/timeline/TranscriptShell.js";
+import { rewindCheckpoints } from "./conversation/conversationMetadata.js";
 import { useClearConversation } from "./conversation/useClearConversation.js";
 import { useConversation } from "./conversation/useConversation.js";
 import { useAppComposer } from "./input/useAppComposer.js";
@@ -73,8 +91,7 @@ import { useActiveModelMetadata } from "./models/useActiveModelMetadata.js";
 import { useModelCatalog } from "./models/useModelCatalog.js";
 import { useModelPickerModel } from "./models/useModelPickerModel.js";
 import { useModelSelection } from "./models/useModelSelection.js";
-import { useRuntimeSettings } from "./models/useRuntimeSettings.js";
-import { buildSettingsPayload, useSettings } from "./models/useSettings.js";
+import { useOpenAiModelReconcile } from "./models/useOpenAiModelReconcile.js";
 import { OverlayPanels } from "./overlays/OverlayPanels.js";
 import { useOverlayRouting } from "./overlays/useOverlayRouting.js";
 import { useRouteStatus } from "./providers/routeStatus.js";
@@ -85,6 +102,9 @@ import { usePlanFlow } from "./run/usePlanFlow.js";
 import { usePromptExecution } from "./run/usePromptExecution.js";
 import { usePromptRun } from "./run/usePromptRun.js";
 import { useRunLifecycle } from "./run/useRunLifecycle.js";
+import { useRuntimeSettings } from "./settings/useRuntimeSettings.js";
+import { useSettings } from "./settings/useSettings.js";
+import { useThemeCommit } from "./settings/useThemeCommit.js";
 import { useAppState } from "./state/useAppState.js";
 
 interface AppProps {
@@ -96,6 +116,8 @@ interface AppProps {
 export function App({ launchArgs, providerOverride }: AppProps) {
   const { exit, suspendTerminal } = useApp();
   const focusManager = useFocusManager();
+  // ─── Startup state ───────────────────────────────────────────────────────────
+
   const appState = useAppState({ providerOverride, launchArgs });
   const selectionVersion = useSyncExternalStore(
     appState.selectionCoordinator.subscribe,
@@ -103,7 +125,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   );
   const {
     workspaceRoot,
-    initialSettings,
     initialUpdateCheckResult,
     initialProviderWorkspaceConfig,
     terminalLayout,
@@ -126,7 +147,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     themeSelection,
     setThemeSelection,
     themeNotice,
-    setThemeNotice,
     customTheme,
     setCustomTheme,
     headerConfig,
@@ -167,6 +187,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     providerModelLoading,
     activeContextMetadata,
   } = appState;
+  // ─── Terminal and clear-frame wiring (must stay inline) ─────────────────────
+
   const { stdout } = useStdout();
   const { stdin } = useStdin();
   // Keep Ink's raw-mode refcount above zero for the whole session so composer
@@ -242,8 +264,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   const globalPackageManager = useMemo(() => detectGlobalPackageManager(), []);
   const overlayMode = screen !== "main";
 
-  // ─── Effects & Handlers ──────────────────────────────────────────────────────
-
   useEffect(() => {
     return () => {
       clearFrameBoundaryController?.dispose();
@@ -296,7 +316,12 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     return () => {
       terminalControl.setAlternateScreen(false, "src/app/App.tsx:overlay.cleanupAlternateScreen");
     };
-  }, [terminalControl]); // Incremented on /clear to suppress stale command events
+  }, [terminalControl]);
+
+  // ─── App-local refs ─────────────────────────────────────────────────────────
+  // Shared by several hooks below; refs because async work reads and writes
+  // them without needing a render.
+
   const externalCliStatusRef = useRef(sessionState.externalCliStatus);
   const previousScreenRef = useRef<Screen>("main");
   const themePreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -327,6 +352,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     activeThemeName === "custom"
       ? { ...THEMES.purple, ...customTheme }
       : (THEMES[activeThemeName] ?? THEMES.purple);
+  // ─── Runtime config, provider route and model metadata ───────────────────────
+
   const baseRuntimeConfigRef = useRef(baseLayeredConfig.runtime);
   const layeredRuntimeConfig = useMemo(
     () =>
@@ -399,6 +426,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     reasoningLevel,
   });
 
+  // ─── Presentation values ─────────────────────────────────────────────────────
+
   const workspaceLabel = useMemo(
     () => formatWorkspaceDisplayPath(workspaceRoot, workspaceDisplayMode),
     [workspaceDisplayMode, workspaceRoot],
@@ -444,6 +473,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ],
   );
   const currentModelSpec = activeRuntimeDisplay.modelSpec;
+
+  // ─── Composer state, busy focus and layout ─────────────────────────────────────
 
   // Refs for mutable state values — used by stable callbacks below so they
   // always read the latest value without being listed as deps (which would
@@ -535,6 +566,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     reasoningLevel,
   });
 
+  // ─── Provider client, lifecycle effects and focus ──────────────────────────────
+
   const backendProvider: BackendProvider = useMemo(() => getBackendProvider(backend), [backend]);
   const provider: BackendProvider = useMemo(() => {
     if (providerOverride) return providerOverride;
@@ -573,6 +606,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     planFlow,
     modelPickerOpenRef,
   });
+
+  // ─── Transcript events and the clear-frame boundary arming ─────────────────────
 
   const appendStaticEvent = useCallback(
     (event: TimelineEvent) => {
@@ -629,6 +664,10 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       terminalControl,
     ],
   );
+
+  // ─── Feature hooks ─────────────────────────────────────────────────────────────
+  // Conversation → settings and models → providers and overlays → runs →
+  // input. Later hooks consume earlier hooks' callbacks.
 
   const conversation = useConversation({
     armTranscriptReplacement,
@@ -695,44 +734,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     returnFromUpdateOverlay,
   });
 
-  const repaintCommittedTheme = useCallback(
-    (themeName: string) => {
-      // Persist the committed value synchronously as well as through the normal
-      // settings effect. This matters when the terminal is closed immediately
-      // after choosing a theme, before React gets another effect pass.
-      saveSettings(
-        buildSettingsPayload(
-          initialSettings.current,
-          {
-            theme: themeName,
-            workspaceDisplayMode,
-            terminalTitleMode,
-            showBusyLoader,
-            customTheme,
-          },
-          authPreference,
-          headerConfig,
-        ),
-      );
-      setThemeSelection((currentTheme) => commitThemeSelection(currentTheme, themeName));
-      setThemeNotice(`Theme switched to ${formatThemeLabel(themeName)}.`);
-      if (themeNoticeTimerRef.current) clearTimeout(themeNoticeTimerRef.current);
-      themeNoticeTimerRef.current = setTimeout(() => {
-        setThemeNotice(null);
-        themeNoticeTimerRef.current = null;
-      }, 1800);
-    },
-    [
-      authPreference,
-      customTheme,
-      headerConfig,
-      showBusyLoader,
-      terminalTitleMode,
-      workspaceDisplayMode,
-    ],
-  );
+  const { repaintCommittedTheme } = useThemeCommit({
+    ...appState,
+    themeNoticeTimerRef,
+  });
 
-  // Track clear epoch to suppress stale command result events
+  // Mirror session values into refs read by async callbacks. The clear epoch
+  // lets late command results from before a /clear be ignored.
   useEffect(() => {
     clearEpochRef.current = sessionState.clearEpoch;
   }, [sessionState.clearEpoch]);
@@ -741,50 +749,18 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     externalCliStatusRef.current = sessionState.externalCliStatus;
   }, [sessionState.externalCliStatus]);
 
-  // Reconcile effort only. A withdrawn model always requires explicit reselection.
-  useEffect(() => {
-    if (
-      providerOverride ||
-      preserveSavedRouteRef.current ||
-      activeProviderRoute.providerId !== "openai" ||
-      modelCapabilities?.status !== "ready" ||
-      discoverProviderModels("openai").freshness !== "verified"
-    )
-      return;
-    const selected = findModelCapability(modelCapabilities, model);
-    if (!selected || !selected.available || selected.hidden) {
-      const message = `Configured model ${model} is unavailable. Select a model explicitly before sending.`;
-      if (routeChoiceRequiredRef.current !== message)
-        appendEvent("error", "Selected model unavailable", message);
-      routeChoiceRequiredRef.current = message;
-      return;
-    }
-    if (
-      routeChoiceRequiredRef.current ===
-      `Configured model ${model} is unavailable. Select a model explicitly before sending.`
-    )
-      routeChoiceRequiredRef.current = null;
-    const nextReasoning = normalizeReasoningForModelCapabilities(
-      model,
-      reasoningLevel,
-      modelCapabilities,
-    );
-    if (nextReasoning === reasoningLevel) return;
-    updateRuntimeConfig((current) => ({ ...current, reasoningLevel: nextReasoning }));
-    appendEvent(
-      "system",
-      "Reasoning updated",
-      `Reasoning level is now ${formatReasoningLabel(nextReasoning)} for ${model}.`,
-    );
-  }, [
-    activeProviderRoute.providerId,
-    appendEvent,
-    model,
-    modelCapabilities,
+  useOpenAiModelReconcile({
     providerOverride,
+    preserveSavedRouteRef,
+    routeChoiceRequiredRef,
+    activeProviderRoute,
+    modelCapabilities,
+    model,
     reasoningLevel,
+    appendEvent,
     updateRuntimeConfig,
-  ]);
+  });
+
   const modelSelection = useModelSelection({
     ...runtimeSettings,
     ...appState,
@@ -817,7 +793,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...runtimeSettings,
     appendEvent,
     returnFromUpdateOverlay,
-    busy,
   });
   const {
     setAuthPreferenceWithNotice,
@@ -855,7 +830,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   const overlayRouting = useOverlayRouting({
     ...appState,
     ...settings,
-    modelSelectionInFlightRef,
     getInputDebugSnapshot,
     modelPickerOpenRef,
     intendedInputModeRef,
@@ -1010,28 +984,18 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     runPlanGeneration,
   });
 
+  // ─── Render inputs ─────────────────────────────────────────────────────────────
+
   const modelDisplayName = activeRuntimeDisplay.modelDisplay;
   const activeConversationId = activeConversationRef.current?.metadata.id ?? null;
   const currentCheckpointStore = useMemo(
     () => (activeConversationId ? new CheckpointStore(workspaceRoot, activeConversationId) : null),
     [activeConversationId, workspaceRoot],
   );
-  const recoveryCheckpoints = checkpointsRef.current.length
-    ? checkpointsRef.current
-    : (activeConversationRef.current?.messages ?? []).flatMap((message, index): FileCheckpoint[] =>
-        message.role === "user"
-          ? [
-              {
-                id: `legacy-${index}`,
-                turnId: message.turnId ?? index,
-                messageCount: index,
-                prompt: message.submittedContent ?? message.content,
-                before: { files: {}, complete: false, skipped: [] },
-              },
-            ]
-          : [],
-      );
-  const composerReasoningLevel = "";
+  const recoveryCheckpoints = rewindCheckpoints(
+    checkpointsRef.current,
+    activeConversationRef.current?.messages ?? [],
+  );
   const headerRuntimeSummary = useMemo(
     () => runtimeDisplayToSummary(activeRuntimeDisplay, runtimeSummary),
     [activeRuntimeDisplay, runtimeSummary],
@@ -1067,7 +1031,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelDisplayName,
     activeRuntimeDisplay,
     activeThemeName,
-    composerReasoningLevel,
     planMode,
     currentModelSpec,
     inputValue,
@@ -1079,6 +1042,18 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     openProviderPicker,
     activeProviderRoute,
   });
+
+  // The update prompt shows its own notice, so the header card is hidden there.
+  const headerUpdateNotice =
+    screen !== "update-prompt" &&
+    updateCheckResult?.status === "update-available" &&
+    updateCheckResult.latestVersion
+      ? {
+          latestVersion: updateCheckResult.latestVersion,
+          currentVersion: updateCheckResult.currentVersion,
+          updateCommand: getUpdateCommand(globalPackageManager).displayCommand,
+        }
+      : null;
 
   // ─── Render ──────────────────────────────────────────────────────────────────
 
@@ -1118,17 +1093,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
           verboseMode={verboseMode}
           clearCount={sessionState.clearCount}
           headerConfig={effectiveHeaderConfig}
-          updateAvailable={
-            screen !== "update-prompt" &&
-            updateCheckResult?.status === "update-available" &&
-            updateCheckResult.latestVersion
-              ? {
-                  latestVersion: updateCheckResult.latestVersion,
-                  currentVersion: updateCheckResult.currentVersion,
-                  updateCommand: getUpdateCommand(globalPackageManager).displayCommand,
-                }
-              : null
-          }
+          updateAvailable={headerUpdateNotice}
           panel={
             <OverlayPanels
               screen={screen}

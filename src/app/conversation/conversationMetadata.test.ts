@@ -11,6 +11,7 @@ import {
   conversationCharCount,
   interruptedRunMessage,
   promptHistoryFromMessages,
+  rewindCheckpoints,
   withRouteMetadata,
 } from "./conversationMetadata.js";
 
@@ -92,4 +93,21 @@ test("run messages carry generation metadata, and Codexa keeps raw output when n
     generationMetadata,
   });
   assert.equal(buildRunAssistantMessage(null, "completed", {}), null);
+});
+
+test("rewind offers saved checkpoints, or conversation-only ones for older chats", () => {
+  const saved = [{ id: "c1" }] as never[];
+  assert.equal(rewindCheckpoints(saved, []), saved, "existing checkpoints are returned as-is");
+  const legacy = rewindCheckpoints(
+    [],
+    [user("first"), assistant("ok"), { ...user("second"), submittedContent: "second (expanded)" }],
+  );
+  assert.deepEqual(
+    legacy.map((point) => [point.id, point.messageCount, point.prompt]),
+    [
+      ["legacy-0", 0, "first"],
+      ["legacy-2", 2, "second (expanded)"],
+    ],
+  );
+  assert.equal(legacy[0]?.before.complete, false);
 });
