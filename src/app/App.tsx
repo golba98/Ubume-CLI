@@ -999,9 +999,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     mode,
     setPlanFlow,
     runPlanGeneration,
-    focusManager,
-    handlePlanFeedbackSubmit,
-    inputValue,
   });
 
   const modelDisplayName = activeRuntimeDisplay.modelDisplay;

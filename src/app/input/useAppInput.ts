@@ -1,8 +1,25 @@
-import { existsSync } from "node:fs";
-import path from "node:path";
-import type { useFocusManager } from "ink";
-import { useCallback } from "react";
-import { handleCommand } from "../../commands/handler.js";
+/**
+ * Composer submission: decides what Enter does with the composer's text.
+ *
+ * `handleSubmit` routes a submission through these steps, stopping at the
+ * first one that consumes it (see `submitSteps.ts`):
+ *
+ * 1. Direct commands — `/codexa`, `/perf`, workbench views, `/send-now`,
+ *    `/resume <id>`.
+ * 2. Shell — `!command`.
+ * 3. Slash commands — parsed by `commands/handler.ts`, applied by
+ *    `commandDispatch.ts`.
+ * 4. Prompts — attachments are expanded, then the text is either an answer to
+ *    the assistant's pending question, queued behind an active run, sent to
+ *    Codexa, intercepted for outside-workspace paths, or started as a plan or
+ *    a normal run.
+ *
+ * Submissions and slash commands never overlap: `submissionRef` and the
+ * pipeline generation counter let a cancel or `/clear` abandon a submission
+ * that is still waiting for attachments or a previous run.
+ */
+
+import { useCallback, useRef } from "react";
 import type { LayeredConfigResult } from "../../config/layeredConfig.js";
 import type {
   ResolvedRuntimeConfig,
@@ -13,54 +30,47 @@ import type {
   RuntimeSandboxMode,
   RuntimeServiceTier,
 } from "../../config/runtimeConfig.js";
-import type { AvailableMode, AvailableModel, ReasoningLevel } from "../../config/settings.js";
-import {
-  type AuthPreference,
-  estimateTokens,
-  type TerminalTitleMode,
-  type WorkspaceDisplayMode,
+import type {
+  AuthPreference,
+  AvailableMode,
+  AvailableModel,
+  ReasoningLevel,
+  TerminalTitleMode,
+  WorkspaceDisplayMode,
 } from "../../config/settings.js";
 import type { CodexModelCapabilities } from "../../core/models/codexModelCapabilities.js";
 import * as perf from "../../core/perf/profiler.js";
 import type { ProviderConfig } from "../../core/providerLauncher/types.js";
-import { unloadCodexaNative } from "../../core/providerRuntime/codexaNative.js";
 import type { ProviderImageAttachment } from "../../core/providerRuntime/types.js";
 import { sanitizeTerminalInput } from "../../core/terminal/terminalSanitize.js";
 import type { GlobalPackageManager } from "../../core/version/packageManager.js";
 import type { UpdateCheckResult } from "../../core/version/updateCheck.js";
-import { resolveUbumeAttachmentDir } from "../../core/workspace/appData.js";
-import { isImageFile } from "../../core/workspace/attachments.js";
 import type { ConversationRecord } from "../../core/workspace/conversationStore.js";
 import type { WorkspaceCommandContext } from "../../core/workspace/launchContext.js";
 import type { ProjectInstructionsLoadResult } from "../../core/workspace/projectInstructions.js";
-import { expandFileAttachments } from "../../core/workspace/workspaceFiles.js";
-import {
-  findOutsideWorkspacePaths,
-  formatSkippedDependencyPath,
-  getPromptWorkspaceGuardMessage,
-} from "../../core/workspace/workspaceGuard.js";
 import { findUserPrompt, type SessionAction, type SessionState } from "../../session/appSession.js";
 import { buildFollowUpPrompt } from "../../session/chatLifecycle.js";
-import type { PromptRunTiming } from "../../session/eventIds.js";
-import { createPromptRunTiming } from "../../session/eventIds.js";
+import { createPromptRunTiming, type PromptRunTiming } from "../../session/eventIds.js";
 import { type PlanFlowState, startPlanGeneration } from "../../session/planFlow.js";
-import type { Screen, TimelineEvent, UIState, UserPromptEvent } from "../../session/types.js";
+import type { Screen, TimelineEvent, UIState } from "../../session/types.js";
 import { type FileAttachment, type PromptQueue, queuedPrompt } from "../../session/workbench.js";
-import type { InterruptHint } from "../../ui/chrome/composer/composerModel.js";
 import {
-  assertAttachedContent,
-  expandPastedContent,
   type ImageAttachmentRegistry,
   type PastedContentRegistry,
   selectImageAttachments,
 } from "../../ui/input/pastedContent.js";
 import type { PendingImportFile } from "../../ui/panels/AttachmentImportPanel.js";
 import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
-import type { ThemeSelectionState } from "../../ui/theme.js";
 import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
-import { dispatchCommand } from "./commandDispatch.js";
+import {
+  expandPromptAttachments,
+  handleShellSubmission,
+  interceptOutsideWorkspacePaths,
+  matchDirectCommand,
+  routeSlashCommand,
+} from "./submitSteps.js";
 
-interface UseAppInputContext {
+export interface UseAppInputContext {
   activeConversationRef: React.RefObject<ConversationRecord | null>;
   submissionRef: React.RefObject<boolean>;
   recoveryRef: React.RefObject<boolean>;
@@ -172,336 +182,71 @@ interface UseAppInputContext {
     preserveInput?: boolean,
     queuedPromptIds?: readonly string[],
   ) => boolean;
-  focusManager: ReturnType<typeof useFocusManager>;
-  handlePlanFeedbackSubmit: (value: string) => void;
-  inputValue: string;
-  interruptHint: InterruptHint | null;
-  togglePlanModeWithNotice: () => void;
-  themeSelection: ThemeSelectionState;
 }
 
 export function useAppInput(context: UseAppInputContext) {
-  const {
-    submissionRef,
-    recoveryRef,
-    getSessionState,
-    appendEvent,
-    dispatchSession,
-    resetComposer,
-    openWorkbench,
-    handleSendNow,
-    busy,
-    resumeConversation,
-    pipelineGenerationRef,
-    stoppingRef,
-    activeRunIdRef,
-    handleShellExecute,
-    layeredRuntimeConfig,
-    runtimeConfig,
-    resolvedRuntimeConfig,
-    workspaceDisplayMode,
-    terminalTitleMode,
-    showBusyLoader,
-    workspaceCommandContext,
-    conversationChars,
-    activeRouteModelCapabilities,
-    routeStatusMessage,
-    activeRouteProvider,
-    projectInstructionsLoad,
-    handleQuit,
-    handleClear,
-    openResumePicker,
-    setModelWithNotice,
-    setModeWithNotice,
-    setReasoningWithNotice,
-    setPlanModeWithNotice,
-    setProjectTrustWithNotice,
-    setApprovalPolicyWithNotice,
-    setSandboxModeWithNotice,
-    setNetworkAccessWithNotice,
-    addWritableRootWithNotice,
-    removeWritableRootWithNotice,
-    clearWritableRootsWithNotice,
-    setServiceTierWithNotice,
-    setPersonalityWithNotice,
-    setAuthPreferenceWithNotice,
-    providerDiagnosticsRef,
-    setWorkspaceDisplayModeWithNotice,
-    setTerminalTitleModeWithNotice,
-    setShowBusyLoader,
-    repaintCommittedTheme,
-    refreshAuthStatus,
-    openProviderPicker,
-    openModelPicker,
-    openModePicker,
-    openReasoningPicker,
-    openSettingsPanel,
-    openThemePicker,
-    openPermissionsPanel,
-    openAuthPanel,
-    openUsagePanel,
-    setVerboseMode,
-    verboseMode,
-    handleCopy,
-    handlePasteImage,
-    handleWorkspaceRelaunch,
-    modelCapabilities,
-    refreshModelCapabilities,
-    updateCheckResult,
-    requestUpdateCheck,
-    setScreen,
-    globalPackageManager,
-    pastedContentRegistryRef,
-    imageAttachmentRegistryRef,
-    fileAttachmentRegistryRef,
-    workspaceRoot,
-    uiState,
-    staticEvents,
-    activeEvents,
-    startPromptRun,
-    promptQueue,
-    saveWorkbenchRef,
-    bumpWorkbench,
-    allowedWritableRoots,
-    setPendingImport,
-    planMode,
-    mode,
-    setPlanFlow,
-    runPlanGeneration,
-    focusManager,
-    handlePlanFeedbackSubmit,
-    inputValue,
-    interruptHint,
-    togglePlanModeWithNotice,
-    themeSelection,
-  } = context;
-
-  const findUserPromptForTurn = useCallback(
-    (turnId: number): UserPromptEvent | null =>
-      findUserPrompt([...staticEvents, ...activeEvents], turnId),
-    [activeEvents, staticEvents],
-  );
+  // handleSubmit is stable; each submission reads the context from the latest
+  // render once, at the moment Enter is pressed.
+  const latestContext = useRef(context);
+  latestContext.current = context;
 
   const handleSubmit = useCallback(async () => {
     const submitTiming = createPromptRunTiming();
     perf.mark("submit");
-    if (submissionRef.current || recoveryRef.current) return;
-    const value = sanitizeTerminalInput(getSessionState().inputValue).trim();
-    if (!value) return;
-
-    // Special perf debug command (not routed through handleCommand)
-    if (value === "/codexa" || value.startsWith("/codexa ")) {
-      resetComposer();
-      if (activeRouteProvider?.id !== "codexa-native") {
-        appendEvent("error", "Codexa", "Select Codexa Native first using /providers and /model.");
-        return;
-      }
-      if (busy) {
-        appendEvent("system", "Codexa", "Cancel or finish the current response first.");
-        return;
-      }
-      const action = value.slice(7).trim();
-      if (action === "settings") {
-        openSettingsPanel();
-        return;
-      }
-      if (action === "unload") {
-        await unloadCodexaNative();
-        appendEvent(
-          "system",
-          "Codexa",
-          "Model unloaded; the next message reloads the selected checkpoint.",
-        );
-        return;
-      }
-      if (action === "replay") {
-        const messages = context.activeConversationRef.current?.messages ?? [];
-        const index = messages.findLastIndex((message) => message.role === "user");
-        if (index < 0) {
-          appendEvent("error", "Codexa", "There is no previous user prompt to replay.");
-          return;
-        }
-        const prompt = messages[index]!.submittedContent ?? messages[index]!.content;
-        startPromptRun(prompt, prompt, {
-          submitTiming,
-          commitPrompt: true,
-          parseActionRequired: false,
-          historyOverride: messages.slice(0, index).map((message) => ({
-            ...message,
-            content: message.generationMetadata?.rawOutput ?? message.content,
-          })),
-        });
-        return;
-      }
-      appendEvent(
-        "system",
-        "Codexa",
-        "/codexa settings · /codexa unload · /codexa replay. Experimental native model; no tools. Interactive exploration is not the frozen benchmark.",
-      );
+    const ctx = latestContext.current;
+    if (ctx.submissionRef.current || ctx.recoveryRef.current) {
       return;
     }
-    if (value === "/perf") {
-      const session = perf.getSession();
-      const summary = session
-        ? perf.buildSummary(session)
-        : "No perf data recorded yet. Set UBUME_PERF=1 and send a prompt first.";
-      appendEvent("system", "Perf report", summary);
-      dispatchSession({ type: "PUSH_HISTORY", value });
-      resetComposer();
+    const value = sanitizeTerminalInput(ctx.getSessionState().inputValue).trim();
+    if (!value) {
       return;
     }
 
-    if (["/queue", "/transcript", "/diff", "/rewind"].includes(value)) {
-      resetComposer();
-      openWorkbench(value.slice(1) as WorkbenchView);
+    // --- Commands -------------------------------------------------------------
+    // Matching is synchronous so that ordinary slash commands below still
+    // dispatch inside the key event, as discrete (immediately rendered) updates.
+    const directCommand = matchDirectCommand(ctx, value, submitTiming);
+    if (directCommand) {
+      await directCommand();
       return;
     }
-    if (value === "/send-now") {
-      resetComposer();
-      await handleSendNow();
-      return;
-    }
-    if (value.startsWith("/resume ")) {
-      if (!busy) resumeConversation(value.slice(8).trim());
-      return;
-    }
-
-    // ========== COMMAND ROUTING (before AWAITING_USER_ACTION) ==========
-    // Shell execution: ! prefix routes directly to the terminal
     if (value.startsWith("!")) {
-      if (busy) return;
-      const shellCmd = value.slice(1).trim();
-      if (!shellCmd) return;
-      submissionRef.current = true;
-      const generation = pipelineGenerationRef.current;
-      try {
-        await stoppingRef.current;
-        if (generation !== pipelineGenerationRef.current || activeRunIdRef.current !== null) return;
-        dispatchSession({ type: "PUSH_HISTORY", value });
-        resetComposer();
-        await handleShellExecute(shellCmd);
-      } finally {
-        submissionRef.current = false;
-      }
+      await handleShellSubmission(ctx, value);
       return;
     }
-
-    // Parse slash commands (/ prefix) and question-prefix invalid commands (? prefix)
-    const commandResult = handleCommand(value, {
-      config: layeredRuntimeConfig,
-      runtime: runtimeConfig,
-      resolvedRuntime: resolvedRuntimeConfig,
-      settings: {
-        workspaceDisplayMode,
-        terminalTitleMode,
-        showBusyLoader,
-      },
-      workspace: workspaceCommandContext,
-      tokensUsed: estimateTokens(conversationChars),
-      modelCapabilities: activeRouteModelCapabilities,
-      routeStatusMessage,
-      activeRouteProviderLabel: activeRouteProvider?.displayName ?? "OpenAI",
-      projectInstructions: projectInstructionsLoad,
-    });
-    const isCommand = commandResult !== null;
-
-    if (isCommand) {
-      // Internal commands should NOT be added to PUSH_HISTORY or sent to provider
-      resetComposer();
-
-      return dispatchCommand({
-        commandResult,
-        handleQuit,
-        handleClear,
-        openResumePicker,
-        setModelWithNotice,
-        setModeWithNotice,
-        appendEvent,
-        setReasoningWithNotice,
-        setPlanModeWithNotice,
-        setProjectTrustWithNotice,
-        setApprovalPolicyWithNotice,
-        setSandboxModeWithNotice,
-        setNetworkAccessWithNotice,
-        addWritableRootWithNotice,
-        removeWritableRootWithNotice,
-        clearWritableRootsWithNotice,
-        setServiceTierWithNotice,
-        setPersonalityWithNotice,
-        setAuthPreferenceWithNotice,
-        providerDiagnosticsRef,
-        setWorkspaceDisplayModeWithNotice,
-        setTerminalTitleModeWithNotice,
-        setShowBusyLoader,
-        repaintCommittedTheme,
-        refreshAuthStatus,
-        openProviderPicker,
-        openModelPicker,
-        openModePicker,
-        openReasoningPicker,
-        openSettingsPanel,
-        openThemePicker,
-        openPermissionsPanel,
-        openAuthPanel,
-        openUsagePanel,
-        setVerboseMode,
-        verboseMode,
-        handleCopy,
-        handlePasteImage,
-        handleWorkspaceRelaunch,
-        modelCapabilities,
-        refreshModelCapabilities,
-        updateCheckResult,
-        requestUpdateCheck,
-        setScreen,
-        globalPackageManager,
-      });
+    const command = routeSlashCommand(ctx, value);
+    if (command) {
+      return command.result;
     }
 
-    // ========== NORMAL PROMPT SUBMISSION (after command routing) ==========
-    submissionRef.current = true;
-    const generation = pipelineGenerationRef.current;
-    let providerValue: string;
-    try {
-      assertAttachedContent(
-        value,
-        pastedContentRegistryRef.current,
-        imageAttachmentRegistryRef.current,
-        fileAttachmentRegistryRef.current,
-      );
-      providerValue = await expandFileAttachments(
-        expandPastedContent(value, pastedContentRegistryRef.current),
-        fileAttachmentRegistryRef.current,
-        workspaceRoot,
-      );
-      for (const attachment of selectImageAttachments(value, imageAttachmentRegistryRef.current)) {
-        if (!existsSync(attachment.path))
-          throw new Error(`Image attachment is missing: ${attachment.name}`);
-      }
-      if (generation !== pipelineGenerationRef.current) return;
-      await stoppingRef.current;
-    } catch (error) {
-      appendEvent("error", "Prompt unavailable", (error as Error).message);
+    // --- Prompts ----------------------------------------------------------------
+    const generation = ctx.pipelineGenerationRef.current;
+    const providerValue = await expandPromptAttachments(ctx, value);
+    if (providerValue === null) {
       return;
-    } finally {
-      submissionRef.current = false;
     }
-    const imageAttachments = selectImageAttachments(value, imageAttachmentRegistryRef.current);
-    // Check for follow-up answer submission
+    const imageAttachments = selectImageAttachments(value, ctx.imageAttachmentRegistryRef.current);
+
+    // An answer to the assistant's pending question resumes that turn.
+    const { uiState } = ctx;
     if (uiState.kind === "AWAITING_USER_ACTION") {
-      const originalUserEvent = findUserPromptForTurn(uiState.turnId);
+      const originalUserEvent = findUserPrompt(
+        [...ctx.staticEvents, ...ctx.activeEvents],
+        uiState.turnId,
+      );
       if (!originalUserEvent) {
-        appendEvent(
+        ctx.appendEvent(
           "error",
           "Follow-up unavailable",
           "The original turn could not be found, so the answer could not be resumed.",
         );
-        dispatchSession({ type: "UI_ACTION", action: { type: "DISMISS_TRANSIENT" } });
+        ctx.dispatchSession({ type: "UI_ACTION", action: { type: "DISMISS_TRANSIENT" } });
         return;
       }
-
-      if (busy) return;
-      startPromptRun(
+      if (ctx.busy) {
+        return;
+      }
+      ctx.startPromptRun(
         value,
         buildFollowUpPrompt({
           originalPrompt: originalUserEvent.prompt,
@@ -513,19 +258,24 @@ export function useAppInput(context: UseAppInputContext) {
       return;
     }
 
-    if (generation !== pipelineGenerationRef.current) return;
-    // Check if app is busy for normal prompts
-    if (!isCommand && activeRunIdRef.current !== null) {
-      promptQueue.push(queuedPrompt(value, providerValue, imageAttachments));
-      dispatchSession({ type: "PUSH_HISTORY", value });
-      resetComposer();
-      saveWorkbenchRef.current?.();
-      bumpWorkbench((value) => value + 1);
+    // A cancel or /clear while attachments were being read abandons the prompt.
+    if (generation !== ctx.pipelineGenerationRef.current) {
       return;
     }
 
-    if (activeRouteProvider?.id === "codexa-native") {
-      startPromptRun(value, providerValue, {
+    // Prompts sent while a run is active wait in the queue.
+    if (ctx.activeRunIdRef.current !== null) {
+      ctx.promptQueue.push(queuedPrompt(value, providerValue, imageAttachments));
+      ctx.dispatchSession({ type: "PUSH_HISTORY", value });
+      ctx.resetComposer();
+      ctx.saveWorkbenchRef.current?.();
+      ctx.bumpWorkbench((version) => version + 1);
+      return;
+    }
+
+    // Codexa is conversational-only: no workspace checks, no action parsing.
+    if (ctx.activeRouteProvider?.id === "codexa-native") {
+      ctx.startPromptRun(value, providerValue, {
         submitTiming,
         commitPrompt: true,
         parseActionRequired: false,
@@ -534,129 +284,22 @@ export function useAppInput(context: UseAppInputContext) {
       return;
     }
 
-    // Validate workspace access for normal prompts
-    const { violations: outsideViolations, skippedExternalPaths } = findOutsideWorkspacePaths(
-      providerValue,
-      workspaceRoot,
-      allowedWritableRoots,
-    );
-
-    if (skippedExternalPaths.length > 0) {
-      for (const skipped of skippedExternalPaths) {
-        appendEvent(
-          "system",
-          "Dependency skipped",
-          `Skipped external dependency source: ${formatSkippedDependencyPath(skipped)}`,
-        );
-      }
-    }
-
-    if (outsideViolations.length > 0) {
-      if (runtimeConfig.policy.allowExternalFileImport) {
-        const attachmentsDir = resolveUbumeAttachmentDir(
-          workspaceRoot,
-          runtimeConfig.policy.attachmentDir,
-        );
-        const importFiles: PendingImportFile[] = outsideViolations.map((v) => ({
-          srcPath: v.normalizedPath,
-          rawPath: v.rawPath,
-          destFilename: path.basename(v.normalizedPath),
-          isImage: isImageFile(v.normalizedPath),
-        }));
-        setPendingImport({
-          prompt: value,
-          providerPrompt: providerValue,
-          files: importFiles,
-          attachmentsDir,
-        });
-        setScreen("import-confirmation");
-        return;
-      }
-      const workspaceGuardMessage = getPromptWorkspaceGuardMessage(
-        providerValue,
-        workspaceRoot,
-        allowedWritableRoots,
-      );
-      if (workspaceGuardMessage) {
-        appendEvent("error", "Workspace boundary", workspaceGuardMessage);
-        return;
-      }
-    }
-
-    // Submit to provider or plan mode
-    if (planMode) {
-      const nextPlanState = startPlanGeneration(providerValue, mode);
-      setPlanFlow(nextPlanState);
-      runPlanGeneration(nextPlanState, value, submitTiming, true, imageAttachments);
+    if (interceptOutsideWorkspacePaths(ctx, value, providerValue)) {
       return;
     }
-    startPromptRun(value, providerValue, { submitTiming, commitPrompt: true, imageAttachments });
-  }, [
-    context.activeConversationRef,
-    allowedWritableRoots,
-    appendEvent,
-    appendEvent,
-    busy,
-    buildFollowUpPrompt,
-    conversationChars,
-    dispatchSession,
-    findUserPromptForTurn,
-    focusManager,
-    globalPackageManager,
-    handleCopy,
-    handlePasteImage,
-    handleClear,
-    handleQuit,
-    handleShellExecute,
-    handlePlanFeedbackSubmit,
-    handleWorkspaceRelaunch,
-    inputValue,
-    interruptHint,
-    layeredRuntimeConfig,
-    modelCapabilities,
-    mode,
-    openAuthPanel,
-    openUsagePanel,
-    openProviderPicker,
-    openModePicker,
-    openModelPicker,
-    openPermissionsPanel,
-    openResumePicker,
-    openReasoningPicker,
-    openSettingsPanel,
-    planMode,
-    refreshAuthStatus,
-    repaintCommittedTheme,
-    resetComposer,
-    getSessionState,
-    openWorkbench,
-    handleSendNow,
-    resumeConversation,
-    resolvedRuntimeConfig,
-    runPlanGeneration,
-    runtimeConfig,
-    addWritableRootWithNotice,
-    clearWritableRootsWithNotice,
-    removeWritableRootWithNotice,
-    setApprovalPolicyWithNotice,
-    setAuthPreferenceWithNotice,
-    setNetworkAccessWithNotice,
-    setModeWithNotice,
-    setModelWithNotice,
-    setPlanModeWithNotice,
-    togglePlanModeWithNotice,
-    setPersonalityWithNotice,
-    setProjectTrustWithNotice,
-    setReasoningWithNotice,
-    setSandboxModeWithNotice,
-    setServiceTierWithNotice,
-    showBusyLoader,
-    startPromptRun,
-    themeSelection.committedTheme,
-    uiState,
-    workspaceCommandContext,
-    workspaceDisplayMode,
-    workspaceRoot,
-  ]);
+
+    if (ctx.planMode) {
+      const nextPlanState = startPlanGeneration(providerValue, ctx.mode);
+      ctx.setPlanFlow(nextPlanState);
+      ctx.runPlanGeneration(nextPlanState, value, submitTiming, true, imageAttachments);
+      return;
+    }
+    ctx.startPromptRun(value, providerValue, {
+      submitTiming,
+      commitPrompt: true,
+      imageAttachments,
+    });
+  }, []);
+
   return { handleSubmit };
 }
