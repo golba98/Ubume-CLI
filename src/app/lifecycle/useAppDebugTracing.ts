@@ -1,7 +1,12 @@
+/**
+ * Debug-only tracing for rendering and layout (enabled with UBUME debug
+ * environment flags; see core/perf/renderDebug). Nothing here changes app
+ * behaviour: startup timing, render counts, UI-state transitions, blank
+ * frames and root measurement changes are only logged.
+ */
+
 import { useEffect, useRef } from "react";
 import * as renderDebug from "../../core/perf/renderDebug.js";
-import { setTerminalControlUIState } from "../../core/terminal/terminalControl.js";
-import { setTerminalTitleLifecycleState } from "../../core/terminal/terminalTitle.js";
 import type { PlanFlowState } from "../../session/planFlow.js";
 import type { Screen, TimelineEvent, UIState } from "../../session/types.js";
 import type { InterruptHint } from "../../ui/chrome/composer/composerModel.js";
@@ -122,11 +127,6 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
   });
   const previousUiStateKindRef = useRef(uiState.kind);
   useEffect(() => {
-    setTerminalControlUIState(uiState.kind);
-    setTerminalTitleLifecycleState(`${uiState.kind}${busy ? ":busy" : ":idle"}`);
-  }, [busy, uiState.kind]);
-
-  useEffect(() => {
     const previousKind = previousUiStateKindRef.current;
     if (previousKind !== uiState.kind) {
       renderDebug.traceStateTransition({
@@ -189,5 +189,4 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
       layoutEpoch: terminalLayout.layoutEpoch,
     };
   }, [composerRows, terminalLayout.cols, terminalLayout.layoutEpoch, terminalLayout.rows]);
-  return {};
 }

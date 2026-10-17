@@ -298,8 +298,8 @@ test("/clear arms a fresh render generation before transcript reset", () => {
   );
   const body = callbackBody(appSource, "handleClear");
   assert.ok(body, "handleClear callback should exist");
-  const armBoundaryIndex = body.indexOf(
-    'armTranscriptReplacement("src/app/input/useComposerEditing.ts:handleClear")',
+  const armBoundaryIndex = body.search(
+    /armTranscriptReplacement\(\s*"src\/app\/conversation\/useClearConversation\.ts:handleClear"\s*,?\s*\)/,
   );
   const seedEventsIndex = body.indexOf("createStartupStaticEvents({");
   const resetToHomeIndex = body.search(/resetToHomeScreen\(\s*createStartupStaticEvents\(\{/);

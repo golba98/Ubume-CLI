@@ -3,11 +3,10 @@ import type { LaunchArgs } from "../../config/launchArgs.js";
 import { type LayeredConfigResult, resolveLayeredConfig } from "../../config/layeredConfig.js";
 import { DEFAULT_UPDATE_CHECK_SETTINGS, loadSettings } from "../../config/persistence.js";
 import type { PartialRuntimeConfig } from "../../config/runtimeConfig.js";
-import {
-  APP_VERSION,
-  type AuthPreference,
-  type TerminalTitleMode,
-  type WorkspaceDisplayMode,
+import type {
+  AuthPreference,
+  TerminalTitleMode,
+  WorkspaceDisplayMode,
 } from "../../config/settings.js";
 import type { CodexAuthProbeResult } from "../../core/codex/codexAuth.js";
 import type { ExternalSessionSummary } from "../../core/externalSessions/index.js";
@@ -34,8 +33,6 @@ import type {
 } from "../../core/providers/types.js";
 
 import {
-  isCacheForRunningVersion,
-  loadUpdateCheckCache,
   shouldRunStartupUpdateCheck,
   type UpdateCheckResult,
 } from "../../core/version/updateCheck.js";
@@ -76,7 +73,18 @@ import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
 
 import type { ThemeSelectionState } from "../../ui/theme.js";
 
+import { loadCachedUpdateForRunningVersion } from "../lifecycle/useUpdateCheck.js";
 import { useRunRefs } from "./useRunRefs.js";
+
+/**
+ * A ref whose initial value is computed once. Unlike `useRef(create())`,
+ * `create` does not run again on every render, which matters for initial
+ * values read from disk.
+ */
+function useInitialValueRef<T>(create: () => T): React.RefObject<T> {
+  const [ref] = useState(() => ({ current: create() }));
+  return ref;
+}
 
 interface UseAppStateContext {
   providerOverride: BackendProvider | undefined;
@@ -94,35 +102,21 @@ export function useAppState(context: UseAppStateContext) {
   );
   const projectInstructions =
     projectInstructionsLoad.status === "loaded" ? projectInstructionsLoad.instructions : null;
-  const initialSettings = useRef(loadSettings());
-  const startupUpdateEnabled = useRef(
+  // Startup snapshots read from disk exactly once.
+  const initialSettings = useInitialValueRef(loadSettings);
+  const startupUpdateEnabled = useInitialValueRef(() =>
     shouldRunStartupUpdateCheck(
       process.env,
       !providerOverride &&
         (initialSettings.current.updateCheck ?? DEFAULT_UPDATE_CHECK_SETTINGS).enabled,
     ),
   );
-  const initialUpdateCheckResult = useRef<UpdateCheckResult | null>(
-    (() => {
-      if (!startupUpdateEnabled.current) return null;
-      const cache = loadUpdateCheckCache();
-      if (
-        !cache?.updateAvailable ||
-        !cache.latestVersion ||
-        !isCacheForRunningVersion(cache, APP_VERSION)
-      ) {
-        return null;
-      }
-      return {
-        status: "update-available",
-        currentVersion: cache.currentVersion,
-        latestVersion: cache.latestVersion,
-        checkedAt: cache.lastChecked,
-        source: "cache",
-      };
-    })(),
+  // A cached "update available" for the running version opens the update
+  // prompt immediately; otherwise useUpdateCheck runs the startup check.
+  const initialUpdateCheckResult = useInitialValueRef<UpdateCheckResult | null>(() =>
+    startupUpdateEnabled.current ? loadCachedUpdateForRunningVersion() : null,
   );
-  const initialProviderWorkspaceConfig = useRef<ProviderWorkspaceConfig>(
+  const initialProviderWorkspaceConfig = useInitialValueRef<ProviderWorkspaceConfig>(() =>
     loadProviderWorkspaceConfig(workspaceRoot),
   );
   const initialLayeredConfig = useRef<LayeredConfigResult | null>(null);
@@ -257,7 +251,7 @@ export function useAppState(context: UseAppStateContext) {
     [workspaceRoot],
   );
   const activeConversationRef = useRef<ConversationRecord | null>(null);
-  const promptQueue = useRef(new PromptQueue()).current;
+  const promptQueue = useInitialValueRef(() => new PromptQueue()).current;
   const [workbenchVersion, bumpWorkbench] = useState(0);
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>("transcript");
   const fileAttachmentRegistryRef = useRef(new Map<string, FileAttachment>());
@@ -320,8 +314,8 @@ export function useAppState(context: UseAppStateContext) {
     loadSeededCodexCapabilities(),
   );
   const [modelCapabilitiesBusy, setModelCapabilitiesBusy] = useState(false);
-  // True while a provider route switch is validating (subprocess probes);
-  // drives the model picker's loading state for non-openai providers.
+  // True while a provider route switch is validating (subprocess probes).
+  // Currently write-only: no view reads it yet.
   const [routeSwitchBusy, setRouteSwitchBusy] = useState(false);
   const [providerModelLoading, setProviderModelLoading] = useState<Record<string, boolean>>({});
   const [providerModelErrors, setProviderModelErrors] = useState<Record<string, string>>({});

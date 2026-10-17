@@ -1,18 +1,22 @@
+/**
+ * Keyboard focus routing between the composer and overlays.
+ *
+ * Ink's focus manager has no notion of screens, so every screen change
+ * re-focuses that screen's target (`getFocusTargetForScreen`). Async work
+ * (model validation, discovery, run completion) must not move focus on its
+ * own: it goes through `returnToChatMode`, which keeps an explicitly opened
+ * model picker focused instead of jumping back to the composer.
+ *
+ * `getInputDebugSnapshot` describes the input state for UBUME debug traces.
+ */
+
 import type { useFocusManager } from "ink";
 import { useCallback, useEffect } from "react";
-import type { LayeredConfigResult } from "../../config/layeredConfig.js";
-import type { loadSettings } from "../../config/persistence.js";
-import { saveSettings } from "../../config/persistence.js";
-import type { RuntimeConfig } from "../../config/runtimeConfig.js";
-import type { HeaderConfig, Theme } from "../../config/settings.js";
 import { getStdinDebugState, traceInputDebug } from "../../core/perf/debugLog.js";
-import { shutdownLocalHarness } from "../../core/providerRuntime/localHarness/runtime.js";
-import type { BackendProvider } from "../../core/providers/types.js";
 import type { PlanFlowState } from "../../session/planFlow.js";
 import type { Screen } from "../../session/types.js";
 import { FOCUS_IDS, getFocusTargetForScreen } from "../../ui/input/focus.js";
-import { shouldBumpComposerInstance, type ThemeSelectionState } from "../../ui/theme.js";
-import { buildSettingsPayload } from "../models/useSettings.js";
+import { shouldBumpComposerInstance } from "../../ui/theme.js";
 
 interface UseFocusRoutingContext {
   screenRef: React.RefObject<Screen>;
@@ -22,21 +26,7 @@ interface UseFocusRoutingContext {
   modelSelectionInFlightRef: React.RefObject<boolean>;
   intendedFocusTargetRef: React.RefObject<string>;
   stdin: NodeJS.ReadStream;
-  baseRuntimeConfigRef: React.RefObject<RuntimeConfig>;
-  baseLayeredConfig: LayeredConfigResult;
-  providerOverride: BackendProvider | undefined;
-  initialSettings: React.RefObject<ReturnType<typeof loadSettings>>;
-  themeSelection: ThemeSelectionState;
-  workspaceDisplayMode: "dir" | "name" | "simple";
-  terminalTitleMode: "dir" | "name" | "simple";
-  showBusyLoader: boolean;
-  customTheme: Partial<Theme> | undefined;
-  authPreference: "chatgpt-login-goal" | "api-key-first" | "runner-managed";
-  headerConfig: HeaderConfig;
-  isMountedRef: React.RefObject<boolean>;
-  cleanupRef: React.RefObject<(() => void) | null>;
   themePreviewTimerRef: React.RefObject<NodeJS.Timeout | null>;
-  themeNoticeTimerRef: React.RefObject<NodeJS.Timeout | null>;
   screen: Screen;
   previousScreenRef: React.RefObject<Screen>;
   setComposerInstanceKey: React.Dispatch<React.SetStateAction<number>>;
@@ -56,21 +46,7 @@ export function useFocusRouting(context: UseFocusRoutingContext) {
     modelSelectionInFlightRef,
     intendedFocusTargetRef,
     stdin,
-    baseRuntimeConfigRef,
-    baseLayeredConfig,
-    providerOverride,
-    initialSettings,
-    themeSelection,
-    workspaceDisplayMode,
-    terminalTitleMode,
-    showBusyLoader,
-    customTheme,
-    authPreference,
-    headerConfig,
-    isMountedRef,
-    cleanupRef,
     themePreviewTimerRef,
-    themeNoticeTimerRef,
     screen,
     previousScreenRef,
     setComposerInstanceKey,
@@ -104,52 +80,7 @@ export function useFocusRouting(context: UseFocusRoutingContext) {
     [stdin],
   );
 
-  useEffect(() => {
-    baseRuntimeConfigRef.current = baseLayeredConfig.runtime;
-  }, [baseLayeredConfig.runtime]);
-
-  useEffect(() => {
-    if (providerOverride) return;
-    saveSettings(
-      buildSettingsPayload(
-        initialSettings.current,
-        {
-          theme: themeSelection.committedTheme,
-          workspaceDisplayMode,
-          terminalTitleMode,
-          showBusyLoader,
-          customTheme,
-        },
-        authPreference,
-        headerConfig,
-      ),
-    );
-  }, [
-    authPreference,
-    customTheme,
-    showBusyLoader,
-    terminalTitleMode,
-    themeSelection.committedTheme,
-    workspaceDisplayMode,
-    providerOverride,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-      cleanupRef.current?.();
-      void shutdownLocalHarness();
-      if (themePreviewTimerRef.current) {
-        clearTimeout(themePreviewTimerRef.current);
-        themePreviewTimerRef.current = null;
-      }
-      if (themeNoticeTimerRef.current) {
-        clearTimeout(themeNoticeTimerRef.current);
-        themeNoticeTimerRef.current = null;
-      }
-    };
-  }, []);
-
+  // Leaving the theme picker cancels a pending live preview.
   useEffect(() => {
     if (screen === "theme-picker") {
       return;

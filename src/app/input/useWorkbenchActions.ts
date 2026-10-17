@@ -1,8 +1,13 @@
+/**
+ * Workbench actions: the prompt queue, `/send-now`, external-editor drafts,
+ * rewinding to a checkpoint, confirming outside-workspace file imports, and
+ * the interrupt/redraw keys (`useInterruptKeys`).
+ */
+
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { useApp } from "ink";
-import { useInput } from "ink";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback } from "react";
 import type { ProviderRunControl } from "../../core/providers/types.js";
 import { errorMessage } from "../../core/shared/values.js";
 import { editExternalPrompt } from "../../core/terminal/externalEditor.js";
@@ -55,6 +60,7 @@ import {
 } from "../conversation/conversationPersistence.js";
 
 import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
+import { useInterruptKeys } from "./useInterruptKeys.js";
 
 interface UseWorkbenchActionsContext {
   setWorkbenchView: React.Dispatch<React.SetStateAction<WorkbenchView>>;
@@ -122,9 +128,6 @@ interface UseWorkbenchActionsContext {
   >;
 }
 
-/** How long the composer offers "Press Ctrl+C again to exit" before disarming. */
-export const EXIT_CONFIRM_WINDOW_MS = 2000;
-
 export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
   const {
     setWorkbenchView,
@@ -172,121 +175,113 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     setPendingImport,
   } = context;
 
+  /** Opens the workbench panel on a view (`/queue`, `/transcript`, `/diff`, `/rewind`). */
   const openWorkbench = useCallback((view: WorkbenchView) => {
     setWorkbenchView(view);
     setScreen("workbench-panel");
   }, []);
+  /**
+   * Moves a queued prompt back into an empty composer for editing. Editing
+   * uses the immutable expanded file context; image chips are re-attached so
+   * a later submission cannot silently lose the queued images.
+   * Returns false when the composer already holds a draft.
+   */
+  const editQueuedPrompt = useCallback(
+    (id: string): boolean => {
+      if (getSessionState().inputValue.trim()) {
+        appendEvent(
+          "system",
+          "Draft retained",
+          "Clear or submit the current draft before editing a queued instruction.",
+        );
+        return false;
+      }
+      const item = promptQueue.items.find((queued) => queued.id === id);
+      if (!item) {
+        return true;
+      }
+      let draft = item.submitted;
+      for (const [token, image] of imageAttachmentRegistryRef.current) {
+        if (item.images.some((attachment) => attachment.path === image.path)) {
+          draft = draft.split(token).join("");
+        }
+      }
+      const tokens = item.images.map((image) => {
+        const token = createImageAttachmentToken(image);
+        imageAttachmentRegistryRef.current.set(token, image);
+        return token;
+      });
+      dispatchSession({ type: "SET_INPUT", value: [draft, ...tokens].join("\n") });
+      promptQueue.remove(id);
+      setScreen("main");
+      return true;
+    },
+    [appendEvent, dispatchSession, getSessionState, promptQueue],
+  );
+
   const handleQueueAction = useCallback(
     (action: QueueAction, id?: string) => {
-      if (action === "pause") promptQueue.paused = !promptQueue.paused;
-      else if (action === "continue") promptQueue.paused = false;
-      else if (id && action === "remove") promptQueue.remove(id);
-      else if (id && (action === "up" || action === "down"))
-        promptQueue.move(id, action === "up" ? -1 : 1);
-      else if (id && action === "edit") {
-        if (getSessionState().inputValue.trim()) {
-          appendEvent(
-            "system",
-            "Draft retained",
-            "Clear or submit the current draft before editing a queued instruction.",
-          );
-          return;
-        }
-        const item = promptQueue.items.find((item) => item.id === id);
-        if (item) {
-          // Editing uses the immutable expanded file context. Reattach image chips
-          // so subsequent submission cannot silently lose queued images.
-          let draft = item.submitted;
-          for (const [token, image] of imageAttachmentRegistryRef.current) {
-            if (item.images.some((attachment) => attachment.path === image.path))
-              draft = draft.split(token).join("");
+      switch (action) {
+        case "pause":
+          promptQueue.paused = !promptQueue.paused;
+          break;
+        case "continue":
+          promptQueue.paused = false;
+          break;
+        case "remove":
+          if (id) {
+            promptQueue.remove(id);
           }
-          const tokens = item.images.map((image) => {
-            const token = createImageAttachmentToken(image);
-            imageAttachmentRegistryRef.current.set(token, image);
-            return token;
-          });
-          dispatchSession({ type: "SET_INPUT", value: [draft, ...tokens].join("\n") });
-          promptQueue.remove(id);
-          setScreen("main");
-        }
+          break;
+        case "up":
+        case "down":
+          if (id) {
+            promptQueue.move(id, action === "up" ? -1 : 1);
+          }
+          break;
+        case "edit":
+          if (id && !editQueuedPrompt(id)) {
+            return;
+          }
+          break;
       }
       saveWorkbenchRef.current?.();
       bumpWorkbench((value) => value + 1);
     },
-    [appendEvent, dispatchSession, getSessionState, promptQueue],
+    [editQueuedPrompt, promptQueue],
   );
+
+  /**
+   * Ctrl+L: clears the visible screen and forces Ink to write a complete
+   * fresh frame, with static transcript content re-flushed.
+   */
   const handleRedraw = useCallback(() => {
     terminalControl.write("\x1b[2J\x1b[H", "user:redraw");
     resetInkOutputForFreshFrame({ instance: inkInstance, columns: stdout.columns });
     bumpStaticRepaintGeneration((value) => value + 1);
   }, [terminalControl, inkInstance, stdout]);
-  // The composer shows the exit hint exactly while the next Ctrl+C would quit.
-  const exitArmedRef = useRef(false);
-  const exitArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (exitArmTimerRef.current) clearTimeout(exitArmTimerRef.current);
-    },
-    [],
-  );
-  const disarmExit = useCallback(() => {
-    if (exitArmTimerRef.current) clearTimeout(exitArmTimerRef.current);
-    exitArmTimerRef.current = null;
-    if (!exitArmedRef.current) return;
-    exitArmedRef.current = false;
-    if (isMountedRef.current) setInterruptHint((hint) => (hint === "confirm-exit" ? null : hint));
-  }, [isMountedRef, setInterruptHint]);
-  const armExit = useCallback(() => {
-    exitArmedRef.current = true;
-    setInterruptHint("confirm-exit");
-    exitArmTimerRef.current = setTimeout(disarmExit, EXIT_CONFIRM_WINDOW_MS);
-  }, [disarmExit, setInterruptHint]);
-  const interruptCleanupRef = useRef(false);
-  const handleInterrupt = useCallback(() => {
-    promptQueue.paused = true;
-    if (interruptCleanupRef.current) {
-      handleQuit();
-      return;
-    }
-    const exitArmed = exitArmedRef.current;
-    disarmExit();
-    if (activeRunIdRef.current !== null) {
-      interruptCleanupRef.current = true;
-      setInterruptHint("stopping");
-      handleCancel();
-      void stoppingRef.current.finally(() => {
-        interruptCleanupRef.current = false;
-        if (isMountedRef.current) setInterruptHint(null);
-      });
-      return;
-    }
-    if (submissionRef.current) {
-      pipelineGenerationRef.current++;
-      return;
-    }
-    if (getSessionState().inputValue) {
-      resetComposer();
-      return;
-    }
-    if (exitArmed) handleQuit();
-    else armExit();
-  }, [armExit, disarmExit, getSessionState, handleCancel, handleQuit, promptQueue, resetComposer]);
-  useInput((input, key) => {
-    if (!key.ctrl) return;
-    if (input === "c") handleInterrupt();
-    else if (
-      screen !== "main" ||
-      planFlow.kind === "awaiting_action" ||
-      planFlow.kind === "collecting_feedback"
-    ) {
-      if (input === "q") handleQuit();
-      else if (input === "l") handleRedraw();
-    }
+  useInterruptKeys({
+    promptQueue,
+    handleQuit,
+    handleCancel,
+    handleRedraw,
+    activeRunIdRef,
+    stoppingRef,
+    isMountedRef,
+    submissionRef,
+    pipelineGenerationRef,
+    getSessionState,
+    resetComposer,
+    setInterruptHint,
+    screen,
+    planFlow,
   });
 
+  /** Edits the draft (with attachments expanded) in $EDITOR, suspending the TUI. */
   const handleExternalEditor = useCallback(async () => {
-    if (submissionRef.current) return;
+    if (submissionRef.current) {
+      return;
+    }
     submissionRef.current = true;
     try {
       const state = getSessionState();
@@ -304,51 +299,71 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
       handleRedraw();
     }
   }, [appendEvent, dispatchSession, getSessionState, handleRedraw, suspendTerminal, workspaceRoot]);
+  /** Queues the composer draft (unless it is a command) with its attachments expanded. */
+  const queueDraftForSendNow = useCallback(async () => {
+    const draft = getSessionState().inputValue.trim();
+    if (!draft || draft.startsWith("/")) {
+      return;
+    }
+    assertAttachedContent(
+      draft,
+      pastedContentRegistryRef.current,
+      imageAttachmentRegistryRef.current,
+      fileAttachmentRegistryRef.current,
+    );
+    const submitted = await expandFileAttachments(
+      expandPastedContent(draft, pastedContentRegistryRef.current),
+      fileAttachmentRegistryRef.current,
+      workspaceRoot,
+    );
+    const images = selectImageAttachments(draft, imageAttachmentRegistryRef.current);
+    for (const image of images) {
+      if (!existsSync(image.path)) {
+        throw new Error(`Image attachment is missing: ${image.name}`);
+      }
+    }
+    promptQueue.push(queuedPrompt(draft, submitted, images));
+    resetComposer();
+  }, [getSessionState, promptQueue, resetComposer, workspaceRoot]);
+
+  /**
+   * `/send-now`: delivers the draft and every queued prompt to the model now.
+   *
+   * Providers that support steering receive them mid-run. Otherwise the
+   * active run is canceled and the batch starts as one merged prompt. Queued
+   * items are removed only once they were actually delivered.
+   */
   const handleSendNow = useCallback(async () => {
-    if (
+    const blocked =
       submissionRef.current ||
       recoveryRef.current ||
       planFlow.kind !== "idle" ||
-      screenRef.current === "tool-approval"
-    )
+      screenRef.current === "tool-approval";
+    if (blocked) {
       return;
+    }
     submissionRef.current = true;
     const generation = pipelineGenerationRef.current;
     try {
-      const state = getSessionState();
-      const draft = state.inputValue.trim();
-      if (draft && !draft.startsWith("/")) {
-        assertAttachedContent(
-          draft,
-          pastedContentRegistryRef.current,
-          imageAttachmentRegistryRef.current,
-          fileAttachmentRegistryRef.current,
-        );
-        const submitted = await expandFileAttachments(
-          expandPastedContent(draft, pastedContentRegistryRef.current),
-          fileAttachmentRegistryRef.current,
-          workspaceRoot,
-        );
-        const images = selectImageAttachments(draft, imageAttachmentRegistryRef.current);
-        for (const image of images)
-          if (!existsSync(image.path))
-            throw new Error(`Image attachment is missing: ${image.name}`);
-        promptQueue.push(queuedPrompt(draft, submitted, images));
-        resetComposer();
+      await queueDraftForSendNow();
+      if (!promptQueue.items.length) {
+        return;
       }
-      if (!promptQueue.items.length) return;
       const control = runControlRef.current;
       const batch = [...promptQueue.items];
-      if (
-        control?.steer &&
-        (await control.steer(batch.map((item) => item.submitted).join("\n\n")))
-      ) {
-        batch.forEach((item) => promptQueue.remove(item.id));
+      const steered =
+        control?.steer && (await control.steer(batch.map((item) => item.submitted).join("\n\n")));
+      if (steered) {
+        for (const item of batch) {
+          promptQueue.remove(item.id);
+        }
       } else {
         promptQueue.paused = true;
         cancelActiveRun(true);
         await stoppingRef.current;
-        if (generation !== pipelineGenerationRef.current) return;
+        if (generation !== pipelineGenerationRef.current) {
+          return;
+        }
         const merged = queuedPrompt(
           batch.map((item) => item.display).join("\n\n"),
           batch.map((item) => item.submitted).join("\n\n"),
@@ -360,7 +375,11 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
           queuedPromptIds: batch.map((item) => item.id),
           imageAttachments: merged.images,
         });
-        if (started) batch.forEach((item) => promptQueue.remove(item.id));
+        if (started) {
+          for (const item of batch) {
+            promptQueue.remove(item.id);
+          }
+        }
       }
     } catch (error) {
       appendEvent("error", "Send now failed", (error as Error).message);
@@ -372,23 +391,32 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
   }, [
     appendEvent,
     cancelActiveRun,
-    getSessionState,
     planFlow.kind,
     promptQueue,
-    resetComposer,
+    queueDraftForSendNow,
     startPromptRun,
-    workspaceRoot,
   ]);
+  /**
+   * Rewinds to `checkpoint`. Depending on `recoveryMode` it restores the
+   * selected file edits, branches the conversation at that turn (the original
+   * conversation is kept as the branch's parent), or both.
+   *
+   * Throws when an operation is running or there is no conversation; the
+   * workbench panel shows the error.
+   */
   const handleRewind = useCallback(
     async (
       checkpoint: FileCheckpoint,
       recoveryMode: RecoveryMode,
       operations: RestoreOperation[],
     ) => {
-      if (activeRunIdRef.current !== null || submissionRef.current)
+      if (activeRunIdRef.current !== null || submissionRef.current) {
         throw new Error("Stop the current operation before rewinding.");
+      }
       const current = activeConversationRef.current;
-      if (!current) throw new Error("No conversation to rewind.");
+      if (!current) {
+        throw new Error("No conversation to rewind.");
+      }
       recoveryRef.current = true;
       let lease: OwnershipLease | undefined;
       try {
@@ -417,6 +445,9 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
           branch.messages = current.messages.slice(0, checkpoint.messageCount);
           branch.metadata.parentConversationId = current.metadata.id;
           branch.metadata.parentCheckpointId = checkpoint.id;
+          // The rewound prompt returns to the composer for editing.
+          const rewoundPrompt =
+            current.messages[checkpoint.messageCount]?.submittedContent ?? checkpoint.prompt;
           const replacement = armTranscriptReplacement("user:rewind");
           activeConversationRef.current = branch;
           pipelineGenerationRef.current++;
@@ -427,10 +458,8 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
             events: branchEvents
               ? restoredEvents(eventsBeforeTurn(branchEvents, checkpoint.turnId))
               : conversationMessagesToTimeline(branch.messages, createEventId, createTurnId),
-            value: current.messages[checkpoint.messageCount]?.submittedContent ?? checkpoint.prompt,
-            cursor: (
-              current.messages[checkpoint.messageCount]?.submittedContent ?? checkpoint.prompt
-            ).length,
+            value: rewoundPrompt,
+            cursor: rewoundPrompt.length,
             history: branch.messages
               .filter((message) => message.role === "user")
               .map((message) => message.content)
@@ -447,8 +476,15 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     [armTranscriptReplacement, conversationStore, dispatchSession, promptQueue, workspaceRoot],
   );
 
+  /**
+   * Copies the outside-workspace files the prompt mentions into the
+   * attachments folder, rewrites the prompt to point at the copies, and runs
+   * it. Files that fail to import are reported and left as written.
+   */
   const handleImportConfirm = useCallback(async () => {
-    if (!pendingImport) return;
+    if (!pendingImport) {
+      return;
+    }
     const replacements: Array<{ rawPath: string; replacementPath: string }> = [];
     for (const file of pendingImport.files) {
       try {
@@ -476,8 +512,11 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     });
   }, [pendingImport, workspaceRoot, startPromptRun, appendEvent]);
 
+  /** Returns the prompt to the composer without importing anything. */
   const handleImportCancel = useCallback(() => {
-    if (!pendingImport) return;
+    if (!pendingImport) {
+      return;
+    }
     dispatchSession({
       type: "SET_INPUT",
       value: pendingImport.prompt,

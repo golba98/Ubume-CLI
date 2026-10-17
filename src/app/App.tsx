@@ -58,13 +58,16 @@ import { measureTextEntryPanelRows } from "../ui/panels/TextEntryPanel.js";
 import { buildActiveRuntimeDisplay, runtimeDisplayToSummary } from "../ui/render/runtimeDisplay.js";
 import { commitThemeSelection, getDisplayedThemeName, THEMES, ThemeProvider } from "../ui/theme.js";
 import { TranscriptShell } from "../ui/timeline/TranscriptShell.js";
+import { useClearConversation } from "./conversation/useClearConversation.js";
 import { useConversation } from "./conversation/useConversation.js";
 import { useAppComposer } from "./input/useAppComposer.js";
 import { useAppInput } from "./input/useAppInput.js";
 import { useComposerEditing } from "./input/useComposerEditing.js";
 import { useWorkbenchActions } from "./input/useWorkbenchActions.js";
 import { useAppDebugTracing } from "./lifecycle/useAppDebugTracing.js";
+import { useAppLifecycleEffects } from "./lifecycle/useAppLifecycleEffects.js";
 import { useFocusRouting } from "./lifecycle/useFocusRouting.js";
+import { useTerminalUiState } from "./lifecycle/useTerminalUiState.js";
 import { useUpdateCheck } from "./lifecycle/useUpdateCheck.js";
 import { useActiveModelMetadata } from "./models/useActiveModelMetadata.js";
 import { useModelCatalog } from "./models/useModelCatalog.js";
@@ -161,7 +164,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     conversationChars,
     modelCapabilities,
     modelCapabilitiesBusy,
-    routeSwitchBusy,
     providerModelLoading,
     activeContextMetadata,
   } = appState;
@@ -515,6 +517,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       }),
     [composerRows, terminalLayout.cols, terminalLayout.rows],
   );
+  useTerminalUiState(uiState.kind, busy);
   useAppDebugTracing({
     ...appState,
     activeRootComponent,
@@ -549,6 +552,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     providerWorkspaceConfig.providers,
     providerOverride,
   ]);
+  useAppLifecycleEffects({
+    ...appState,
+    baseRuntimeConfigRef,
+    providerOverride,
+    themePreviewTimerRef,
+    themeNoticeTimerRef,
+  });
   const { getInputDebugSnapshot, returnToChatMode, returnFromUpdateOverlay } = useFocusRouting({
     ...appState,
     busyRef,
@@ -557,10 +567,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelSelectionInFlightRef,
     intendedFocusTargetRef,
     stdin,
-    baseRuntimeConfigRef,
-    providerOverride,
     themePreviewTimerRef,
-    themeNoticeTimerRef,
     previousScreenRef,
     focusManager,
     planFlow,
@@ -663,7 +670,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     baseRuntimeConfigRef,
     appendEvent,
   });
-  const { updateRuntimeConfig, persistProviderDefaultModelAndReasoning } = runtimeSettings;
+  const { updateRuntimeConfig } = runtimeSettings;
   const { routeChoiceRequiredRef } = appState;
   const { refreshModelCapabilities, ensureProviderModels, refreshAuthStatus } = useModelCatalog({
     ...appState,
@@ -883,19 +890,21 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     handleChangeInput,
     handleRegisterPaste,
     handlePasteImage,
-    handleClear,
     handleHistoryUp,
     handleHistoryDown,
   } = useComposerEditing({
-    armTranscriptReplacement,
     ...appState,
-    ...conversation,
-    ...runLifecycle,
     busyRef,
     runtimeConfig,
     inputValueRef,
     cursorRef,
     appendEvent,
+  });
+  const { handleClear } = useClearConversation({
+    ...appState,
+    ...conversation,
+    ...runLifecycle,
+    armTranscriptReplacement,
     setPlanFlow,
   });
   const promptExecution = usePromptExecution({
@@ -1154,7 +1163,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               terminalLayout={terminalLayout}
               handleProviderAction={handleProviderAction}
               providerWorkspaceConfig={providerWorkspaceConfig}
-              setProviderWorkspaceConfig={appState.setProviderWorkspaceConfig}
+              updateProviderWorkspaceConfig={runtimeSettings.updateProviderWorkspaceConfig}
               localBackendStatuses={localBackendStatuses}
               probeLocalBackends={probeLocalBackends}
               modelPickerOpenRef={modelPickerOpenRef}
@@ -1167,10 +1176,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               modelPickerProviderId={modelPickerProviderId}
               modelCapabilitiesBusy={modelCapabilitiesBusy}
               providerModelLoading={providerModelLoading}
-              routeSwitchBusy={routeSwitchBusy}
               modelPickerEmptyMessage={modelPickerEmptyMessage}
               activeProviderRoute={activeProviderRoute}
-              persistProviderDefaultModelAndReasoning={persistProviderDefaultModelAndReasoning}
               appendEvent={appendEvent}
               setModelAndReasoningWithNotice={setModelAndReasoningWithNotice}
               returnToChatMode={returnToChatMode}

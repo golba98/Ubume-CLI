@@ -1,3 +1,13 @@
+/**
+ * Renders whichever overlay the current `screen` names: pickers, panels,
+ * viewers and prompts shown in the alternate screen above the transcript.
+ *
+ * This component is deliberately not memoized (see docs/architecture/app.md):
+ * it renders only while an overlay is open, and each overlay is cheap. It
+ * holds no state of its own; every action calls back into the hooks that own
+ * the state. Exactly one overlay renders for a given screen.
+ */
+
 import { Box, Text } from "ink";
 import type { ResolvedRuntimeConfig, RuntimeConfig } from "../../config/runtimeConfig.js";
 import {
@@ -24,6 +34,7 @@ import type {
   CodexModelCapability,
   ReasoningEffortCapability,
 } from "../../core/models/codexModelCapabilities.js";
+import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import { findProvider } from "../../core/providerLauncher/registry.js";
 import type {
   LocalBackendId,
@@ -32,7 +43,7 @@ import type {
   ProviderPickerAction,
   ProviderWorkspaceConfig,
 } from "../../core/providerLauncher/types.js";
-import { saveProviderWorkspaceConfig } from "../../core/providerLauncher/workspaceConfig.js";
+import type { CodexaNativeOptions } from "../../core/providerRuntime/codexaNativeConfig.js";
 import { getProviderSetupPlan } from "../../core/providerRuntime/registry.js";
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 import type {
@@ -94,30 +105,9 @@ import {
 } from "../../ui/theme.js";
 
 interface OverlayPanelsProps {
-  screen:
-    | "workbench-panel"
-    | "resume-picker"
-    | "external-session-viewer"
-    | "resume-workspace"
-    | "provider-picker"
-    | "provider-setup"
-    | "model-picker"
-    | "mode-picker"
-    | "reasoning-picker"
-    | "theme-picker"
-    | "settings-panel"
-    | "auth-panel"
-    | "permissions-panel"
-    | "permissions-approval-picker"
-    | "permissions-sandbox-picker"
-    | "permissions-network-picker"
-    | "permissions-add-writable-root"
-    | "permissions-remove-writable-root"
-    | "import-confirmation"
-    | "tool-approval"
-    | "update-prompt"
-    | "usage-panel"
-    | "saved-session-viewer";
+  screen: Screen;
+
+  // Workbench
   workbenchView: WorkbenchView;
   staticEvents: TimelineEvent[];
   activeEvents: TimelineEvent[];
@@ -132,6 +122,8 @@ interface OverlayPanelsProps {
     operations: RestoreOperation[],
   ) => Promise<void>;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+
+  // Resume picker and session viewers
   resumeConversations: ConversationListEntry[];
   resumeConversation: (id: string) => Promise<void>;
   loadResumeSessions: (scope: ExternalListScope) => Promise<SessionCatalogResult>;
@@ -146,6 +138,8 @@ interface OverlayPanelsProps {
   locateSavedWorkspace: (value: string) => Promise<void>;
   externalViewerSession: ExternalSessionSummary | null;
   loadExternalTranscript: () => Promise<ExternalTranscript>;
+
+  // Provider picker and setup
   providerSetup: ProviderId | null;
   providerRegistry: ProviderConfig[];
   runProviderSetup: (providerId: ProviderId) => void;
@@ -157,12 +151,17 @@ interface OverlayPanelsProps {
     selectedLocalBackend?: LocalBackendId,
   ) => void;
   providerWorkspaceConfig: ProviderWorkspaceConfig;
-  setProviderWorkspaceConfig?: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
+  /** Saves a transform of the latest provider config; see useRuntimeSettings. */
+  updateProviderWorkspaceConfig: (
+    transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig,
+  ) => ProviderWorkspaceConfig;
   localBackendStatuses: Record<LocalBackendId, LocalBackendStatus>;
   probeLocalBackends: () => void;
   modelPickerOpenRef: React.RefObject<boolean>;
   setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
   pendingRouteProviderId: ProviderId | null;
+
+  // Model picker
   modelPickerModels: readonly CodexModelCapability[];
   modelPickerCurrentModel: string;
   modelPickerCurrentReasoning: string;
@@ -170,14 +169,8 @@ interface OverlayPanelsProps {
   modelPickerProviderId: ProviderId;
   modelCapabilitiesBusy: boolean;
   providerModelLoading: Record<string, boolean>;
-  routeSwitchBusy: boolean;
   modelPickerEmptyMessage: string;
   activeProviderRoute: ProviderRoute;
-  persistProviderDefaultModelAndReasoning: (
-    providerId: ProviderId,
-    modelId: string,
-    nextReasoning: string,
-  ) => void;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
   setModelAndReasoningWithNotice: (
     nextModel: AvailableModel,
@@ -186,6 +179,8 @@ interface OverlayPanelsProps {
     localBackend?: LocalBackendId,
   ) => Promise<void>;
   returnToChatMode: (reason?: string) => void;
+
+  // Mode and reasoning pickers
   mode: "suggest" | "auto-edit" | "full-auto";
   planMode: boolean;
   setPlanModeWithNotice: (nextEnabled: boolean) => void;
@@ -200,12 +195,16 @@ interface OverlayPanelsProps {
     | "Fallback defaults"
     | null;
   setReasoningWithNotice: (nextReasoningLevel: ReasoningLevel) => void;
+
+  // Auth panel
   provider: BackendProvider;
   authPreference: "chatgpt-login-goal" | "api-key-first" | "runner-managed";
   authStatus: CodexAuthProbeResult;
   authStatusBusy: boolean;
   setAuthPreferenceWithNotice: (nextPreference: AuthPreference) => void;
   refreshAuthStatus: (announce: boolean) => Promise<void>;
+
+  // Permissions panels
   runtimeConfig: RuntimeConfig;
   resolvedRuntimeConfig: ResolvedRuntimeConfig;
   handlePermissionsPanelAction: (action: PermissionsPanelAction) => void;
@@ -214,6 +213,8 @@ interface OverlayPanelsProps {
   setNetworkAccessWithNotice: (nextValue: RuntimeNetworkAccess) => void;
   addWritableRootWithNotice: (pathValue: string) => void;
   removeWritableRootWithNotice: (pathValue: string) => void;
+
+  // Theme picker and settings
   themeSelection: ThemeSelectionState;
   themePreviewTimerRef: React.RefObject<NodeJS.Timeout | null>;
   repaintCommittedTheme: (themeName: string) => void;
@@ -222,6 +223,8 @@ interface OverlayPanelsProps {
   setThemeSelection: React.Dispatch<React.SetStateAction<ThemeSelectionState>>;
   currentUserSettings: UserSettingValues;
   saveSettingsFromPanel: (nextSettings: UserSettingValues) => void;
+
+  // Import confirmation and tool approval
   pendingImport: {
     prompt: string;
     providerPrompt: string;
@@ -236,6 +239,8 @@ interface OverlayPanelsProps {
   toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
   handleCancel: () => void;
+
+  // Update prompt and usage
   updateCheckResult: UpdateCheckResult | null;
   globalPackageManager: GlobalPackageManager;
   handleSkipUpdateForSession: () => void;
@@ -345,7 +350,128 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     usageView,
     usageRefreshAvailableAt,
     refreshUsage,
+    updateProviderWorkspaceConfig,
   } = props;
+
+  // --- Provider setup ---------------------------------------------------------
+
+  const setupProvider = providerSetup ? findProvider(providerRegistry, providerSetup) : undefined;
+  const setupPlan = providerSetup
+    ? getProviderSetupPlan(providerSetup, process.platform === "win32")
+    : null;
+
+  // --- Provider and model pickers ----------------------------------------------
+
+  const activeLocalBackend = resolveLocalBackend(
+    providerWorkspaceConfig,
+    providerWorkspaceConfig.activeRoute?.providerId === "local"
+      ? providerWorkspaceConfig.activeRoute.localBackend
+      : undefined,
+  );
+  const modelPickerRefreshing = providerModelLoading[modelPickerProviderId] === true;
+  const modelPickerLoading =
+    modelPickerModels.length === 0 &&
+    ((modelPickerProviderId === "openai" && modelCapabilitiesBusy) || modelPickerRefreshing);
+
+  const closeProviderPicker = () => {
+    modelPickerOpenRef.current = false;
+    setPendingRouteProviderId(null);
+    setScreen("main");
+  };
+
+  const selectPickedModel = (model: string, reasoning: string) => {
+    modelPickerOpenRef.current = false;
+    void setModelAndReasoningWithNotice(
+      model as AvailableModel,
+      reasoning as ReasoningLevel,
+      modelPickerProviderId,
+    );
+  };
+
+  const closeModelPicker = () => {
+    modelPickerOpenRef.current = false;
+    setPendingRouteProviderId(null);
+    returnToChatMode();
+  };
+
+  // --- Mode picker -----------------------------------------------------------------
+
+  const selectMode = (value: string) => {
+    if (value === "plan") {
+      setPlanModeWithNotice(true);
+      setScreen("main");
+    } else {
+      setModeWithNotice(value as AvailableMode);
+    }
+  };
+
+  // --- Permissions -----------------------------------------------------------------
+
+  const addWritableRoot = (value: string) => {
+    if (!value.trim()) {
+      appendEvent("system", "Runtime policy", "Writable root path cannot be empty.");
+      return;
+    }
+    addWritableRootWithNotice(value);
+    setScreen("permissions-panel");
+  };
+
+  // --- Theme picker ------------------------------------------------------------------
+
+  const clearThemePreviewTimer = () => {
+    if (themePreviewTimerRef.current) {
+      clearTimeout(themePreviewTimerRef.current);
+    }
+    themePreviewTimerRef.current = null;
+  };
+
+  const commitTheme = (value: string) => {
+    clearThemePreviewTimer();
+    repaintCommittedTheme(value);
+    setScreen("main");
+    // The custom theme starts from Purple the first time it is chosen.
+    if (value === "custom" && !customTheme) {
+      setCustomTheme({ ...THEMES.purple });
+    }
+  };
+
+  const previewTheme = (value: string) => {
+    clearThemePreviewTimer();
+    setThemeSelection((current) => previewThemeSelection(current, value));
+  };
+
+  const cancelThemePicker = () => {
+    clearThemePreviewTimer();
+    setThemeSelection((current) => cancelThemeSelection(current));
+    setScreen("main");
+  };
+
+  // --- Codexa settings -----------------------------------------------------------------
+
+  const saveCodexaSettings = (options: CodexaNativeOptions) => {
+    try {
+      updateProviderWorkspaceConfig((latest) => ({
+        ...latest,
+        providers: {
+          ...latest.providers,
+          "codexa-native": { ...latest.providers?.["codexa-native"], codexaNative: options },
+        },
+      }));
+      appendEvent(
+        "system",
+        "Codexa settings",
+        `Saved ${options.generation?.preset} preset; applies to the next message.`,
+      );
+      setScreen("main");
+    } catch (error) {
+      appendEvent("error", "Codexa settings", String(error));
+    }
+  };
+
+  // --- Tool approval -------------------------------------------------------------------
+
+  const toolApprovalContext = { toolApprovalResolverRef, setToolApproval, setScreen };
+
   return (
     <>
       {screen === "workbench-panel" && (
@@ -409,21 +535,12 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         />
       )}
 
-      {screen === "provider-setup" && providerSetup && (
+      {screen === "provider-setup" && providerSetup && setupPlan && (
         <ProviderSetupPrompt
-          providerLabel={
-            findProvider(providerRegistry, providerSetup)?.displayName ?? providerSetup
-          }
-          executable={
-            findProvider(providerRegistry, providerSetup)?.launchCommand?.executable ??
-            providerSetup
-          }
-          installCommand={
-            getProviderSetupPlan(providerSetup, process.platform === "win32").installCommand
-          }
-          setupCommand={
-            getProviderSetupPlan(providerSetup, process.platform === "win32").setupCommand
-          }
+          providerLabel={setupProvider?.displayName ?? providerSetup}
+          executable={setupProvider?.launchCommand?.executable ?? providerSetup}
+          installCommand={setupPlan.installCommand}
+          setupCommand={setupPlan.setupCommand}
           onInstall={() => runProviderSetup(providerSetup)}
           onCancel={() => {
             setProviderSetup(null);
@@ -437,18 +554,10 @@ export function OverlayPanels(props: OverlayPanelsProps) {
           layout={terminalLayout}
           providers={providerRegistry}
           onAction={handleProviderAction}
-          activeLocalBackend={
-            providerWorkspaceConfig.activeRoute?.providerId === "local"
-              ? (providerWorkspaceConfig.activeRoute.localBackend ?? "lm-studio")
-              : (providerWorkspaceConfig.providers?.local?.localBackend ?? "lm-studio")
-          }
+          activeLocalBackend={activeLocalBackend}
           localBackendStatuses={localBackendStatuses}
           onLocalBackendsOpen={probeLocalBackends}
-          onCancel={() => {
-            modelPickerOpenRef.current = false;
-            setPendingRouteProviderId(null);
-            setScreen("main");
-          }}
+          onCancel={closeProviderPicker}
           initialProviderId={pendingRouteProviderId ?? undefined}
         />
       )}
@@ -460,37 +569,12 @@ export function OverlayPanels(props: OverlayPanelsProps) {
           currentModel={modelPickerCurrentModel}
           currentReasoning={modelPickerCurrentReasoning}
           activeProviderLabel={modelPickerProviderLabel}
-          isLoading={
-            modelPickerModels.length === 0 &&
-            ((modelPickerProviderId === "openai" && modelCapabilitiesBusy) ||
-              providerModelLoading[modelPickerProviderId])
-          }
+          isLoading={modelPickerLoading}
           emptyMessage={modelPickerEmptyMessage}
-          refreshMessage={
-            providerModelLoading[modelPickerProviderId]
-              ? "Refreshing model inventory…"
-              : /fail|unverified|cached|credentials|unable|timed|removed|unavailable|unsupported/i.test(
-                    modelPickerEmptyMessage ?? "",
-                  )
-                ? modelPickerEmptyMessage
-                : undefined
-          }
-          onRefresh={() => {
-            void handleProviderAction(modelPickerProviderId, "refresh-models");
-          }}
-          onSelect={(m, r) => {
-            modelPickerOpenRef.current = false;
-            void setModelAndReasoningWithNotice(
-              m as AvailableModel,
-              r as ReasoningLevel,
-              modelPickerProviderId,
-            );
-          }}
-          onCancel={() => {
-            modelPickerOpenRef.current = false;
-            setPendingRouteProviderId(null);
-            returnToChatMode();
-          }}
+          refreshMessage={modelPickerRefreshMessage(modelPickerRefreshing, modelPickerEmptyMessage)}
+          onRefresh={() => handleProviderAction(modelPickerProviderId, "refresh-models")}
+          onSelect={selectPickedModel}
+          onCancel={closeModelPicker}
         />
       )}
 
@@ -498,12 +582,7 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         <ModePicker
           currentMode={mode}
           planMode={planMode}
-          onSelect={(value) => {
-            if (value === "plan") {
-              setPlanModeWithNotice(true);
-              setScreen("main");
-            } else setModeWithNotice(value as AvailableMode);
-          }}
+          onSelect={selectMode}
           onCancel={() => setScreen("main")}
         />
       )}
@@ -600,14 +679,7 @@ export function OverlayPanels(props: OverlayPanelsProps) {
           placeholder="relative\\or\\absolute\\path"
           inputLabel="Path"
           footerHint="Esc to close · Enter to confirm"
-          onSubmit={(value) => {
-            if (!value.trim()) {
-              appendEvent("system", "Runtime policy", "Writable root path cannot be empty.");
-              return;
-            }
-            addWritableRootWithNotice(value);
-            setScreen("permissions-panel");
-          }}
+          onSubmit={addWritableRoot}
           onCancel={() => setScreen("permissions-panel")}
         />
       )}
@@ -632,30 +704,9 @@ export function OverlayPanels(props: OverlayPanelsProps) {
       {screen === "theme-picker" && (
         <ThemePicker
           currentTheme={themeSelection.committedTheme}
-          onSelect={(value) => {
-            if (themePreviewTimerRef.current) {
-              clearTimeout(themePreviewTimerRef.current);
-              themePreviewTimerRef.current = null;
-            }
-            repaintCommittedTheme(value);
-            setScreen("main");
-            if (value === "custom") {
-              if (!customTheme) {
-                setCustomTheme({ ...THEMES.purple });
-              }
-            }
-          }}
-          onHighlight={(value) => {
-            if (themePreviewTimerRef.current) clearTimeout(themePreviewTimerRef.current);
-            themePreviewTimerRef.current = null;
-            setThemeSelection((currentTheme) => previewThemeSelection(currentTheme, value));
-          }}
-          onCancel={() => {
-            if (themePreviewTimerRef.current) clearTimeout(themePreviewTimerRef.current);
-            themePreviewTimerRef.current = null;
-            setThemeSelection((currentTheme) => cancelThemeSelection(currentTheme));
-            setScreen("main");
-          }}
+          onSelect={commitTheme}
+          onHighlight={previewTheme}
+          onCancel={cancelThemePicker}
         />
       )}
 
@@ -663,30 +714,7 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         <CodexaSettingsPanel
           options={providerWorkspaceConfig.providers?.["codexa-native"]?.codexaNative}
           onCancel={() => setScreen("main")}
-          onSave={(options) => {
-            const next = {
-              ...providerWorkspaceConfig,
-              providers: {
-                ...providerWorkspaceConfig.providers,
-                "codexa-native": {
-                  ...providerWorkspaceConfig.providers?.["codexa-native"],
-                  codexaNative: options,
-                },
-              },
-            };
-            try {
-              saveProviderWorkspaceConfig(workspaceRoot, next);
-              props.setProviderWorkspaceConfig?.(next);
-              appendEvent(
-                "system",
-                "Codexa settings",
-                `Saved ${options.generation?.preset} preset; applies to the next message.`,
-              );
-              setScreen("main");
-            } catch (error) {
-              appendEvent("error", "Codexa settings", String(error));
-            }
-          }}
+          onSave={saveCodexaSettings}
         />
       )}
       {screen === "settings-panel" && activeProviderRoute.providerId !== "codexa-native" && (
@@ -717,11 +745,9 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         <ToolApprovalPanel
           focusId={FOCUS_IDS.toolApprovalPanel}
           request={toolApproval}
-          onSelect={(decision) => {
-            resolveToolApproval({ toolApprovalResolverRef, setToolApproval, setScreen }, decision);
-          }}
+          onSelect={(decision) => resolveToolApproval(toolApprovalContext, decision)}
           onCancelRun={() => {
-            resolveToolApproval({ toolApprovalResolverRef, setToolApproval, setScreen }, "deny");
+            resolveToolApproval(toolApprovalContext, "deny");
             handleCancel();
           }}
         />
@@ -788,6 +814,23 @@ function PolicySelectionPanel({
   );
 }
 
+/**
+ * Text under the model list explaining an empty or stale inventory: a
+ * refresh in progress, or a discovery problem worth repeating. Generic "no
+ * models" text is not repeated.
+ */
+function modelPickerRefreshMessage(refreshing: boolean, emptyMessage: string): string | undefined {
+  if (refreshing) {
+    return "Refreshing model inventory…";
+  }
+  const describesProblem =
+    /fail|unverified|cached|credentials|unable|timed|removed|unavailable|unsupported/i.test(
+      emptyMessage,
+    );
+  return describesProblem ? emptyMessage : undefined;
+}
+
+/** Answers the pending tool approval and closes the approval overlay. */
 function resolveToolApproval(
   context: Pick<OverlayPanelsProps, "toolApprovalResolverRef" | "setToolApproval" | "setScreen">,
   decision: ToolApprovalDecision,

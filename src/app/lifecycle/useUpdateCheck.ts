@@ -26,7 +26,11 @@ interface UseUpdateCheckContext {
   schedulerDeps?: Partial<Omit<UpdateCheckSchedulerDeps, "onResult">>;
 }
 
-function loadCachedUpdateForRunningVersion(): UpdateCheckResult | null {
+/**
+ * A cached "update available" result, but only if it was recorded for the
+ * version that is running now (an upgrade makes older cache entries moot).
+ */
+export function loadCachedUpdateForRunningVersion(): UpdateCheckResult | null {
   const cache = loadUpdateCheckCache();
   if (!cache?.updateAvailable || !cache.latestVersion) return null;
   if (!isCacheForRunningVersion(cache, APP_VERSION)) return null;
