@@ -2,7 +2,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCodexHome, getHomeDir } from "../../config/settings.js";
-import type { ProviderId, ProviderWorkspaceOverride } from "../providerLauncher/types.js";
+import { resolveLocalBackend } from "../providerLauncher/localBackend.js";
+import type {
+  LocalBackendId,
+  ProviderId,
+  ProviderWorkspaceConfig,
+  ProviderWorkspaceOverride,
+} from "../providerLauncher/types.js";
 import type {
   ProviderModel,
   ProviderModelDiscoveryResult,
@@ -85,6 +91,28 @@ export function catalogContextKey(provider: ProviderId, context: CatalogContext)
       }),
     )
     .digest("hex");
+}
+
+/**
+ * Connection identity for a provider as configured in `config`.
+ *
+ * Model evidence (validation, rejection, retry delays) is scoped to this key,
+ * so every hook that records or reads evidence must derive it the same way.
+ * For Local, the backend follows {@link resolveLocalBackend}; pass the active
+ * route's backend when the key describes a concrete route.
+ */
+export function providerConnectionKey(
+  providerId: ProviderId,
+  options: { cwd: string; config: ProviderWorkspaceConfig; routeLocalBackend?: LocalBackendId },
+): string {
+  const { cwd, config, routeLocalBackend } = options;
+  return catalogContextKey(providerId, {
+    cwd,
+    providerConfig: config.providers?.[providerId],
+    ...(providerId === "local"
+      ? { localBackend: resolveLocalBackend(config, routeLocalBackend) }
+      : {}),
+  });
 }
 
 interface Entry {

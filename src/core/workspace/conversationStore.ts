@@ -17,6 +17,7 @@ import { parseWorkbench, type WorkbenchSnapshot } from "../../session/workbench.
 import type { ExternalSessionSource } from "../externalSessions/types.js";
 import type { LocalBackendId, ProviderId } from "../providerLauncher/types.js";
 import type { ProviderBackendKind } from "../providerRuntime/types.js";
+import type { GenerationMetadata } from "../providers/types.js";
 import { titleFromText } from "../shared/text.js";
 import { errorMessage, isRecord } from "../shared/values.js";
 import {
@@ -30,6 +31,7 @@ import { acquireOwnership, type OwnershipLease } from "./ownership.js";
 export type ConversationMessageRole = "user" | "assistant";
 
 export interface ConversationMessage {
+  generationMetadata?: GenerationMetadata;
   role: ConversationMessageRole;
   content: string;
   /** Files changed / commands run during the run that produced this reply. */
@@ -210,6 +212,11 @@ function parseMessages(value: unknown): ConversationMessage[] | null {
       role,
       content,
       ...(activitySummary ? { activitySummary } : {}),
+      ...(isRecord(item.generationMetadata) &&
+      typeof item.generationMetadata.modelId === "string" &&
+      typeof item.generationMetadata.rawOutput === "string"
+        ? { generationMetadata: item.generationMetadata as unknown as GenerationMetadata }
+        : {}),
       ...(typeof item.submittedContent === "string"
         ? { submittedContent: item.submittedContent }
         : {}),
@@ -414,6 +421,7 @@ export class ConversationStore {
       role: message.role,
       content: message.content,
       ...(message.activitySummary ? { activitySummary: message.activitySummary } : {}),
+      ...(message.generationMetadata ? { generationMetadata: message.generationMetadata } : {}),
       ...(message.submittedContent === undefined
         ? {}
         : { submittedContent: message.submittedContent }),

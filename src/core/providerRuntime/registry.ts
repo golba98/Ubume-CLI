@@ -144,6 +144,7 @@ export function getProviderRouteSetupMessage(providerId: ProviderId): string {
 }
 
 export function discoverProviderModels(providerId: ProviderId): ProviderModelDiscoveryResult {
+  if (providerId === "codexa-native") return getProviderRuntime(providerId).discoverModels();
   const snapshot = providerCatalog.get(providerId);
   if (snapshot) return snapshot;
   const result = getProviderRuntime(providerId).discoverModels();

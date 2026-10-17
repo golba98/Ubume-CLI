@@ -298,8 +298,8 @@ test("/clear arms a fresh render generation before transcript reset", () => {
   );
   const body = callbackBody(appSource, "handleClear");
   assert.ok(body, "handleClear callback should exist");
-  const armBoundaryIndex = body.indexOf(
-    'armTranscriptReplacement("src/app/useComposerEditing.ts:handleClear")',
+  const armBoundaryIndex = body.search(
+    /armTranscriptReplacement\(\s*"src\/app\/conversation\/useClearConversation\.ts:handleClear"\s*,?\s*\)/,
   );
   const seedEventsIndex = body.indexOf("createStartupStaticEvents({");
   const resetToHomeIndex = body.search(/resetToHomeScreen\(\s*createStartupStaticEvents\(\{/);
@@ -329,7 +329,7 @@ test("/resume arms the clear boundary before swapping the transcript so the logo
   const body = callbackBody(appSource, "resumeConversation");
   assert.ok(body, "resumeConversation callback should exist");
   const armIndex = body.search(
-    /armTranscriptReplacement\(\s*"src\/app\/useConversation\.ts:resumeConversation"\s*,?\s*\)/,
+    /armTranscriptReplacement\(\s*"src\/app\/conversation\/useResumeFlows\.ts:resumeConversation"\s*,?\s*\)/,
   );
   const swapIndex = body.indexOf('type: "RESTORE_SESSION"');
   const finishIndex = body.indexOf("replacement.finish()");

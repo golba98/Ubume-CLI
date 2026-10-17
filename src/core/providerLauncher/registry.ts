@@ -5,6 +5,7 @@ import {
   CODEXA_NATIVE_MODEL_ID,
   discoverCodexaCupyModels,
   discoverCodexaNativeModels,
+  setCodexaNativeConfig,
 } from "../providerRuntime/codexaNative.js";
 import {
   formatContextLength,
@@ -249,6 +250,8 @@ export function buildProviderRegistry(options: {
   const providerOrder = getProviderOrder(env);
 
   return providerOrder.map((id) => {
+    if (id === "codexa-native")
+      setCodexaNativeConfig(options.workspaceConfig?.providers?.["codexa-native"]?.codexaNative);
     if (id === "local") {
       setLocalProviderConfig(options.workspaceConfig?.providers?.local);
     }
@@ -272,6 +275,8 @@ export function buildProviderRegistry(options: {
             id === "openai" ? DEFAULT_MODEL : defaults.currentModel(options.activeModel),
           );
 
+    if (id === "codexa-native")
+      setCodexaNativeConfig(options.workspaceConfig?.providers?.["codexa-native"]?.codexaNative);
     if (id === "local") {
       const selectedModel =
         typeof discovery.diagnostics?.selectedModel === "string" &&
