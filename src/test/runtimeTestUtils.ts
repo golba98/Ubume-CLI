@@ -1,11 +1,16 @@
+/** Runtime fixtures use production policy normalization without loading user config. */
 import {
   DEFAULT_RUNTIME_CONFIG,
+  type PartialRuntimeConfig,
   type ResolvedRuntimeConfig,
-  type RuntimeConfig,
   resolveRuntimeConfig,
 } from "../config/runtimeConfig.js";
 
-function makeResolvedRuntime(overrides: Partial<RuntimeConfig> = {}): ResolvedRuntimeConfig {
+/**
+ * Resolves defaults plus partial policy overrides into an independently mutable fixture.
+ * Neither the overrides nor the shared defaults are mutated.
+ */
+export function createTestRuntime(overrides: PartialRuntimeConfig = {}): ResolvedRuntimeConfig {
   return resolveRuntimeConfig({
     ...DEFAULT_RUNTIME_CONFIG,
     ...overrides,
@@ -16,4 +21,5 @@ function makeResolvedRuntime(overrides: Partial<RuntimeConfig> = {}): ResolvedRu
   });
 }
 
-export const TEST_RUNTIME = makeResolvedRuntime();
+/** Shared baseline for read-only consumers. Use createTestRuntime when mutating state. */
+export const TEST_RUNTIME = createTestRuntime();

@@ -1,21 +1,31 @@
-interface FakeTimer {
+/** Injected timers for scheduler tests; this does not replace global timers. */
+import { settle } from "./async.js";
+
+export { settle } from "./async.js";
+
+export interface FakeTimer {
   id: number;
   at: number;
   ms: number;
   fn: () => void;
 }
 
-/** Lets pending promise chains (and Ink renders they trigger) run to completion. */
-export async function settle(rounds = 5): Promise<void> {
-  for (let i = 0; i < rounds; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+export interface FakeClock {
+  now(): number;
+  setTimer(fn: () => void, ms: number): unknown;
+  clearTimer(handle: unknown): void;
+  /** Returns detached timer records in insertion order. */
+  pending(): FakeTimer[];
+  advance(ms: number): Promise<void>;
 }
 
 /**
  * Deterministic setTimer/clearTimer/now trio for code that takes injected timers
  * (e.g. the update-check scheduler). `advance` fires due timers in order and
- * settles after each so async work they start can finish.
+ * yields between callbacks so their async work can progress. Newly scheduled timers are also
+ * eligible within the advance window; equal deadlines retain insertion order.
  */
-export function createFakeClock() {
+export function createFakeClock(): FakeClock {
   let now = 0;
   let seq = 0;
   const timers = new Map<number, FakeTimer>();
@@ -29,7 +39,7 @@ export function createFakeClock() {
     clearTimer: (handle: unknown) => {
       timers.delete(handle as number);
     },
-    pending: () => [...timers.values()],
+    pending: () => [...timers.values()].map((timer) => ({ ...timer })),
     async advance(ms: number) {
       const target = now + ms;
       for (;;) {

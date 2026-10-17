@@ -1,9 +1,18 @@
 #!/usr/bin/env node
-// A deterministic AGY process fixture, never a production backend.
+/**
+ * Credential-free AGY executable for headless and usage regression tests.
+ * UBUME_TEST_AGY_USAGE selects protocol failures; prompt markers exercise auth
+ * and interruption paths. The caller owns process termination and fixture files.
+ */
 import { appendFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
-const value = (flag) => args[args.indexOf(flag) + 1];
+const value = (flag) => {
+  const index = args.indexOf(flag);
+  const result = index === -1 ? undefined : args[index + 1];
+  if (result === undefined) throw new Error(`AGY fixture requires a value for ${flag}`);
+  return result;
+};
 if (args.includes("--help")) {
   console.error("Usage of agy: --model --conversation --print --effort");
 } else if (args[0] === "models") {
@@ -99,6 +108,6 @@ if (args.includes("--help")) {
     console.log(`AGY_REPLY:${value("--model")}`);
   }
 } else {
-  console.error("Unexpected fixture arguments");
+  console.error(`Unexpected AGY fixture arguments: ${JSON.stringify(args)}`);
   process.exitCode = 2;
 }
