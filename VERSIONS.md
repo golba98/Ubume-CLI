@@ -3,6 +3,16 @@
 This file explains what users get in each release. For exact implementation
 details and test notes, see the [changelog](CHANGELOG.md).
 
+## v0.1.18 — 2026-10-17 (prepared)
+
+Failed model selections now leave provider and model controls usable. Older validation results cannot overwrite a newer choice, and failed saves preserve the previous route and preferences.
+
+Codexa Native can run five experimental local 934M checkpoint variants through a managed Python worker. Generation settings, unload and replay controls are available in the TUI. The model files, tokenizer and Python environment must be configured separately; they are not included in the npm package.
+
+The interactive app is organized into domain hooks, and `/status`, `/runtime`, `/workspace` and `/help` output is restored. See [the verification report](docs/RELEASE_0.1.18_VERIFICATION.md).
+
+This version is prepared for review and has not been published by this release preparation.
+
 ## v0.1.17 — 2026-10-09 (prepared)
 
 `/usage` shows account usage for Codex, Claude Code and Google Antigravity in a refreshable panel. Local routes show context and token usage, and unsupported providers are identified in the panel.
