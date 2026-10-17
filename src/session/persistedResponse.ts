@@ -1,3 +1,13 @@
+/**
+ * The assistant message persisted for a finished run.
+ *
+ * Runs save a compact, deterministic summary of what they did (files changed,
+ * commands run) alongside the reply, so /resume shows useful context without
+ * replaying tool output. Completed replies keep their content byte-for-byte
+ * because Local Harness session reuse hashes it; interrupted replies keep
+ * whatever streamed plus an explicit interruption note.
+ */
+
 import type { ConversationMessage } from "../core/workspace/conversationStore.js";
 import type { RunFileOperation } from "../core/workspace/workspaceActivity.js";
 

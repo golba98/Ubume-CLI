@@ -1,3 +1,13 @@
+/**
+ * Plan-mode flow: the state machine behind `/plan`.
+ *
+ * A plan moves through a fixed lifecycle — generating, awaiting the user's
+ * action, optionally collecting feedback (which re-enters generating), and
+ * finally executing. Transitions are pure and total: applying one in the
+ * wrong state returns the state unchanged. The original prompt, execution
+ * mode and accumulated constraints travel with the plan through every stage.
+ */
+
 import type { AvailableMode } from "../config/settings.js";
 
 export type PlanFeedbackMode = "revise" | "constraints";
@@ -37,6 +47,16 @@ export type PlanFlowState =
 
 type PlanGeneratingState = Extract<PlanFlowState, { kind: "generating" }>;
 
+/** The fields every plan keeps across its whole flow, from generation to execution. */
+function planContextFields(state: PlanFlowContext): PlanFlowContext {
+  return {
+    originalPrompt: state.originalPrompt,
+    executionMode: state.executionMode,
+    constraints: state.constraints,
+    planFilePath: state.planFilePath,
+  };
+}
+
 export function createInitialPlanFlowState(): PlanFlowState {
   return { kind: "idle" };
 }
@@ -51,6 +71,7 @@ export function resolvePlanExecutionMode(mode: AvailableMode): AvailableMode {
   return mode === "suggest" ? "auto-edit" : mode;
 }
 
+/** Starts a fresh plan generation for `originalPrompt`. */
 export function startPlanGeneration(
   originalPrompt: string,
   executionMode: AvailableMode,
@@ -66,6 +87,7 @@ export function startPlanGeneration(
   };
 }
 
+/** Finishes generation with a concrete plan and the file it was saved to. */
 export function finishPlanGeneration(
   state: PlanFlowState,
   currentPlan: string,
@@ -76,45 +98,40 @@ export function finishPlanGeneration(
   }
 
   return {
+    ...planContextFields(state),
     kind: "awaiting_action",
-    originalPrompt: state.originalPrompt,
-    executionMode: state.executionMode,
-    constraints: state.constraints,
     currentPlan,
     planFilePath,
   };
 }
 
+/** Opens the feedback composer for the reviewed plan (`revise` or `constraints`). */
 export function beginPlanFeedback(state: PlanFlowState, mode: PlanFeedbackMode): PlanFlowState {
   if (state.kind !== "awaiting_action") {
     return state;
   }
 
   return {
+    ...planContextFields(state),
     kind: "collecting_feedback",
-    originalPrompt: state.originalPrompt,
-    executionMode: state.executionMode,
-    constraints: state.constraints,
     currentPlan: state.currentPlan,
-    planFilePath: state.planFilePath,
     mode,
   };
 }
 
+/**
+ * Submits feedback on the plan. A constraint is recorded and carried into the
+ * next generation pass; a revision is handed to the model as pending feedback.
+ */
 export function submitPlanFeedback(state: PlanFlowState, text: string): PlanFlowState {
   if (state.kind !== "collecting_feedback") {
     return state;
   }
 
-  const nextConstraints =
-    state.mode === "constraints" ? [...state.constraints, text] : state.constraints;
-
   return {
+    ...planContextFields(state),
     kind: "generating",
-    originalPrompt: state.originalPrompt,
-    executionMode: state.executionMode,
-    constraints: nextConstraints,
-    planFilePath: state.planFilePath,
+    constraints: state.mode === "constraints" ? [...state.constraints, text] : state.constraints,
     currentPlan: state.currentPlan,
     pendingFeedback: {
       mode: state.mode,
@@ -123,36 +140,33 @@ export function submitPlanFeedback(state: PlanFlowState, text: string): PlanFlow
   };
 }
 
+/** Cancels the feedback composer, returning to the plan's action picker. */
 export function cancelPlanFeedback(state: PlanFlowState): PlanFlowState {
   if (state.kind !== "collecting_feedback") {
     return state;
   }
 
   return {
+    ...planContextFields(state),
     kind: "awaiting_action",
-    originalPrompt: state.originalPrompt,
-    executionMode: state.executionMode,
-    constraints: state.constraints,
     currentPlan: state.currentPlan,
-    planFilePath: state.planFilePath,
   };
 }
 
+/** Approves the plan; the run executes it in the plan's execution mode. */
 export function approvePlanExecution(state: PlanFlowState): PlanFlowState {
   if (state.kind !== "awaiting_action") {
     return state;
   }
 
   return {
+    ...planContextFields(state),
     kind: "executing",
-    originalPrompt: state.originalPrompt,
-    executionMode: state.executionMode,
-    constraints: state.constraints,
     currentPlan: state.currentPlan,
-    planFilePath: state.planFilePath,
   };
 }
 
+/** Resets the flow to idle (after execution, a failed run, or /plan off). */
 export function resetPlanFlow(): PlanFlowState {
   return createInitialPlanFlowState();
 }

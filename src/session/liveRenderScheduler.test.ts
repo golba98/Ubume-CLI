@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createLiveRenderScheduler, type LiveRenderUpdate } from "./liveRenderScheduler.js";
+import {
+  createLiveRenderScheduler,
+  type LiveRenderUpdate,
+  schedulePromptRunStartAfterVisibleCommit,
+} from "./liveRenderScheduler.js";
 
 type FakeTimer = {
   callback: () => void;
@@ -225,4 +229,38 @@ test("flushNow drains queued updates before finalization", () => {
   assert.equal(fakeTimers.timers[0]?.cleared, true);
   fakeTimers.timers[0]?.callback();
   assert.equal(flushed.length, 1);
+});
+
+// ─── Prompt-run start scheduling ──────────────────────────────────────────────
+
+function waitForTimerTurn(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+test("schedulePromptRunStartAfterVisibleCommit waits past the reducer microtask before starting work", async () => {
+  const order: string[] = [];
+
+  schedulePromptRunStartAfterVisibleCommit(() => {
+    order.push("provider-started");
+  });
+  order.push("visible-run-dispatched");
+
+  await Promise.resolve();
+  assert.deepEqual(order, ["visible-run-dispatched"]);
+
+  await waitForTimerTurn();
+  assert.deepEqual(order, ["visible-run-dispatched", "provider-started"]);
+});
+
+test("schedulePromptRunStartAfterVisibleCommit can be canceled before provider start", async () => {
+  let started = false;
+
+  const cancel = schedulePromptRunStartAfterVisibleCommit(() => {
+    started = true;
+  });
+  cancel();
+
+  await Promise.resolve();
+  await waitForTimerTurn();
+
+  assert.equal(started, false);
 });
