@@ -23,30 +23,14 @@ import {
 } from "../config/settings.js";
 import {
   type CodexModelCapabilities,
-  createFallbackModelCapabilities,
   findModelCapability,
-  getSelectableModelCapabilities,
   normalizeReasoningForModelCapabilities,
 } from "../core/models/codexModelCapabilities.js";
-import { providerConnectionKey } from "../core/models/modelCatalog.js";
-import { traceModelStateDebug } from "../core/perf/debugLog.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
-import { buildProviderRegistry, findProvider } from "../core/providerLauncher/registry.js";
 import type { LocalBackendId, ProviderId } from "../core/providerLauncher/types.js";
-import { resolveModelContextLength } from "../core/providerRuntime/contextMetadata.js";
 import { isLocalRuntime } from "../core/providerRuntime/deployment.js";
-import { modelRecoveryMessage } from "../core/providerRuntime/failures.js";
-import { type checkLocalProvider, setLocalProviderConfig } from "../core/providerRuntime/local.js";
-import { closeLocalHarnessSession } from "../core/providerRuntime/localHarness/runtime.js";
-import { providerModelsToCodexCapabilities } from "../core/providerRuntime/models.js";
-import {
-  createRoutedProvider,
-  discoverProviderModels,
-  getProviderRouteSetupMessage,
-  getProviderRuntime,
-  resolveActiveProviderRoute,
-} from "../core/providerRuntime/registry.js";
-import type { RuntimeAvailability } from "../core/providerRuntime/types.js";
+import type { checkLocalProvider } from "../core/providerRuntime/local.js";
+import { createRoutedProvider, discoverProviderModels } from "../core/providerRuntime/registry.js";
 import { getBackendProvider } from "../core/providers/registry.js";
 import type { BackendProvider } from "../core/providers/types.js";
 import { createClearFrameBoundaryController } from "../core/terminal/clearFrameBoundary.js";
@@ -82,13 +66,16 @@ import { useWorkbenchActions } from "./input/useWorkbenchActions.js";
 import { useAppDebugTracing } from "./lifecycle/useAppDebugTracing.js";
 import { useFocusRouting } from "./lifecycle/useFocusRouting.js";
 import { useUpdateCheck } from "./lifecycle/useUpdateCheck.js";
+import { useActiveModelMetadata } from "./models/useActiveModelMetadata.js";
 import { useModelCatalog } from "./models/useModelCatalog.js";
+import { useModelPickerModel } from "./models/useModelPickerModel.js";
 import { useModelSelection } from "./models/useModelSelection.js";
 import { useRuntimeSettings } from "./models/useRuntimeSettings.js";
 import { buildSettingsPayload, useSettings } from "./models/useSettings.js";
 import { OverlayPanels } from "./overlays/OverlayPanels.js";
 import { useOverlayRouting } from "./overlays/useOverlayRouting.js";
 import { useRouteStatus } from "./providers/routeStatus.js";
+import { useActiveProviderRoute } from "./providers/useActiveProviderRoute.js";
 import { useProviderRoute } from "./providers/useProviderRoute.js";
 import { useProviderUsage } from "./providers/useProviderUsage.js";
 import { usePlanFlow } from "./run/usePlanFlow.js";
@@ -149,8 +136,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     toolApproval,
     setToolApproval,
     toolApprovalResolverRef,
-    registryNonce,
-    setRegistryNonce,
     screenRef,
     bumpPostClearRepaint,
     sessionState,
@@ -163,14 +148,9 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     fileAttachmentRegistryRef,
     checkpointsRef,
     restoredFileBoundaryRef,
-    stoppingRef,
     snapshotRef,
-    deferredRouteCloseRef,
-    isMountedRef,
-    activeRunIdRef,
     clearEpochRef,
     interruptHint,
-    conversationRouteOverride,
     preserveSavedRouteRef,
     savedViewerSession,
     resumeConversations,
@@ -183,9 +163,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelCapabilitiesBusy,
     routeSwitchBusy,
     providerModelLoading,
-    providerModelErrors,
     activeContextMetadata,
-    setActiveContextMetadata,
   } = appState;
   const { stdout } = useStdout();
   const { stdin } = useStdin();
@@ -364,252 +342,49 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     () => buildRuntimeSummary(resolvedRuntimeConfig),
     [resolvedRuntimeConfig],
   );
-  const activeProviderRoute = useMemo(() => {
-    // When --model was given on the CLI, override the stored activeRoute's modelId so
-    // the actual run uses the CLI model instead of whatever is persisted in providers.json.
-    // The providers.json entry is left unchanged so it survives this session.
-    const cliModel = appState.selectionCoordinator.interactiveSelection
-      ? null
-      : launchArgs.modelOverride;
-    if (conversationRouteOverride) return conversationRouteOverride;
-    const configuredRoute = providerWorkspaceConfig.activeRoute;
-    const effectiveRoute =
-      cliModel && configuredRoute ? { ...configuredRoute, modelId: cliModel } : configuredRoute;
-    return resolveActiveProviderRoute({
-      workspaceConfigActiveRoute: effectiveRoute,
-      googleMigrationRequired: providerWorkspaceConfig.googleMigrationRequired,
-      currentModel: model,
-      currentReasoning: reasoningLevel,
-    });
-  }, [
-    conversationRouteOverride,
-    launchArgs.modelOverride,
-    model,
-    providerWorkspaceConfig.activeRoute,
-    providerWorkspaceConfig.googleMigrationRequired,
-    reasoningLevel,
-    registryNonce,
-    providerWorkspaceConfig,
-    selectionVersion,
-  ]);
-  const previousProviderRouteRef = useRef(activeProviderRoute);
-  useEffect(() => {
-    const previous = previousProviderRouteRef.current;
-    const changed =
-      previous.providerId !== activeProviderRoute.providerId ||
-      previous.modelId !== activeProviderRoute.modelId ||
-      previous.localBackend !== activeProviderRoute.localBackend;
-    if (changed && previous.providerId === "local") {
-      const sessionId = activeConversationRef.current?.metadata.localHarnessSession?.sessionId;
-      if (activeRunIdRef.current !== null) deferredRouteCloseRef.current = sessionId;
-      else
-        stoppingRef.current = stoppingRef.current.then(() => closeLocalHarnessSession(sessionId));
-    }
-    previousProviderRouteRef.current = activeProviderRoute;
-  }, [activeProviderRoute]);
-  const activeProviderRuntime = useMemo(
-    () => getProviderRuntime(activeProviderRoute.providerId),
-    [activeProviderRoute.providerId],
-  );
-  const providerRegistry = useMemo(
-    () => {
-      setLocalProviderConfig(providerWorkspaceConfig.providers?.local);
-      return buildProviderRegistry({
-        activeModel: model,
-        workspaceRoot,
-        workspaceConfig: providerWorkspaceConfig,
-        diagnostics: providerDiagnosticsRef.current,
-        routeErrors: providerRouteErrorsRef.current,
-      });
-    },
-    // registryNonce is intentionally included: startup probes and post-validation
-    // updates mutate providerDiagnosticsRef/providerRouteErrorsRef (refs, not state)
-    // and then increment the nonce to trigger a re-read of those refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model, providerWorkspaceConfig, registryNonce, workspaceRoot],
-  );
-  const workspaceDefaultProvider = useMemo(
-    () => providerRegistry.find((provider) => provider.isDefault) ?? providerRegistry[0] ?? null,
-    [providerRegistry],
-  );
-  const activeRouteProviderId = activeProviderRoute.providerId;
-  const markProviderAvailability = useCallback(
-    (providerId: ProviderId, availability: RuntimeAvailability, reason: string) => {
-      const previous = providerDiagnosticsRef.current[providerId] ?? {};
-      const selectedModel =
-        typeof previous.selectedModel === "string" && previous.selectedModel.trim()
-          ? previous.selectedModel.trim()
-          : providerId === activeProviderRoute.providerId
-            ? activeProviderRoute.modelId
-            : null;
-      providerDiagnosticsRef.current[providerId] = {
-        ...previous,
-        selectedModel,
-        availabilityStatus: availability,
-        endpointCheckResult: availability,
-      };
-      traceModelStateDebug("provider_availability_marked", {
-        providerId,
-        selectedModel,
-        availability,
-        reason,
-      });
-      setRegistryNonce((current) => current + 1);
-    },
-    [activeProviderRoute.modelId, activeProviderRoute.providerId],
-  );
-
-  // Reset provider readiness when the user switches to a different provider.
-  useEffect(() => {
-    dispatchSession({ type: "SET_EXTERNAL_CLI_STATUS", status: "idle" });
-  }, [activeRouteProviderId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const activeRouteProvider = useMemo(
-    () => findProvider(providerRegistry, activeRouteProviderId) ?? providerRegistry[0] ?? null,
-    [activeRouteProviderId, providerRegistry],
-  );
-  const modelPickerProviderId = pendingRouteProviderId ?? activeProviderRoute.providerId;
-  const modelPickerRuntime = useMemo(
-    () => getProviderRuntime(modelPickerProviderId),
-    [modelPickerProviderId],
-  );
-  const modelPickerDiscovery = useMemo(() => {
-    if (modelPickerProviderId === "openai") return null;
-    return discoverProviderModels(modelPickerProviderId);
-    // registryNonce is intentionally included: route validation discovers models
-    // as a side effect and bumps the nonce so an open picker re-reads them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelPickerProviderId, registryNonce]);
-  const providerModelCapabilities = useMemo(() => {
-    if (!modelPickerDiscovery) return null;
-    return providerModelsToCodexCapabilities(
-      modelPickerDiscovery.models,
-      activeProviderRoute.modelId,
-    );
-  }, [activeProviderRoute.modelId, modelPickerDiscovery]);
-  const activeRouteModelCapabilities = useMemo(() => {
-    if (activeProviderRoute.providerId === "openai") return modelCapabilities;
-    const discovery = discoverProviderModels(activeProviderRoute.providerId);
-    return providerModelsToCodexCapabilities(discovery.models, activeProviderRoute.modelId);
-    // Local startup discovery mutates the runtime cache without necessarily
-    // changing the restored model id. Re-read it when the registry nonce moves
-    // so discovered context metadata can replace the initial Unknown value.
-  }, [
-    activeProviderRoute.modelId,
-    activeProviderRoute.providerId,
-    modelCapabilities,
-    registryNonce,
-  ]);
-  const modelPickerModels = useMemo(() => {
-    const capabilities =
-      providerModelCapabilities ??
-      (modelPickerProviderId === "openai"
-        ? (modelCapabilities ?? createFallbackModelCapabilities(null))
-        : null);
-    return capabilities
-      ? getSelectableModelCapabilities(capabilities).map((entry) => ({
-          ...entry,
-          reasoningPreference:
-            providerWorkspaceConfig.providers?.[modelPickerProviderId]?.models?.[entry.model]
-              ?.reasoningPreference,
-        }))
-      : [];
-  }, [
-    modelCapabilities,
-    modelPickerProviderId,
-    providerModelCapabilities,
-    providerWorkspaceConfig.providers,
-  ]);
-  const modelPickerCurrentModel = useMemo(() => {
-    if (!pendingRouteProviderId) return activeProviderRoute.modelId;
-    if (pendingRouteProviderId === activeProviderRoute.providerId)
-      return activeProviderRoute.modelId;
-    // Non-active provider: use stored default, fall back to first selectable model
-    const storedDefault = providerWorkspaceConfig.providers?.[pendingRouteProviderId]?.currentModel;
-    const selectable = getSelectableModelCapabilities(
-      providerModelCapabilities ?? createFallbackModelCapabilities(null),
-    );
-    return storedDefault ?? selectable[0]?.model ?? model;
-  }, [
+  const {
     activeProviderRoute,
-    model,
-    pendingRouteProviderId,
-    providerModelCapabilities,
-    providerWorkspaceConfig,
-  ]);
-  const modelPickerCurrentReasoning = useMemo(() => {
-    if (!pendingRouteProviderId) {
-      return activeProviderRoute.reasoning ?? reasoningLevel;
-    }
-    if (pendingRouteProviderId === activeProviderRoute.providerId) {
-      return activeProviderRoute.reasoning ?? reasoningLevel;
-    }
-    const storedReasoning =
-      providerWorkspaceConfig.providers?.[pendingRouteProviderId]?.currentReasoning;
-    if (storedReasoning) return storedReasoning;
-    const pickerCapabilities =
-      pendingRouteProviderId === "openai" ? modelCapabilities : providerModelCapabilities;
-    const capability = findModelCapability(pickerCapabilities, modelPickerCurrentModel);
-    return (
-      capability?.defaultReasoningLevel ??
-      capability?.supportedReasoningLevels?.[0]?.id ??
-      reasoningLevel
-    );
-  }, [
-    activeProviderRoute.providerId,
-    activeProviderRoute.reasoning,
-    modelPickerCurrentModel,
-    modelCapabilities,
-    pendingRouteProviderId,
-    providerModelCapabilities,
-    providerWorkspaceConfig.providers,
-    reasoningLevel,
-  ]);
-  const modelPickerProviderLabel = useMemo(
-    () =>
-      modelPickerRuntime.modelPickerLabel ??
-      findProvider(providerRegistry, modelPickerProviderId)?.displayName ??
-      modelPickerRuntime.label,
-    [modelPickerProviderId, modelPickerRuntime, providerRegistry],
-  );
-  const modelPickerEmptyMessage = useMemo(() => {
-    const connection = providerConnectionKey(modelPickerProviderId, {
-      cwd: workspaceRoot,
-      config: providerWorkspaceConfig,
-      routeLocalBackend:
-        activeProviderRoute.providerId === modelPickerProviderId
-          ? activeProviderRoute.localBackend
-          : undefined,
-    });
-    if (
-      appState.selectionCoordinator.state(connection, modelPickerCurrentModel)?.status ===
-      "unavailable"
-    )
-      return modelRecoveryMessage(modelPickerCurrentModel);
-    if (modelPickerProviderId === "openai") {
-      return modelCapabilities?.error
-        ? `No models available: ${modelCapabilities.error}`
-        : "No models available.";
-    }
-    if (modelPickerDiscovery?.status === "ready" && modelPickerDiscovery.models.length === 0) {
-      const setup = getProviderRouteSetupMessage(modelPickerProviderId);
-      return `No ${modelPickerProviderLabel} models are currently advertised. Refresh models or change provider. ${setup}`;
-    }
-    if (providerModelErrors[modelPickerProviderId]) {
-      return `${providerModelErrors[modelPickerProviderId]} Press Refresh models to retry.`;
-    }
-    return modelPickerDiscovery?.message ?? "No models available.";
-  }, [
+    activeProviderRuntime,
+    providerRegistry,
+    workspaceDefaultProvider,
+    markProviderAvailability,
+    activeRouteProvider,
+  } = useActiveProviderRoute({
+    ...appState,
+    launchArgs,
     selectionVersion,
-    modelPickerCurrentModel,
-    providerWorkspaceConfig.providers,
-    workspaceRoot,
+    model,
+    reasoningLevel,
+    providerDiagnosticsRef,
+    providerRouteErrorsRef,
+  });
+  const {
+    activeRouteModelCapabilities,
+    currentModelCapability,
+    currentReasoningCapabilities,
+    currentReasoningSourceLabel,
+  } = useActiveModelMetadata({
+    ...appState,
+    activeProviderRoute,
     modelCapabilities,
-    modelPickerDiscovery,
+    providerDiagnosticsRef,
+  });
+  const {
     modelPickerProviderId,
+    modelPickerModels,
+    modelPickerCurrentModel,
+    modelPickerCurrentReasoning,
     modelPickerProviderLabel,
-    providerModelErrors,
-  ]);
+    modelPickerEmptyMessage,
+  } = useModelPickerModel({
+    ...appState,
+    activeProviderRoute,
+    modelCapabilities,
+    providerRegistry,
+    model,
+    reasoningLevel,
+    selectionVersion,
+  });
   const { routeStatusMessage } = useRouteStatus({
     ...appState,
     providerRegistry,
@@ -621,64 +396,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     activeRouteModelCapabilities,
     reasoningLevel,
   });
-  const currentModelCapability = useMemo(
-    () => findModelCapability(activeRouteModelCapabilities, activeProviderRoute.modelId),
-    [activeProviderRoute.modelId, activeRouteModelCapabilities],
-  );
-  const currentModelRawMetadataKey = useMemo(
-    () =>
-      currentModelCapability?.raw === undefined ? "" : JSON.stringify(currentModelCapability.raw),
-    [currentModelCapability?.raw],
-  );
-  const currentReasoningCapabilities = currentModelCapability?.supportedReasoningLevels ?? [];
-  const currentReasoningSourceLabel = useMemo(() => {
-    if (activeProviderRoute.providerId !== "anthropic") return null;
-    const raw = currentModelCapability?.raw as
-      | { source?: string; effortVerified?: boolean }
-      | null
-      | undefined;
-    if (raw?.source === "claude-code" || raw?.source === "discovered")
-      return "Discovered from Claude Code";
-    if (raw?.source === "settings" || raw?.source === "config") return "From Claude settings";
-    return raw?.effortVerified === false ? "Fallback defaults; unverified" : "Fallback defaults";
-  }, [activeProviderRoute.providerId, currentModelCapability]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const providerId = activeProviderRoute.providerId;
-    const modelId = activeProviderRoute.modelId;
-    const rawMetadata = currentModelCapability?.raw;
-
-    void resolveModelContextLength({
-      providerId,
-      modelId,
-      providerConfig: providerWorkspaceConfig.providers?.[providerId],
-      rawMetadata,
-    }).then((metadata) => {
-      if (cancelled || !isMountedRef.current) return;
-      setActiveContextMetadata(metadata);
-
-      const contextSource = metadata.source === "known-registry" ? "registry" : metadata.source;
-      providerDiagnosticsRef.current[providerId] = {
-        ...(providerDiagnosticsRef.current[providerId] ?? {}),
-        contextLength: metadata.contextLength,
-        contextSource,
-        contextConfidence: metadata.confidence,
-        contextRawField: metadata.rawField ?? null,
-        contextError: metadata.error ?? null,
-      };
-      setRegistryNonce((current) => current + 1);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeProviderRoute.modelId,
-    activeProviderRoute.providerId,
-    currentModelRawMetadataKey,
-    providerWorkspaceConfig.providers,
-  ]);
 
   const workspaceLabel = useMemo(
     () => formatWorkspaceDisplayPath(workspaceRoot, workspaceDisplayMode),
@@ -1065,7 +782,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...runtimeSettings,
     ...appState,
     appendEvent,
-    busy,
     mode,
     planMode,
     setPlanFlow,
@@ -1076,9 +792,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     modelSelectionInFlightRef,
     getInputDebugSnapshot,
     reasoningLevel,
-    activeRouteModelCapabilities,
-    runtimeConfig,
-    activeRouteProvider,
     returnToChatMode,
     markProviderAvailability,
     providerDiagnosticsRef,
@@ -1118,7 +831,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       modelSelectionInFlightRef,
       providerDiagnosticsRef,
       appendEvent,
-      busy,
       providerRegistry,
       activeRouteProvider,
       model,
@@ -1129,9 +841,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       reasoningLevel,
       ensureProviderModels,
       refreshModelCapabilities,
-      markProviderAvailability,
-      runtimeConfig,
-      resolvedRuntimeConfig,
       busyRef,
       externalCliLaunchHooks,
       updateProviderWorkspaceConfig: runtimeSettings.updateProviderWorkspaceConfig,

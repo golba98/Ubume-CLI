@@ -1,3 +1,26 @@
+/**
+ * Mode, plan-mode, reasoning and model selection for the interactive app.
+ *
+ * `setModelAndReasoningWithNotice` is the **single activation path** for a
+ * provider route: the model picker, `/model`, provider "Use in Ubume" and the
+ * Local backend probe all end here. It runs one selection *transition* owned
+ * by the session's `SelectionCoordinator`:
+ *
+ * 1. Build the candidate route and begin a transition. Beginning a transition
+ *    aborts any older one, so only the newest selection can commit.
+ * 2. Reject reasoning the model explicitly does not support.
+ * 3. Validate the route with the provider (abortable).
+ * 4. Persist it to `providers.json`. A failed save commits nothing.
+ * 5. Publish: commit the transition and update the runtime model/reasoning.
+ *
+ * Any failure "recovers" instead of committing: the previous route and saved
+ * preferences stay in place, a model rejection is recorded against the
+ * provider connection, and (if this selection still owns navigation) the
+ * failing provider's model picker opens so the user can choose another model.
+ * Stale transitions are ignored at every step, so an older validation cannot
+ * report errors, steal focus or clear a newer selection's busy state.
+ */
+
 import { useCallback, useEffect, useRef } from "react";
 import type { LaunchArgs } from "../../config/launchArgs.js";
 import { saveRuntimeModePreference } from "../../config/persistence.js";
@@ -17,23 +40,14 @@ import {
   normalizeReasoningForModelCapabilities,
 } from "../../core/models/codexModelCapabilities.js";
 import { providerConnectionKey } from "../../core/models/modelCatalog.js";
-import { isSupportedReasoning } from "../../core/models/reasoningControl.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import { traceInputDebug } from "../../core/perf/debugLog.js";
-import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import type {
   LocalBackendId,
-  ProviderConfig,
   ProviderId,
   ProviderWorkspaceConfig,
 } from "../../core/providerLauncher/types.js";
-import { getAgyModelSelector } from "../../core/providerRuntime/antigravity.js";
-import {
-  classifyProviderFailure,
-  isModelFailure,
-  modelRecoveryMessage,
-} from "../../core/providerRuntime/failures.js";
-
+import { classifyProviderFailure } from "../../core/providerRuntime/failures.js";
 import { providerModelsToCodexCapabilities } from "../../core/providerRuntime/models.js";
 import {
   discoverProviderModels,
@@ -41,13 +55,20 @@ import {
   getProviderRuntime,
   validateProviderRouteActivation,
 } from "../../core/providerRuntime/registry.js";
-
 import type { ProviderRoute, RuntimeAvailability } from "../../core/providerRuntime/types.js";
-
 import { errorMessage } from "../../core/shared/values.js";
 import type { SessionAction } from "../../session/appSession.js";
 import { type PlanFlowState, resetPlanFlow } from "../../session/planFlow.js";
 import type { Screen } from "../../session/types.js";
+import {
+  buildCandidateRoute,
+  CONNECTION_CHANGED_MESSAGE,
+  classifyValidationFailure,
+  googleReasoningModels,
+  reasoningExcludedByModel,
+  reasoningNotAdvertised,
+  SELECTION_SAVE_FAILED_MESSAGE,
+} from "./selectionLogic.js";
 
 interface UseModelSelectionContext {
   dispatchSession: (action: SessionAction) => void;
@@ -57,7 +78,6 @@ interface UseModelSelectionContext {
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  busy: boolean;
   mode: "suggest" | "auto-edit" | "full-auto";
   planMode: boolean;
   setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
@@ -80,23 +100,9 @@ interface UseModelSelectionContext {
     localBackend?: LocalBackendId,
   ) => boolean | void;
   modelSelectionInFlightRef: React.RefObject<boolean>;
-  getInputDebugSnapshot: (extra?: Record<string, unknown>) => {
-    screen: Screen;
-    mode: "model-picker" | "chat/input";
-    modelPickerOpen: boolean;
-    composerEnabled: boolean;
-    inputLocked: boolean;
-    busy: boolean;
-    modelLoading: boolean;
-    modelSelection: boolean;
-    focusTarget: string;
-    stdin: Record<string, unknown>;
-  };
+  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
   reasoningLevel: string;
-  activeRouteModelCapabilities: CodexModelCapabilities | null;
   workspaceRoot: string;
-  runtimeConfig: RuntimeConfig;
-  activeRouteProvider: ProviderConfig;
   returnToChatMode: (reason?: string) => void;
   modelCapabilities: CodexModelCapabilities | null;
   setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
@@ -120,7 +126,6 @@ export function useModelSelection(context: UseModelSelectionContext) {
     updateRuntimeConfig,
     setScreen,
     appendEvent,
-    busy,
     mode,
     planMode,
     setPlanFlow,
@@ -150,17 +155,21 @@ export function useModelSelection(context: UseModelSelectionContext) {
     ensureProviderModels,
   } = context;
 
+  // Async validation must compare against, and recover with, the values
+  // current when it finishes, not the ones captured when it started.
   const latest = useRef({ providerWorkspaceConfig, ensureProviderModels });
   latest.current = { providerWorkspaceConfig, ensureProviderModels };
+
+  // Abort any in-flight validation when the app unmounts.
   useEffect(() => () => selectionCoordinator.cancel(), [selectionCoordinator]);
+
+  // ---------------------------------------------------------------------------
+  // Execution mode and plan mode
+  // ---------------------------------------------------------------------------
 
   const setModeWithNotice = useCallback(
     (nextMode: AvailableMode) => {
-      updateRuntimeConfig((current) => ({
-        ...current,
-        mode: nextMode,
-        planMode: false,
-      }));
+      updateRuntimeConfig((current) => ({ ...current, mode: nextMode, planMode: false }));
       saveRuntimeModePreference(nextMode, false);
       setScreen("main");
       appendEvent(
@@ -169,35 +178,50 @@ export function useModelSelection(context: UseModelSelectionContext) {
         `Execution mode switched to ${formatModeLabel(nextMode)}.`,
       );
     },
-    [appendEvent, busy, updateRuntimeConfig],
+    [appendEvent, updateRuntimeConfig],
   );
 
   const cycleModeWithNotice = useCallback(() => {
     const next = getNextRotatingMode(mode, planMode);
-    updateRuntimeConfig((current) => ({
-      ...current,
-      mode: next.mode,
-      planMode: next.planMode,
-    }));
+    updateRuntimeConfig((current) => ({ ...current, mode: next.mode, planMode: next.planMode }));
     saveRuntimeModePreference(next.mode, next.planMode);
     if (!next.planMode) {
       setPlanFlow(resetPlanFlow());
     }
-  }, [appendEvent, busy, mode, planMode, updateRuntimeConfig]);
+  }, [mode, planMode, updateRuntimeConfig]);
 
+  const setPlanModeWithNotice = useCallback(
+    (nextEnabled: boolean) => {
+      updateRuntimeConfig((current) => ({ ...current, planMode: nextEnabled }));
+      saveRuntimeModePreference(mode, nextEnabled);
+      if (!nextEnabled) {
+        setPlanFlow(resetPlanFlow());
+      }
+      appendEvent("system", "Plan mode", `Plan mode ${nextEnabled ? "enabled" : "disabled"}.`);
+    },
+    [appendEvent, mode, updateRuntimeConfig],
+  );
+
+  const togglePlanModeWithNotice = useCallback(() => {
+    setPlanModeWithNotice(!planMode);
+  }, [planMode, setPlanModeWithNotice]);
+
+  // ---------------------------------------------------------------------------
+  // Reasoning
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Changes the reasoning level of the active route and saves it as that
+   * provider's preference. OpenAI keeps reasoning as a provider default; other
+   * providers re-save the active route.
+   */
   const setReasoningWithNotice = useCallback(
     (nextReasoningLevel: ReasoningLevel) => {
       if (routeChoiceRequiredRef.current) {
         appendEvent("error", "Select a route first", routeChoiceRequiredRef.current);
         return;
       }
-      const supported = currentModelCapability?.supportedReasoningLevels;
-      if (
-        (currentModelCapability?.reasoningControl &&
-          !isSupportedReasoning(currentModelCapability.reasoningControl, nextReasoningLevel)) ||
-        (!currentModelCapability?.reasoningControl &&
-          (!supported || !supported.some((item) => item.id === nextReasoningLevel)))
-      ) {
+      if (reasoningNotAdvertised(currentModelCapability, nextReasoningLevel)) {
         appendEvent(
           "error",
           "Reasoning unavailable",
@@ -206,30 +230,29 @@ export function useModelSelection(context: UseModelSelectionContext) {
         return;
       }
 
-      updateRuntimeConfig((current) => ({
-        ...current,
-        reasoningLevel: nextReasoningLevel,
-      }));
-      // When --model was given on the CLI the active route's modelId reflects that CLI arg,
-      // not what is stored in providers.json. Persist the stored model so the CLI-only
-      // override is never written permanently; fall back to activeProviderRoute.modelId when
-      // no CLI model is active (normal interactive case).
+      updateRuntimeConfig((current) => ({ ...current, reasoningLevel: nextReasoningLevel }));
+
+      // With --model on the command line the active route reflects that CLI
+      // argument, not providers.json. Persist the stored model instead so a
+      // CLI-only override is never written permanently.
       let modelToPersist = launchArgs.modelOverride
         ? (providerWorkspaceConfig.activeRoute?.modelId ?? activeProviderRoute.modelId)
         : activeProviderRoute.modelId;
+
       if (activeProviderRoute.providerId === "google") {
-        const models = discoverProviderModels("google").models;
-        const selector = getAgyModelSelector(modelToPersist, nextReasoningLevel, models);
-        const native = models.find((item) => item.modelId === selector);
-        if (native) modelToPersist = native.modelId;
-        const activeSelector = getAgyModelSelector(
+        const google = googleReasoningModels(
+          modelToPersist,
           activeProviderRoute.modelId,
           nextReasoningLevel,
-          models,
+          discoverProviderModels("google").models,
         );
-        if (models.some((item) => item.modelId === activeSelector))
-          updateRuntimeConfig((current) => ({ ...current, model: activeSelector! }));
+        modelToPersist = google.modelToPersist;
+        const runtimeModel = google.runtimeModel;
+        if (runtimeModel) {
+          updateRuntimeConfig((current) => ({ ...current, model: runtimeModel }));
+        }
       }
+
       if (activeProviderRoute.providerId === "openai") {
         persistProviderDefaultModelAndReasoning("openai", modelToPersist, nextReasoningLevel);
       } else {
@@ -240,6 +263,7 @@ export function useModelSelection(context: UseModelSelectionContext) {
           activeProviderRoute.backendKind,
         );
       }
+
       setScreen("main");
       appendEvent(
         "system",
@@ -252,8 +276,6 @@ export function useModelSelection(context: UseModelSelectionContext) {
       activeProviderRoute.modelId,
       activeProviderRoute.providerId,
       appendEvent,
-      appendEvent,
-      busy,
       currentModelCapability,
       launchArgs.modelOverride,
       model,
@@ -264,24 +286,9 @@ export function useModelSelection(context: UseModelSelectionContext) {
     ],
   );
 
-  const setPlanModeWithNotice = useCallback(
-    (nextEnabled: boolean) => {
-      updateRuntimeConfig((current) => ({
-        ...current,
-        planMode: nextEnabled,
-      }));
-      saveRuntimeModePreference(mode, nextEnabled);
-      if (!nextEnabled) {
-        setPlanFlow(resetPlanFlow());
-      }
-      appendEvent("system", "Plan mode", `Plan mode ${nextEnabled ? "enabled" : "disabled"}.`);
-    },
-    [appendEvent, busy, mode, updateRuntimeConfig],
-  );
-
-  const togglePlanModeWithNotice = useCallback(() => {
-    setPlanModeWithNotice(!planMode);
-  }, [planMode, setPlanModeWithNotice]);
+  // ---------------------------------------------------------------------------
+  // Model activation (see the module comment for the full lifecycle)
+  // ---------------------------------------------------------------------------
 
   const setModelAndReasoningWithNotice = useCallback(
     async (
@@ -290,56 +297,59 @@ export function useModelSelection(context: UseModelSelectionContext) {
       providerId: ProviderId = pendingRouteProviderId ?? activeProviderRoute.providerId,
       localBackend?: LocalBackendId,
     ) => {
+      // Step 1: candidate route and transition.
       const providerConfig = providerWorkspaceConfig.providers?.[providerId];
-      const route: ProviderRoute = {
+      const route = buildCandidateRoute({
         providerId,
         modelId: nextModel,
         reasoning: nextReasoning,
         backendKind: getProviderRuntime(providerId).backendKind,
-        ...(providerId === "local"
-          ? { localBackend: resolveLocalBackend(providerWorkspaceConfig, localBackend) }
-          : {}),
-      };
-      const connection = providerConnectionKey(providerId, {
-        cwd: workspaceRoot,
         config: providerWorkspaceConfig,
-        routeLocalBackend: route.localBackend,
+        localBackend,
       });
-      const sameConnection = () =>
+      const connectionFor = (config: ProviderWorkspaceConfig) =>
         providerConnectionKey(providerId, {
           cwd: workspaceRoot,
-          config: latest.current.providerWorkspaceConfig,
+          config,
           routeLocalBackend: route.localBackend,
-        }) === connection;
+        });
+      const connection = connectionFor(providerWorkspaceConfig);
+      const connectionUnchanged = () =>
+        connectionFor(latest.current.providerWorkspaceConfig) === connection;
+
       const transition = selectionCoordinator.begin(route, connection);
       modelSelectionInFlightRef.current = true;
       setPendingRouteProviderId(providerId);
       setRouteSwitchBusy(true);
-      let recovery = false;
+
+      // Set when this selection hands the user back to the model picker; the
+      // `finally` block then leaves focus on the picker instead of the chat.
+      let openedRecoveryPicker = false;
       const recover = (message: string) => {
-        if (!selectionCoordinator.isCurrent(transition)) return;
+        if (!selectionCoordinator.isCurrent(transition)) {
+          return;
+        }
         appendEvent("error", "Selection unavailable", message);
         if (selectionCoordinator.ownsNavigation(transition)) {
-          recovery = true;
+          openedRecoveryPicker = true;
           modelPickerOpenRef.current = true;
           setPendingRouteProviderId(providerId);
           setScreen("model-picker");
           void latest.current.ensureProviderModels(providerId);
         }
       };
+
       try {
-        const discovery = discoverProviderModels(providerId);
+        // Step 2: reasoning support, checked locally before any provider call.
         const routeCapabilities =
           providerId === "openai"
             ? modelCapabilities
-            : providerModelsToCodexCapabilities(discovery.models, nextModel);
+            : providerModelsToCodexCapabilities(
+                discoverProviderModels(providerId).models,
+                nextModel,
+              );
         const capability = findModelCapability(routeCapabilities, nextModel);
-        if (
-          nextReasoning &&
-          (capability?.reasoningControl?.kind === "levels" ||
-            capability?.reasoningControl?.kind === "budget") &&
-          !isSupportedReasoning(capability.reasoningControl, nextReasoning)
-        ) {
+        if (reasoningExcludedByModel(capability, nextReasoning)) {
           recover(
             `${nextModel} does not support the selected reasoning setting. Choose a model and supported reasoning setting.`,
           );
@@ -350,12 +360,15 @@ export function useModelSelection(context: UseModelSelectionContext) {
           nextReasoning,
           routeCapabilities,
         );
+
+        // Step 3: validate with the provider.
         traceInputDebug(
           "model_selection_app_start",
           getInputDebugSnapshot({ model: nextModel, providerId, transition: transition.id }),
         );
-        if (providerId === "local")
+        if (providerId === "local") {
           markProviderAvailability("local", "checking", "provider-validation");
+        }
         const validation = await validateProviderRouteActivation({
           signal: transition.signal,
           providerConfig,
@@ -368,40 +381,50 @@ export function useModelSelection(context: UseModelSelectionContext) {
               ? { ...providerConfig, localBackend: route.localBackend }
               : providerWorkspaceConfig.providers?.local,
         });
-        if (!selectionCoordinator.isCurrent(transition)) return;
-        if (!sameConnection()) {
-          recover(
-            "The provider connection changed during validation. Choose a model again using the current connection.",
-          );
+        if (!selectionCoordinator.isCurrent(transition)) {
           return;
         }
-        if (validation.diagnostics)
+        if (!connectionUnchanged()) {
+          recover(CONNECTION_CHANGED_MESSAGE);
+          return;
+        }
+        if (validation.diagnostics) {
           providerDiagnosticsRef.current[providerId] = validation.diagnostics;
+        }
         setRegistryNonce((n) => n + 1);
+
         if (validation.status !== "ready") {
-          const message = validation.message ?? getProviderRouteSetupMessage(providerId);
-          const failure = validation.failure ?? classifyProviderFailure(message);
-          selectionCoordinator.reject(connection, nextModel, failure);
-          if (!isModelFailure(failure)) providerRouteErrorsRef.current[providerId] = message;
-          recover(isModelFailure(failure) ? modelRecoveryMessage(nextModel) : message);
-          return;
-        }
-        // Write before publishing runtime state. A failed save cannot partially commit a route.
-        if (
-          persistActiveRoute(
-            providerId,
+          const outcome = classifyValidationFailure(
+            validation,
             nextModel,
-            route.reasoning ?? "",
-            validation.backendKind,
-            localBackend,
-          ) === false
-        ) {
-          recover(
-            "Unable to save the selection. The previous active route and preferences were preserved.",
+            getProviderRouteSetupMessage(providerId),
           );
+          selectionCoordinator.reject(connection, nextModel, outcome.failure);
+          if (outcome.routeError) {
+            providerRouteErrorsRef.current[providerId] = outcome.routeError;
+          }
+          recover(outcome.userMessage);
           return;
         }
+
+        // Step 4: persist before publishing, so a failed save cannot
+        // partially commit a route.
+        const saved = persistActiveRoute(
+          providerId,
+          nextModel,
+          route.reasoning ?? "",
+          validation.backendKind,
+          localBackend,
+        );
+        if (saved === false) {
+          recover(SELECTION_SAVE_FAILED_MESSAGE);
+          return;
+        }
+
+        // Step 5: publish.
         selectionCoordinator.commit(transition);
+        // A successful replacement clears the stale error from the failed
+        // attempt without touching the failed turn or a pending question.
         dispatchSession({
           type: "UI_ACTION",
           action: { type: "DISMISS_TRANSIENT", onlyError: true },
@@ -412,44 +435,46 @@ export function useModelSelection(context: UseModelSelectionContext) {
           reasoningLevel: route.reasoning ?? "",
         }));
         delete providerRouteErrorsRef.current[providerId];
-        if (selectionCoordinator.ownsNavigation(transition) && !modelPickerOpenRef.current)
+        if (selectionCoordinator.ownsNavigation(transition) && !modelPickerOpenRef.current) {
           setPendingRouteProviderId(null);
+        }
         traceInputDebug(
           "model_selection_app_success",
           getInputDebugSnapshot({ model: nextModel, providerId, transition: transition.id }),
         );
       } catch (error) {
-        if (!selectionCoordinator.isCurrent(transition)) return;
-        if (!sameConnection()) {
-          recover(
-            "The provider connection changed during validation. Choose a model again using the current connection.",
-          );
+        if (!selectionCoordinator.isCurrent(transition)) {
+          return;
+        }
+        if (!connectionUnchanged()) {
+          recover(CONNECTION_CHANGED_MESSAGE);
           return;
         }
         const message = errorMessage(error);
         selectionCoordinator.reject(connection, nextModel, classifyProviderFailure(message));
         recover(message);
       } finally {
+        // Only the current transition may clear busy state or move focus.
         if (selectionCoordinator.isCurrent(transition)) {
           selectionCoordinator.finish(transition);
           setRouteSwitchBusy(false);
           modelSelectionInFlightRef.current = false;
-          if (!recovery && selectionCoordinator.ownsNavigation(transition))
+          if (!openedRecoveryPicker && selectionCoordinator.ownsNavigation(transition)) {
             returnToChatMode("selection");
+          }
         }
       }
     },
     [
       activeProviderRoute.providerId,
-      pendingRouteProviderId,
       appendEvent,
-      ensureProviderModels,
       dispatchSession,
       getInputDebugSnapshot,
       markProviderAvailability,
       modelCapabilities,
+      pendingRouteProviderId,
       persistActiveRoute,
-      providerWorkspaceConfig.providers,
+      providerWorkspaceConfig,
       returnToChatMode,
       selectionCoordinator,
       updateRuntimeConfig,
@@ -461,6 +486,7 @@ export function useModelSelection(context: UseModelSelectionContext) {
     (nextModel: AvailableModel) => setModelAndReasoningWithNotice(nextModel, reasoningLevel),
     [setModelAndReasoningWithNotice, reasoningLevel],
   );
+
   return {
     setModeWithNotice,
     cycleModeWithNotice,

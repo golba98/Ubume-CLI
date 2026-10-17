@@ -1,14 +1,31 @@
+/**
+ * Provider picker actions: choosing which provider Ubume talks to, probing
+ * Local backends, running diagnostics, and launching or installing external
+ * provider CLIs.
+ *
+ * State ownership:
+ * - Provider *navigation* (which provider the picker is acting on) is tracked
+ *   by the session's `SelectionCoordinator`; every action that changes
+ *   navigation cancels any in-flight model validation first.
+ * - Model *activation* is delegated to `setModelAndReasoningWithNotice` from
+ *   `useModelSelection`, the single path that validates, persists and commits
+ *   a route. This hook never commits a route itself.
+ * - Provider configuration writes go through `updateProviderWorkspaceConfig`
+ *   so they merge with the latest saved config.
+ *
+ * Recovery: selecting a provider whose saved model is known to be unusable
+ * (rejected this session or missing from an authoritative catalog) opens that
+ * provider's model picker instead of retrying the model. Navigation therefore
+ * never depends on a model initializing successfully.
+ */
+
 import { spawn } from "node:child_process";
 import { useCallback, useEffect } from "react";
-import type { ResolvedRuntimeConfig, RuntimeConfig } from "../../config/runtimeConfig.js";
 import type { AvailableModel, ReasoningLevel } from "../../config/settings.js";
 import { resolveVibeExecutable } from "../../core/executables/executableResolver.js";
 import type { CodexModelCapabilities } from "../../core/models/codexModelCapabilities.js";
 import { providerConnectionKey } from "../../core/models/modelCatalog.js";
-import {
-  isCatalogModelUnavailable,
-  resolveCatalogModel,
-} from "../../core/models/modelSelection.js";
+import { isCatalogModelUnavailable } from "../../core/models/modelSelection.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import { commandExistsOnPath, launchProviderCli } from "../../core/providerLauncher/launcher.js";
 import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
@@ -38,19 +55,28 @@ import {
   isProviderRouteConfigured,
 } from "../../core/providerRuntime/registry.js";
 import type {
-  ProviderModel,
   ProviderRoute,
   ProviderRouteValidationResult,
-  RuntimeAvailability,
 } from "../../core/providerRuntime/types.js";
-
 import { errorMessage } from "../../core/shared/values.js";
-
 import type { Screen } from "../../session/types.js";
-
 import { FOCUS_IDS } from "../../ui/input/focus.js";
-
 import type { LocalBackendStatus } from "../../ui/panels/ProviderPicker.js";
+import {
+  buildSetupSpawn,
+  localBackendStatusFromError,
+  localBackendStatusFromValidation,
+  resolveProviderActivation,
+  routeUnavailableMessage,
+  selectedLocalModel,
+  workspaceDefaultNotice,
+} from "./providerActions.js";
+
+type ProviderActionHandler = (
+  providerId: ProviderId,
+  action: ProviderPickerAction,
+  localBackend?: LocalBackendId,
+) => void;
 
 interface UseProviderRouteContext {
   selectionCoordinator: SelectionCoordinator;
@@ -73,7 +99,6 @@ interface UseProviderRouteContext {
   workspaceRoot: string;
   setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  busy: boolean;
   providerRegistry: ProviderConfig[];
   /** Saves a transform of the latest provider config; see useRuntimeSettings. */
   updateProviderWorkspaceConfig: (
@@ -98,49 +123,20 @@ interface UseProviderRouteContext {
     forceRefresh?: boolean,
     announce?: boolean,
   ) => Promise<CodexModelCapabilities>;
-  markProviderAvailability: (
-    providerId: ProviderId,
-    availability: RuntimeAvailability,
-    reason: string,
-  ) => void;
-  runtimeConfig: RuntimeConfig;
-  resolvedRuntimeConfig: ResolvedRuntimeConfig;
+  /**
+   * Set after a successful executable preflight so the re-dispatched
+   * `launch` action skips the check once.
+   */
   providerLaunchBypassRef: React.RefObject<boolean>;
   setProviderSetup: React.Dispatch<React.SetStateAction<ProviderId | null>>;
-  providerActionRef: React.RefObject<
-    | ((
-        providerId: ProviderId,
-        action: ProviderPickerAction,
-        localBackend?: LocalBackendId,
-      ) => void)
-    | null
-  >;
+  /** Always points at the latest `handleProviderAction`, for async re-dispatch. */
+  providerActionRef: React.RefObject<ProviderActionHandler | null>;
   busyRef: React.RefObject<boolean>;
   externalCliLaunchHooks: {
     stdin: NodeJS.ReadStream;
     beforeLaunch: () => void;
     afterLaunch: () => void;
   };
-}
-
-/**
- * Whether a provider's saved model can be used directly when the provider is
- * selected. Registry placeholders ("Google default", "Claude Code default") are
- * not choices, but a "… default" entry the provider's own catalog lists is —
- * Mistral's "Vibe default" runs whatever model Vibe itself has active.
- */
-export function isUsableSavedModel(
-  model: string | undefined,
-  catalog: readonly ProviderModel[],
-  catalogVerified = false,
-): boolean {
-  if (!model) return false;
-  if (catalogVerified) {
-    const descriptor = resolveCatalogModel(catalog, model);
-    return descriptor !== undefined && descriptor.available !== false;
-  }
-  if (!model.endsWith("default")) return true;
-  return resolveCatalogModel(catalog, model) !== undefined;
 }
 
 export function useProviderRoute(context: UseProviderRouteContext) {
@@ -159,7 +155,6 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     workspaceRoot,
     setRegistryNonce,
     appendEvent,
-    busy,
     providerRegistry,
     updateProviderWorkspaceConfig,
     activeRouteProvider,
@@ -173,8 +168,6 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     ensureProviderModels,
     modelCapabilities,
     refreshModelCapabilities,
-    markProviderAvailability,
-    resolvedRuntimeConfig,
     providerLaunchBypassRef,
     setProviderSetup,
     providerActionRef,
@@ -182,10 +175,21 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     externalCliLaunchHooks,
   } = context;
 
+  // ---------------------------------------------------------------------------
+  // Local backend probes
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Checks whether a Local backend is reachable and has a model loaded, and
+   * updates its picker badge. Concurrent probes of the same backend share one
+   * request. The returned promise rejects if the probe itself throws.
+   */
   const probeLocalBackend = useCallback(
     (localBackend: LocalBackendId) => {
       const existing = localBackendCheckInFlightRef.current.get(localBackend);
-      if (existing) return existing;
+      if (existing) {
+        return existing;
+      }
 
       setLocalBackendStatuses((current) => ({
         ...current,
@@ -197,43 +201,23 @@ export function useProviderRoute(context: UseProviderRouteContext) {
               : "Checking…",
         },
       }));
+
+      const setStatus = (status: LocalBackendStatus) => {
+        if (isMountedRef.current) {
+          setLocalBackendStatuses((current) => ({ ...current, [localBackend]: status }));
+        }
+      };
+
       const promise = validateLocalProvider({
         override: { ...providerWorkspaceConfig.providers?.local, localBackend },
         localBackend,
       })
         .then((validation) => {
-          const selectedModel =
-            typeof validation.diagnostics?.selectedModel === "string"
-              ? validation.diagnostics.selectedModel.trim()
-              : "";
-          const message = validation.message ?? "";
-          const endpointResult = validation.diagnostics?.endpointCheckResult;
-          const status: LocalBackendStatus =
-            validation.status === "ready"
-              ? { state: "ready", label: selectedModel || "Model loaded" }
-              : endpointResult === "no-models" ||
-                  /no model is loaded|no models were returned/i.test(message)
-                ? { state: "no-model", label: "No model loaded" }
-                : /timed out/i.test(message)
-                  ? { state: "timeout", label: "Check timed out" }
-                  : /api key|authentication|authenticate|identity/i.test(message)
-                    ? { state: "auth-required", label: "Authentication required" }
-                    : { state: "not-running", label: "Not running" };
-          if (isMountedRef.current) {
-            setLocalBackendStatuses((current) => ({ ...current, [localBackend]: status }));
-          }
+          setStatus(localBackendStatusFromValidation(validation));
           return validation;
         })
         .catch((error) => {
-          if (isMountedRef.current) {
-            const message = errorMessage(error);
-            setLocalBackendStatuses((current) => ({
-              ...current,
-              [localBackend]: /api key|authentication|authenticate|identity/i.test(message)
-                ? { state: "auth-required", label: "Authentication required" }
-                : { state: "not-running", label: "Not running" },
-            }));
-          }
+          setStatus(localBackendStatusFromError(errorMessage(error)));
           throw error;
         })
         .finally(() => {
@@ -245,6 +229,12 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     [providerWorkspaceConfig.providers],
   );
 
+  const probeLocalBackends = useCallback(() => {
+    void Promise.allSettled([probeLocalBackend("lm-studio"), probeLocalBackend("unsloth")]);
+  }, [probeLocalBackend]);
+
+  // The Codexa native runtime holds a model in memory; release it whenever the
+  // active route changes away from it and when Ubume exits.
   useEffect(() => {
     void unloadCodexaNative("Active provider or checkpoint changed.");
     return () => {
@@ -252,14 +242,19 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     };
   }, [activeProviderRoute.providerId, activeProviderRoute.modelId]);
 
-  const probeLocalBackends = useCallback(() => {
-    void Promise.allSettled([probeLocalBackend("lm-studio"), probeLocalBackend("unsloth")]);
-  }, [probeLocalBackend]);
+  // ---------------------------------------------------------------------------
+  // Picker navigation
+  // ---------------------------------------------------------------------------
 
+  /**
+   * Opens the provider picker. Mistral's active Vibe model is refreshed in the
+   * background because it lives in Vibe's own config, not Ubume's.
+   */
   const openProviderPicker = useCallback(() => {
     modelPickerOpenRef.current = false;
     selectionCoordinator.navigate();
     setScreen("provider-picker");
+
     providerDiagnosticsRef.current.mistral = {
       ...providerDiagnosticsRef.current.mistral,
       selectedModel: detectVibeActiveModel({ cwd: workspaceRoot }).modelId,
@@ -267,7 +262,9 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     };
     void resolveVibeExecutable({ cwd: workspaceRoot })
       .then((resolvedCommand) => {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) {
+          return;
+        }
         const modelDetection = detectVibeActiveModel({ cwd: workspaceRoot });
         providerDiagnosticsRef.current.mistral = {
           resolvedCommand,
@@ -279,7 +276,9 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         setRegistryNonce((n) => n + 1);
       })
       .catch(() => {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) {
+          return;
+        }
         providerDiagnosticsRef.current.mistral = {
           selectedModel: detectVibeActiveModel({ cwd: workspaceRoot }).modelId,
           resolvedCommand: null,
@@ -287,7 +286,52 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         };
         setRegistryNonce((n) => n + 1);
       });
-  }, [appendEvent, busy, workspaceRoot, selectionCoordinator]);
+  }, [workspaceRoot, selectionCoordinator]);
+
+  /** Opens the model picker scoped to `providerId` (the "pending" provider). */
+  const openModelPickerFor = useCallback(
+    (providerId: ProviderId) => {
+      void ensureProviderModels(providerId);
+      setPendingRouteProviderId(providerId);
+      modelPickerOpenRef.current = true;
+      intendedInputModeRef.current = "model-picker";
+      intendedFocusTargetRef.current = FOCUS_IDS.modelPicker;
+      setScreen("model-picker");
+    },
+    [ensureProviderModels],
+  );
+
+  /** Returns to chat and hands the chosen model to the shared activation path. */
+  const activateModel = useCallback(
+    (providerId: ProviderId, modelId: string, reasoning: string, localBackend?: LocalBackendId) => {
+      intendedInputModeRef.current = "chat/input";
+      intendedFocusTargetRef.current = FOCUS_IDS.composer;
+      setScreen("main");
+      void setModelAndReasoningWithNotice(
+        modelId as AvailableModel,
+        reasoning as ReasoningLevel,
+        providerId,
+        localBackend,
+      );
+    },
+    [setModelAndReasoningWithNotice],
+  );
+
+  /** Reports (once per distinct message) that a provider cannot be routed in Ubume. */
+  const reportRouteUnavailable = useCallback(
+    (provider: ProviderConfig) => {
+      const message = routeUnavailableMessage(provider);
+      if (providerRouteErrorsRef.current[provider.id] !== message) {
+        appendEvent("system", "Provider route unavailable", message);
+        providerRouteErrorsRef.current[provider.id] = message;
+      }
+    },
+    [appendEvent],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Picker actions
+  // ---------------------------------------------------------------------------
 
   const setWorkspaceDefaultProviderWithNotice = useCallback(
     (providerId: ProviderId) => {
@@ -300,32 +344,296 @@ export function useProviderRoute(context: UseProviderRouteContext) {
       try {
         updateProviderWorkspaceConfig((latest) => setProviderWorkspaceDefault(latest, providerId));
         setScreen("main");
-        const routeConfigured = isProviderRouteConfigured(providerId);
+        const activeRouteLabel = `${activeRouteProvider?.displayName ?? "OpenAI"} / ${model}`;
         appendEvent(
           "system",
           "Provider default updated",
-          provider.routeMode === "launch-only"
-            ? `${provider.displayName} is now the workspace default external CLI. Active chat route remains ${activeRouteProvider?.displayName ?? "OpenAI"} / ${model}.`
-            : provider.routeMode === "in-ubume" && routeConfigured
-              ? `${provider.displayName} is now the workspace default provider. Active chat route remains ${activeRouteProvider?.displayName ?? "OpenAI"} / ${model}.`
-              : `${provider.displayName} is set as the workspace default, but in-Ubume routing is not configured yet. Active chat route remains ${activeRouteProvider?.displayName ?? "OpenAI"} / ${model}.`,
+          workspaceDefaultNotice(provider, isProviderRouteConfigured(providerId), activeRouteLabel),
         );
       } catch (error) {
         const message = errorMessage(error, "Unable to save provider workspace config.");
         appendEvent("error", "Provider default failed", message);
       }
     },
+    [activeRouteProvider, appendEvent, model, providerRegistry, updateProviderWorkspaceConfig],
+  );
+
+  /**
+   * "Use in Ubume" for Local: remember the chosen backend, probe it, and if a
+   * model is loaded activate it. The probe result is ignored when the user
+   * navigated elsewhere in the meantime.
+   */
+  const routeToLocalProvider = useCallback(
+    (provider: ProviderConfig, selectedLocalBackend: LocalBackendId | undefined) => {
+      const navigation = selectionCoordinator.navigationToken;
+      const localBackend = resolveLocalBackend(providerWorkspaceConfig, selectedLocalBackend);
+      updateProviderWorkspaceConfig((latest) => setLocalBackendPreference(latest, localBackend));
+
+      void probeLocalBackend(localBackend)
+        .then((validation) => {
+          const stillCurrent =
+            isMountedRef.current && selectionCoordinator.navigationToken === navigation;
+          if (!stillCurrent) {
+            return;
+          }
+          if (validation.diagnostics) {
+            providerDiagnosticsRef.current.local = validation.diagnostics;
+          }
+          if (validation.status !== "ready") {
+            providerRouteErrorsRef.current.local =
+              validation.message ?? "Local provider unavailable.";
+            setRegistryNonce((n) => n + 1);
+            return;
+          }
+
+          delete providerRouteErrorsRef.current.local;
+          setRegistryNonce((n) => n + 1);
+          const reasoning =
+            providerWorkspaceConfig.providers?.local?.currentReasoning ??
+            activeProviderRoute.reasoning ??
+            reasoningLevel;
+          activateModel(
+            "local",
+            selectedLocalModel(validation, provider.currentModel),
+            reasoning,
+            localBackend,
+          );
+        })
+        // Probe failures are already reflected in the backend's status badge.
+        .catch(() => undefined);
+    },
     [
-      activeRouteProvider,
-      appendEvent,
-      appendEvent,
-      model,
-      providerRegistry,
+      activateModel,
+      activeProviderRoute.reasoning,
+      probeLocalBackend,
       providerWorkspaceConfig,
+      reasoningLevel,
+      selectionCoordinator,
+      updateProviderWorkspaceConfig,
+    ],
+  );
+
+  /**
+   * "Use in Ubume" for every provider except Local: activate the saved model
+   * when it is known to be usable, otherwise open this provider's picker.
+   */
+  const routeToProvider = useCallback(
+    (provider: ProviderConfig) => {
+      const discovery = discoverProviderModels(provider.id);
+      const savedModel =
+        providerWorkspaceConfig.providers?.[provider.id]?.currentModel ?? provider.currentModel;
+      const connection = providerConnectionKey(provider.id, {
+        cwd: workspaceRoot,
+        config: providerWorkspaceConfig,
+      });
+      const activation = resolveProviderActivation({
+        provider,
+        config: providerWorkspaceConfig,
+        discovery,
+        rejected: selectionCoordinator.state(connection, savedModel)?.status === "unavailable",
+        catalogMarksUnavailable: isCatalogModelUnavailable(discovery, savedModel),
+        sessionReasoningLevel: reasoningLevel,
+      });
+
+      if (activation.kind === "activate") {
+        activateModel(provider.id, activation.model, activation.reasoning);
+      } else {
+        openModelPickerFor(provider.id);
+      }
+    },
+    [
+      activateModel,
+      openModelPickerFor,
+      providerWorkspaceConfig,
+      reasoningLevel,
+      selectionCoordinator,
       workspaceRoot,
     ],
   );
 
+  const selectModelFor = useCallback(
+    (providerId: ProviderId) => {
+      if (providerId === "openai" && !modelCapabilities) {
+        void refreshModelCapabilities(false, false);
+      }
+      openModelPickerFor(providerId);
+    },
+    [modelCapabilities, openModelPickerFor, refreshModelCapabilities],
+  );
+
+  const refreshModelsFor = useCallback(
+    (provider: ProviderConfig) => {
+      appendEvent("system", "Model discovery", `Refreshing models for ${provider.displayName}...`);
+      void ensureProviderModels(provider.id, true)
+        .then(() => {
+          const discovery = discoverProviderModels(provider.id);
+          appendEvent(
+            discovery.freshness === "unverified" ? "error" : "system",
+            "Model discovery",
+            discovery.message ??
+              `Loaded ${discovery.models.length} models for ${provider.displayName}.`,
+          );
+          setRegistryNonce((n) => n + 1);
+        })
+        .catch(() => appendEvent("error", "Model discovery", "Model refresh failed."));
+    },
+    [appendEvent, ensureProviderModels],
+  );
+
+  const runLocalProviderDiagnostics = useCallback(() => {
+    appendEvent("system", "Local diagnostics", "Running Local provider diagnostics...");
+    void runLocalDiagnostics({ localConfig: providerWorkspaceConfig.providers?.local })
+      .then((message) => {
+        if (!isMountedRef.current) {
+          return;
+        }
+        const discovery = discoverProviderModels("local");
+        if (discovery.diagnostics) {
+          providerDiagnosticsRef.current.local = discovery.diagnostics;
+        }
+        if (discovery.status === "ready") {
+          delete providerRouteErrorsRef.current.local;
+        } else if (discovery.message) {
+          providerRouteErrorsRef.current.local = discovery.message;
+        }
+        appendEvent("system", "Local diagnostics", message);
+        setRegistryNonce((n) => n + 1);
+      })
+      .catch((error) => {
+        if (isMountedRef.current) {
+          appendEvent("error", "Local diagnostics failed", errorMessage(error));
+        }
+      });
+  }, [appendEvent, providerWorkspaceConfig.providers]);
+
+  const runGoogleProviderDiagnostics = useCallback(() => {
+    appendEvent("system", "Google diagnostics", "Running Google provider diagnostics...");
+    void validateAntigravityRoute({
+      cwd: workspaceRoot,
+      configuredPath: providerWorkspaceConfig.providers?.google?.antigravityCommandPath,
+    })
+      .then((validation) => {
+        if (!isMountedRef.current) {
+          return;
+        }
+        if (validation.diagnostics) {
+          providerDiagnosticsRef.current.google = validation.diagnostics;
+        }
+        if (validation.status === "ready") {
+          delete providerRouteErrorsRef.current.google;
+          const discovery = discoverProviderModels("google");
+          appendEvent(
+            "system",
+            "Google diagnostics",
+            validation.message ??
+              `Google Antigravity CLI is ready (${discovery.models.length} models available).`,
+          );
+        } else {
+          const message = validation.message ?? "Google Antigravity CLI is unavailable.";
+          providerRouteErrorsRef.current.google = message;
+          appendEvent("error", "Google diagnostics failed", message);
+        }
+        setRegistryNonce((n) => n + 1);
+      })
+      .catch((error) => {
+        if (isMountedRef.current) {
+          const message = errorMessage(error, "Google diagnostics failed.");
+          appendEvent("error", "Google diagnostics failed", message);
+        }
+      });
+  }, [appendEvent, providerWorkspaceConfig.providers, workspaceRoot]);
+
+  /**
+   * Launches a provider's own CLI in place of Ubume's UI.
+   *
+   * A real executable preflight runs first: a missing CLI is a setup state,
+   * not a launch error the user should have to decode after Ubume has already
+   * handed over the terminal. When the preflight passes, the action is
+   * re-dispatched through `providerActionRef` with the bypass flag set, so the
+   * launch uses the latest provider registry and run state.
+   */
+  const launchProvider = useCallback(
+    (provider: ProviderConfig) => {
+      const providerId = provider.id;
+      if (provider.launchCommand?.executable && !providerLaunchBypassRef.current) {
+        const showSetup = () => {
+          setProviderSetup(providerId);
+          setScreen("provider-setup");
+        };
+        void commandExistsOnPath(provider.launchCommand.executable)
+          .then((available) => {
+            if (!isMountedRef.current) {
+              return;
+            }
+            if (!available) {
+              showSetup();
+              return;
+            }
+            providerLaunchBypassRef.current = true;
+            providerActionRef.current?.(providerId, "launch");
+          })
+          .catch(() => {
+            if (isMountedRef.current) {
+              showSetup();
+            }
+          });
+        return;
+      }
+      providerLaunchBypassRef.current = false;
+
+      if (busyRef.current) {
+        appendEvent("system", "Busy", "Finish the current run before launching a provider CLI.");
+        return;
+      }
+
+      setScreen("main");
+      const modelSuffix = providerId === "mistral" ? ` / ${provider.currentModel}` : "";
+      appendEvent(
+        "system",
+        "Provider launch",
+        `Suspending Ubume and launching ${provider.displayName}${modelSuffix}. Ubume will resume when the external CLI exits.`,
+      );
+
+      const launchOptions = { cwd: workspaceRoot, ...externalCliLaunchHooks };
+      const launchPromise =
+        providerId === "mistral"
+          ? launchMistralVibeCli(provider, launchOptions)
+          : launchProviderCli(provider, launchOptions);
+
+      void launchPromise
+        .then((result) => {
+          if (!isMountedRef.current) {
+            return;
+          }
+          // The external CLI may have changed its own model or login state.
+          void ensureProviderModels(providerId, true);
+          const mistralFailed =
+            providerId === "mistral" &&
+            (result.status === "missing-command" || result.status === "spawn-error");
+          if (mistralFailed) {
+            appendEvent("error", "Mistral Vibe launch failed", result.message);
+          } else {
+            appendEvent("system", "Provider launch", result.message);
+          }
+        })
+        .catch((error) => {
+          if (isMountedRef.current) {
+            const message = errorMessage(error, "Provider launch failed.");
+            appendEvent("error", "Provider launch failed", message);
+          }
+        });
+    },
+    [appendEvent, ensureProviderModels, externalCliLaunchHooks, workspaceRoot],
+  );
+
+  /**
+   * Single entry point for provider picker actions.
+   *
+   * Actions that change which provider the user is working with
+   * (`use-in-ubume`, `select-model`, `cancel`) first take navigation ownership
+   * and cancel any in-flight model validation, so a late result from the
+   * previous provider cannot commit, steal focus or clear busy state.
+   */
   const handleProviderAction = useCallback(
     (
       providerId: ProviderId,
@@ -338,13 +646,12 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         modelSelectionInFlightRef.current = false;
         setRouteSwitchBusy(false);
       }
-      const navigation = selectionCoordinator.navigationToken;
+
       if (action === "cancel") {
         modelPickerOpenRef.current = false;
         setScreen("main");
         return;
       }
-
       if (action === "set-default") {
         setWorkspaceDefaultProviderWithNotice(providerId);
         return;
@@ -357,321 +664,63 @@ export function useProviderRoute(context: UseProviderRouteContext) {
         return;
       }
 
-      if (action === "use-in-ubume") {
-        if (!isProviderRoutableInUbume(providerId)) {
-          const message = provider.isDefault
-            ? `${provider.displayName} is set as the workspace default, but in-Ubume routing is not configured yet.`
-            : `${provider.displayName} in-Ubume routing is not configured yet.`;
-          if (providerRouteErrorsRef.current[providerId] !== message) {
-            appendEvent("system", "Provider route unavailable", message);
-            providerRouteErrorsRef.current[providerId] = message;
-          }
-          return;
-        }
-
-        if (providerId === "local") {
-          const localBackend = resolveLocalBackend(providerWorkspaceConfig, selectedLocalBackend);
-          updateProviderWorkspaceConfig((latest) =>
-            setLocalBackendPreference(latest, localBackend),
-          );
-          void probeLocalBackend(localBackend)
-            .then((validation) => {
-              if (!isMountedRef.current || selectionCoordinator.navigationToken !== navigation)
-                return;
-              if (validation.diagnostics) {
-                providerDiagnosticsRef.current["local"] = validation.diagnostics as Record<
-                  string,
-                  string | number | boolean | null
-                >;
-              }
-              if (validation.status !== "ready") {
-                const message = validation.message ?? "Local provider unavailable.";
-                providerRouteErrorsRef.current["local"] = message;
-                setRegistryNonce((n) => n + 1);
-                return;
-              }
-              delete providerRouteErrorsRef.current["local"];
-              const selectedModel =
-                typeof validation.diagnostics?.selectedModel === "string" &&
-                validation.diagnostics.selectedModel.trim()
-                  ? validation.diagnostics.selectedModel.trim()
-                  : provider.currentModel;
-              setRegistryNonce((n) => n + 1);
-              intendedInputModeRef.current = "chat/input";
-              intendedFocusTargetRef.current = FOCUS_IDS.composer;
-              setScreen("main");
-              void setModelAndReasoningWithNotice(
-                selectedModel as AvailableModel,
-                (providerWorkspaceConfig.providers?.local?.currentReasoning ??
-                  activeProviderRoute.reasoning ??
-                  reasoningLevel) as ReasoningLevel,
-                "local",
-                localBackend,
-              );
-            })
-            .catch(() => undefined);
-          return;
-        }
-
-        const workspaceProviderConfig = providerWorkspaceConfig.providers?.[providerId];
-        const activeRoute = providerWorkspaceConfig.activeRoute;
-        const isCurrentActive = activeRoute?.providerId === providerId;
-
-        const discovery = discoverProviderModels(providerId);
-        const preferredModel = workspaceProviderConfig?.currentModel ?? provider.currentModel;
-        const connection = providerConnectionKey(providerId, {
-          cwd: workspaceRoot,
-          config: providerWorkspaceConfig,
-        });
-        const rejected =
-          selectionCoordinator.state(connection, preferredModel)?.status === "unavailable";
-        const isRealModel =
-          !rejected &&
-          !isCatalogModelUnavailable(discovery, preferredModel) &&
-          isUsableSavedModel(
-            preferredModel,
-            discovery.models,
-            discovery.freshness === "verified" && discovery.complete === true,
-          );
-
-        const providerReasoning =
-          workspaceProviderConfig?.currentReasoning ??
-          (isCurrentActive ? activeRoute?.reasoning : undefined) ??
-          (providerId === "google"
-            ? (resolveCatalogModel(
-                discoverProviderModels("google").models,
-                workspaceProviderConfig?.currentModel ?? provider.currentModel,
-              )?.defaultReasoningLevel ?? "")
-            : reasoningLevel);
-
-        if (isRealModel) {
-          intendedInputModeRef.current = "chat/input";
-          intendedFocusTargetRef.current = FOCUS_IDS.composer;
-          setScreen("main");
-          void setModelAndReasoningWithNotice(
-            (workspaceProviderConfig?.currentModel ?? provider.currentModel) as AvailableModel,
-            providerReasoning as ReasoningLevel,
-            providerId,
-          );
-          return;
-        }
-
-        // No clear model to use, open the picker.
-        void ensureProviderModels(providerId);
-        setPendingRouteProviderId(providerId);
-        modelPickerOpenRef.current = true;
-        intendedInputModeRef.current = "model-picker";
-        intendedFocusTargetRef.current = FOCUS_IDS.modelPicker;
-        setScreen("model-picker");
-        return;
-      }
-
-      if (action === "select-model") {
-        if (providerId === "openai" && !modelCapabilities) {
-          void refreshModelCapabilities(false, false);
-        }
-        void ensureProviderModels(providerId);
-        setPendingRouteProviderId(providerId);
-        modelPickerOpenRef.current = true;
-        intendedInputModeRef.current = "model-picker";
-        intendedFocusTargetRef.current = FOCUS_IDS.modelPicker;
-        setScreen("model-picker");
-        return;
-      }
-
-      if (action === "refresh-models") {
-        if (!isProviderRoutableInUbume(providerId)) {
-          const message = provider.isDefault
-            ? `${provider.displayName} is set as the workspace default, but in-Ubume routing is not configured yet.`
-            : `${provider.displayName} in-Ubume routing is not configured yet.`;
-          if (providerRouteErrorsRef.current[providerId] !== message) {
-            appendEvent("system", "Provider route unavailable", message);
-            providerRouteErrorsRef.current[providerId] = message;
-          }
-          return;
-        }
-
-        appendEvent(
-          "system",
-          "Model discovery",
-          `Refreshing models for ${provider.displayName}...`,
-        );
-        void ensureProviderModels(providerId, true)
-          .then(() => {
-            const discovery = discoverProviderModels(providerId);
-            appendEvent(
-              discovery.freshness === "unverified" ? "error" : "system",
-              "Model discovery",
-              discovery.message ??
-                `Loaded ${discovery.models.length} models for ${provider.displayName}.`,
-            );
-            setRegistryNonce((n) => n + 1);
-          })
-          .catch(() => appendEvent("error", "Model discovery", "Model refresh failed."));
-        return;
-      }
-
-      if (action === "run-diagnostics") {
-        if (providerId !== "google" && providerId !== "local") {
-          appendEvent(
-            "error",
-            "Provider diagnostics unavailable",
-            `Diagnostics are not implemented for ${provider.displayName}.`,
-          );
-          return;
-        }
-
-        setScreen("main");
-        if (providerId === "local") {
-          appendEvent("system", "Local diagnostics", "Running Local provider diagnostics...");
-          void runLocalDiagnostics({
-            localConfig: providerWorkspaceConfig.providers?.local,
-          })
-            .then((message) => {
-              if (!isMountedRef.current) return;
-              const discovery = discoverProviderModels("local");
-              if (discovery.diagnostics) {
-                providerDiagnosticsRef.current["local"] = discovery.diagnostics as Record<
-                  string,
-                  string | number | boolean | null
-                >;
-              }
-              if (discovery.status === "ready") {
-                delete providerRouteErrorsRef.current["local"];
-              } else if (discovery.message) {
-                providerRouteErrorsRef.current["local"] = discovery.message;
-              }
-              appendEvent("system", "Local diagnostics", message);
-              setRegistryNonce((n) => n + 1);
-            })
-            .catch((error) => {
-              if (!isMountedRef.current) return;
-              appendEvent("error", "Local diagnostics failed", errorMessage(error));
-            });
-          return;
-        }
-
-        appendEvent("system", "Google diagnostics", "Running Google provider diagnostics...");
-        const antigravityCommandPath =
-          providerWorkspaceConfig.providers?.google?.antigravityCommandPath;
-        void validateAntigravityRoute({
-          cwd: workspaceRoot,
-          configuredPath: antigravityCommandPath,
-        })
-          .then((validation) => {
-            if (!isMountedRef.current) return;
-            if (validation.diagnostics) {
-              providerDiagnosticsRef.current["google"] = validation.diagnostics as Record<
-                string,
-                string | number | boolean | null
-              >;
-            }
-            if (validation.status === "ready") {
-              delete providerRouteErrorsRef.current["google"];
-              const discovery = discoverProviderModels("google");
-              appendEvent(
-                "system",
-                "Google diagnostics",
-                validation.message ??
-                  `Google Antigravity CLI is ready (${discovery.models.length} models available).`,
-              );
-            } else {
-              const message = validation.message ?? "Google Antigravity CLI is unavailable.";
-              providerRouteErrorsRef.current["google"] = message;
-              appendEvent("error", "Google diagnostics failed", message);
-            }
-            setRegistryNonce((n) => n + 1);
-          })
-          .catch((error) => {
-            if (!isMountedRef.current) return;
-            const message = errorMessage(error, "Google diagnostics failed.");
-            appendEvent("error", "Google diagnostics failed", message);
-          });
-        return;
-      }
-
-      // Do a real executable preflight before launching any external provider.
-      // A missing CLI is a setup state, not a launch error the user should have
-      // to decode after Ubume has already handed over the terminal.
-      if (
-        action === "launch" &&
-        provider.launchCommand?.executable &&
-        !providerLaunchBypassRef.current
-      ) {
-        void commandExistsOnPath(provider.launchCommand.executable)
-          .then((available) => {
-            if (!isMountedRef.current) return;
-            if (!available) {
-              setProviderSetup(providerId);
-              setScreen("provider-setup");
-              return;
-            }
-            providerLaunchBypassRef.current = true;
-            providerActionRef.current?.(providerId, action);
-          })
-          .catch(() => {
-            if (!isMountedRef.current) return;
-            setProviderSetup(providerId);
-            setScreen("provider-setup");
-          });
-        return;
-      }
-      providerLaunchBypassRef.current = false;
-
-      if (busyRef.current) {
-        appendEvent("system", "Busy", "Finish the current run before launching a provider CLI.");
-        return;
-      }
-
-      setScreen("main");
-      appendEvent(
-        "system",
-        "Provider launch",
-        `Suspending Ubume and launching ${provider.displayName}${providerId === "mistral" ? ` / ${provider.currentModel}` : ""}. Ubume will resume when the external CLI exits.`,
-      );
-
-      const launchOptions = { cwd: workspaceRoot, ...externalCliLaunchHooks };
-      const launchPromise =
-        providerId === "mistral"
-          ? launchMistralVibeCli(provider, launchOptions)
-          : launchProviderCli(provider, launchOptions);
-
-      void launchPromise
-        .then((result) => {
-          if (!isMountedRef.current) return;
-          void ensureProviderModels(providerId, true);
-          if (
-            providerId === "mistral" &&
-            (result.status === "missing-command" || result.status === "spawn-error")
-          ) {
-            appendEvent("error", "Mistral Vibe launch failed", result.message);
+      switch (action) {
+        case "use-in-ubume":
+          if (!isProviderRoutableInUbume(providerId)) {
+            reportRouteUnavailable(provider);
+          } else if (providerId === "local") {
+            routeToLocalProvider(provider, selectedLocalBackend);
           } else {
-            appendEvent("system", "Provider launch", result.message);
+            routeToProvider(provider);
           }
-        })
-        .catch((error) => {
-          if (!isMountedRef.current) return;
-          const message = errorMessage(error, "Provider launch failed.");
-          appendEvent("error", "Provider launch failed", message);
-        });
+          return;
+
+        case "select-model":
+          selectModelFor(providerId);
+          return;
+
+        case "refresh-models":
+          if (isProviderRoutableInUbume(providerId)) {
+            refreshModelsFor(provider);
+          } else {
+            reportRouteUnavailable(provider);
+          }
+          return;
+
+        case "run-diagnostics":
+          if (providerId === "local") {
+            setScreen("main");
+            runLocalProviderDiagnostics();
+          } else if (providerId === "google") {
+            setScreen("main");
+            runGoogleProviderDiagnostics();
+          } else {
+            appendEvent(
+              "error",
+              "Provider diagnostics unavailable",
+              `Diagnostics are not implemented for ${provider.displayName}.`,
+            );
+          }
+          return;
+
+        case "launch":
+          launchProvider(provider);
+          return;
+      }
     },
     [
-      activeProviderRoute,
-      selectionCoordinator,
       appendEvent,
-      appendEvent,
-      ensureProviderModels,
+      launchProvider,
       providerRegistry,
-      probeLocalBackend,
-      providerWorkspaceConfig.providers,
-      markProviderAvailability,
-      modelCapabilities,
-      reasoningLevel,
-      refreshModelCapabilities,
-      resolvedRuntimeConfig,
+      refreshModelsFor,
+      reportRouteUnavailable,
+      runGoogleProviderDiagnostics,
+      runLocalProviderDiagnostics,
+      selectModelFor,
+      selectionCoordinator,
       setWorkspaceDefaultProviderWithNotice,
-      externalCliLaunchHooks,
-      workspaceRoot,
+      routeToLocalProvider,
+      routeToProvider,
     ],
   );
 
@@ -682,6 +731,17 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     };
   }, [handleProviderAction]);
 
+  // ---------------------------------------------------------------------------
+  // Provider CLI setup
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Installs and sets up a provider CLI in the foreground terminal.
+   *
+   * Providers with user-supplied commands cannot be safely installed by Ubume;
+   * for those the launch is retried directly so the user still has a path
+   * forward after manual setup.
+   */
   const runProviderSetup = useCallback(
     (providerId: ProviderId) => {
       const provider = findProvider(providerRegistry, providerId);
@@ -689,8 +749,6 @@ export function useProviderRoute(context: UseProviderRouteContext) {
       const windows = process.platform === "win32";
       const plan = getProviderSetupPlan(providerId, windows);
 
-      // Providers with user-supplied commands cannot be safely installed by
-      // Ubume. The prompt still gives them a retry path after manual setup.
       if (!plan.installCommand) {
         providerLaunchBypassRef.current = true;
         setProviderSetup(null);
@@ -701,23 +759,11 @@ export function useProviderRoute(context: UseProviderRouteContext) {
 
       setProviderSetup(null);
       setScreen("main");
-      const command = `${plan.installCommand}${plan.setupCommand ? `; ${plan.setupCommand}` : ""}`;
-      const child = windows
-        ? spawn(
-            "powershell.exe",
-            [
-              "-NoProfile",
-              "-ExecutionPolicy",
-              "Bypass",
-              "-Command",
-              `$ErrorActionPreference='Stop'; ${command}`,
-            ],
-            { cwd: workspaceRoot, stdio: "inherit" },
-          )
-        : spawn("sh", ["-lc", command.replace(/; /g, " && ")], {
-            cwd: workspaceRoot,
-            stdio: "inherit",
-          });
+      const setup = buildSetupSpawn(
+        { installCommand: plan.installCommand, setupCommand: plan.setupCommand },
+        windows,
+      );
+      const child = spawn(setup.command, setup.args, { cwd: workspaceRoot, stdio: "inherit" });
 
       child.once("error", (error) => {
         appendEvent("error", `${label} setup failed`, error.message);
@@ -741,5 +787,6 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     },
     [appendEvent, ensureProviderModels, providerRegistry, workspaceRoot],
   );
+
   return { probeLocalBackends, openProviderPicker, handleProviderAction, runProviderSetup };
 }
