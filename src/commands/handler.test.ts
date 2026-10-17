@@ -749,3 +749,172 @@ test("/help lists /usage", () => {
   const help = handleCommand("/help", baseContext);
   assert.match(help?.message ?? "", /\/usage\s+Show account usage limits for the active provider/);
 });
+
+test("parses /exit and /quit as exit actions", () => {
+  assert.equal(runCommand("/exit")?.action, "exit");
+  assert.equal(runCommand("/quit")?.action, "exit");
+});
+
+test("rejects an unknown model and points to /models", () => {
+  const withoutCapabilities = runCommand("/model not-a-real-model");
+  assert.equal(withoutCapabilities?.action, "unknown");
+  assert.match(withoutCapabilities?.message ?? "", /Unknown model: not-a-real-model/);
+  assert.match(withoutCapabilities?.message ?? "", /Use \/models to list available models/);
+
+  // A capabilities snapshot is authoritative: its absence decides whether the
+  // static fallback list may accept the model at all.
+  const withCapabilities = runCommand("/model not-a-real-model", {
+    modelCapabilities: dynamicCapabilities,
+  });
+  assert.equal(withCapabilities?.action, "unknown");
+});
+
+test("keeps /permissions limited to its documented controls", () => {
+  // service-tier and personality are /runtime-only surfaces.
+  const serviceTier = runCommand("/permissions service-tier fast");
+  assert.equal(serviceTier?.action, "unknown");
+  assert.match(
+    serviceTier?.message ?? "",
+    /Use \/permissions <approval-policy\|sandbox\|network\|writable-roots>/,
+  );
+
+  const personality = runCommand("/permissions personality friendly");
+  assert.equal(personality?.action, "unknown");
+
+  const unknownSubcommand = runCommand("/permissions frobnicate");
+  assert.equal(unknownSubcommand?.action, "unknown");
+  assert.match(
+    unknownSubcommand?.message ?? "",
+    /Unknown permissions command\. Use \/permissions <approval-policy\|sandbox\|network\|writable-roots>\./,
+  );
+});
+
+test("/runtime without arguments reports the effective status", () => {
+  const result = runCommand("/runtime");
+  assert.equal(result?.action, "status");
+  assert.match(result?.message ?? "", /Approval policy: On request/i);
+});
+
+test("reports status for every /runtime policy control", () => {
+  const serviceTier = runCommand("/runtime service-tier status");
+  assert.equal(serviceTier?.action, "runtime_service_tier");
+  assert.match(serviceTier?.message ?? "", /Service tier:/);
+
+  const personality = runCommand("/runtime personality status");
+  assert.equal(personality?.action, "runtime_personality");
+  assert.match(personality?.message ?? "", /Personality:/);
+});
+
+test("rejects invalid runtime policy values with usage hints", () => {
+  const approvalPolicy = runCommand("/runtime approval-policy maybe");
+  assert.equal(approvalPolicy?.action, "unknown");
+  assert.match(
+    approvalPolicy?.message ?? "",
+    /Usage: \/runtime approval-policy \[status\|inherit\|untrusted\|on-request\|never\]/,
+  );
+});
+
+test("maps /runtime network off to the disabled value", () => {
+  const result = runCommand("/runtime network off");
+  assert.equal(result?.action, "runtime_network_access");
+  assert.equal(result?.value, "disabled");
+});
+
+test("requires a path for writable-roots add and remove", () => {
+  // The dispatcher trims and collapses whitespace, so a bare "add" never
+  // reaches the add-specific hint; both report the general usage.
+  const addResult = runCommand("/runtime writable-roots add");
+  assert.equal(addResult?.action, "unknown");
+  assert.match(
+    addResult?.message ?? "",
+    /Usage: \/runtime writable-roots \[list\|add <path>\|remove <path>\|clear\]/,
+  );
+
+  const removeResult = runCommand("/runtime writable-roots remove");
+  assert.equal(removeResult?.action, "unknown");
+  assert.match(
+    removeResult?.message ?? "",
+    /Usage: \/runtime writable-roots \[list\|add <path>\|remove <path>\|clear\]/,
+  );
+});
+
+test("requires a target for /diagnose", () => {
+  const result = runCommand("/diagnose");
+  assert.equal(result?.action, "unknown");
+  assert.equal(result?.message, "Usage: /diagnose github|providers");
+});
+
+test("/debug renders reports render counts as a verbose toggle", () => {
+  const result = runCommand("/debug renders");
+  assert.equal(result?.action, "verbose_toggle");
+  assert.match(result?.message ?? "", /Render counts:|No render counts recorded/);
+
+  const bare = runCommand("/debug");
+  assert.equal(bare?.action, "verbose_toggle");
+  assert.equal(bare?.message, undefined);
+});
+
+test("disables project trust with /config trust off", () => {
+  const result = runCommand("/config trust off");
+  assert.equal(result?.action, "config_trust_set");
+  assert.equal(result?.value, "off");
+  assert.equal(result?.message, "Project trust disabled.");
+});
+
+test("enables the busy loader with /setting busy-loader true", () => {
+  const result = runCommand("/setting busy-loader true");
+  assert.equal(result?.action, "setting_busy_loader");
+  assert.equal(result?.value, "true");
+  assert.equal(result?.message, "Busy loader enabled.");
+});
+
+test("parses simple panel and action commands", () => {
+  const cases = [
+    ["/copy", "copy"],
+    ["/paste-image", "paste_image"],
+    ["/queue", "queue"],
+    ["/transcript", "transcript"],
+    ["/diff", "diff"],
+    ["/rewind", "rewind"],
+    ["/send-now", "send_now"],
+    ["/verbose", "verbose_toggle"],
+    ["/themes", "open_theme_picker"],
+    ["/models", "open_model_picker"],
+  ] as const;
+
+  for (const [command, expectedAction] of cases) {
+    assert.equal(runCommand(command)?.action, expectedAction, command);
+  }
+});
+
+test("/route falls back to a static OpenAI route summary", () => {
+  const result = runCommand("/route");
+  assert.equal(result?.action, "route_status");
+  assert.match(result?.message ?? "", /Workspace default: OpenAI/);
+  assert.match(result?.message ?? "", /Active chat route: OpenAI \/ gpt-5\.4/);
+});
+
+test("parses a known auth preference id", () => {
+  const result = runCommand("/auth chatgpt-login-goal");
+  assert.equal(result?.action, "auth");
+  assert.equal(result?.value, "chatgpt-login-goal");
+  assert.match(result?.message ?? "", /Auth preference set to/);
+});
+
+test("rejects an unknown theme and points to /themes", () => {
+  const result = runCommand("/theme unknown-theme-xyz");
+  assert.equal(result?.action, "unknown");
+  assert.match(
+    result?.message ?? "",
+    /Unknown theme: unknown-theme-xyz\. Use \/themes to list available themes\./,
+  );
+});
+
+test("rejects unknown /workspace subcommands", () => {
+  const result = runCommand("/workspace frobnicate");
+  assert.equal(result?.action, "unknown");
+  assert.match(
+    result?.message ?? "",
+    /Unknown workspace command\. Use \/workspace or \/workspace relaunch <path>\./,
+  );
+});
