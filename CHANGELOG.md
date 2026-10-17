@@ -4,6 +4,30 @@
 
 ---
 
+## [0.1.18] — 2026-10-17 (prepared)
+
+### Added
+
+- Experimental Codexa Native integration for five local 934M checkpoint variants, with managed worker streaming, generation settings, cancellation, unload and replay commands. Native inference requires separately configured Python, tokenizer and checkpoint files; see `docs/CODEXA_NATIVE.md`.
+- Preserve raw generation output and provenance in saved conversations, with explicit context trimming and empty-response notices.
+
+### Fixed
+
+- Recover from unavailable provider models without locking provider or model navigation. Keep failed selections scoped to their provider connection, preserve previous preferences when validation or saving fails, and prevent stale validations from replacing newer selections.
+- Submit exact `/model` commands and preserve picker focus when a request finishes.
+- Restore `/status`, `/runtime`, `/workspace` and `/help` output through command dispatch.
+
+### Changed
+
+- Organize interactive app hooks by domain and split provider actions, model activation, prompt runs, conversation lifecycle and input routing into focused modules. See `docs/architecture/app.md`.
+
+### Verification
+
+- Release checks and package contents are recorded in `docs/RELEASE_0.1.18_VERIFICATION.md`.
+- Prepared for review; this preparation does not publish to npm or create a release tag.
+
+---
+
 ## [0.1.17] — 2026-10-09 (prepared)
 
 ### Added
