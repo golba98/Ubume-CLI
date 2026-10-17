@@ -1,3 +1,8 @@
+/**
+ * Parses human/legacy Codex transcript output and filters noise while preserving response and
+ * activity ordering.
+ */
+
 import type { RunToolActivity } from "../../session/types.js";
 import { normalizeLineBreaks } from "../shared/text.js";
 import { sanitizeTerminalOutput } from "../terminal/terminalSanitize.js";
@@ -63,6 +68,7 @@ const NOISE_PREFIXES = [
   "tool-selection rationale",
 ];
 
+/** Removes ANSI sequences before legacy transcript classification. */
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
 }
@@ -79,6 +85,9 @@ const STDERR_NOISE_PATTERNS = [
   /^\s*Warning:/i, // Generic warnings
 ];
 
+/**
+ * Applies the established metadata, progress and warning filters to legacy Codex stderr lines.
+ */
 export function isStderrNoise(line: string): boolean {
   if (isNoiseLine(line)) return true;
   const trimmed = line.trim();
@@ -87,6 +96,7 @@ export function isStderrNoise(line: string): boolean {
 }
 
 // Keep line breaks but drop control bytes that can move or corrupt terminal cursor/layout.
+/** Removes disallowed control bytes while retaining text layout used by transcript parsing. */
 export function stripNonPrintableControls(text: string): string {
   return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
 }
@@ -172,6 +182,7 @@ function isDivider(line: string): boolean {
   return trimmed.length > 0 && /^-+$/.test(trimmed);
 }
 
+/** Identifies legacy CLI metadata/chatter that should not become assistant text. */
 export function isNoiseLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
@@ -283,6 +294,10 @@ function summarizeToolOutput(
   return { status: "completed", summary: `Produced ${pluralize(lines.length, "line")} of output` };
 }
 
+/**
+ * Creates per-run legacy transcript state, retaining assistant/tool ordering and stream-boundary
+ * cleanup.
+ */
 export function createCodexTranscriptStreamParser(handlers: CodexTranscriptStreamHandlers) {
   let pending = "";
   let section: TranscriptSection = "preamble";
@@ -665,6 +680,7 @@ function extractAfterTaskSection(lines: string[]): string[] {
   return dedupeTrailingRepeat(filtered);
 }
 
+/** Converts a complete legacy transcript into cleaned assistant-facing text. */
 export function sanitizeCodexTranscript(raw: string): string {
   const lines = normalizeLines(raw);
 

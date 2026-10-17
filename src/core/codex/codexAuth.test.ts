@@ -17,6 +17,18 @@ test("infers unauthenticated from signed-out probe output", () => {
   assert.equal(state, "unauthenticated");
 });
 
+test("JSON signed-out status cannot match the authenticated substring", () => {
+  for (const status of ["unauthenticated", "UNAUTHENTICATED", "signed_out"]) {
+    const state = inferAuthStateFromProbe(1, JSON.stringify({ status }), "");
+    assert.equal(state, "unauthenticated", status);
+    assert.equal(getRunGateDecision(state).allowRun, false, status);
+  }
+  assert.equal(
+    inferAuthStateFromProbe(1, JSON.stringify({ status: "authenticated" }), ""),
+    "authenticated",
+  );
+});
+
 test("infers unknown from ambiguous probe output", () => {
   const state = inferAuthStateFromProbe(
     2,

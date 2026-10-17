@@ -1,3 +1,8 @@
+/**
+ * Validation and resolution of development-only Codexa Native model paths and generation
+ * settings. This module describes configuration; the runtime owns loaded worker state.
+ */
+
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getHomeDir } from "../../config/settings.js";
@@ -74,6 +79,7 @@ export interface CodexaNativeConfig {
   checkpoints: Record<string, string>;
   configurationError?: string;
 }
+/** Returns the established evaluation or conversation decoding defaults. */
 export function codexaPreset(
   preset: "evaluation" | "conversation" = "evaluation",
 ): CodexaGeneration {
@@ -88,6 +94,7 @@ export function codexaPreset(
     seed: 42,
   };
 }
+/** Resolves generation defaults and throws on unsupported or out-of-range settings. */
 export function validateCodexaGeneration(value: Partial<CodexaGeneration> = {}): CodexaGeneration {
   const config = {
     ...codexaPreset(value.preset === "conversation" ? "conversation" : "evaluation"),
@@ -116,6 +123,9 @@ export function validateCodexaGeneration(value: Partial<CodexaGeneration> = {}):
   }
   return config;
 }
+/**
+ * Checks native model/path options before resolving or loading a worker; invalid options throw.
+ */
 export function validateCodexaOptions(options: CodexaNativeOptions): void {
   for (const field of ["modelRoot", "python", "registry", "systemPrompt"] as const) {
     const value = options[field];
@@ -130,6 +140,10 @@ export function validateCodexaOptions(options: CodexaNativeOptions): void {
   }
   if (options.generation !== undefined) validateCodexaGeneration(options.generation);
 }
+/**
+ * Resolves native paths from overrides/environment; invalid options or registry data populate
+ * configurationError instead of throwing.
+ */
 export function resolveCodexaNativeConfig(
   env: NodeJS.ProcessEnv = process.env,
   options: CodexaNativeOptions = {},
@@ -186,6 +200,7 @@ export function resolveCodexaNativeConfig(
   }
   return config;
 }
+/** Formats the configured native model identity for display. */
 export function codexaModelLabel(id: string): string {
   return CODEXA_MODELS.find((model) => model.id === id)?.label ?? id;
 }

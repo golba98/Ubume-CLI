@@ -47,6 +47,7 @@ export interface ExternalSessionOptions {
   env?: Record<string, string | undefined>;
 }
 
+/** Returns the display name for a native session source, including compatibility aliases. */
 export function externalSourceLabel(source: ExternalSessionSource): string {
   switch (source) {
     case "claude":

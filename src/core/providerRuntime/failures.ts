@@ -1,3 +1,9 @@
+/**
+ * Conservative provider failure classification shared by routing and model recovery. Only
+ * explicit model failures become rejection evidence; network, authentication and ambiguous
+ * errors retain separate recovery semantics.
+ */
+
 export type ProviderFailureKind =
   | "model-unavailable"
   | "model-configuration"
@@ -17,6 +23,7 @@ export interface ProviderFailure {
   retryAfterMs?: number;
 }
 
+/** Narrows failures that can be used as model rejection/configuration evidence. */
 export function isModelFailure(failure: ProviderFailure): boolean {
   return failure.kind === "model-unavailable" || failure.kind === "model-configuration";
 }
@@ -86,6 +93,10 @@ export class ProviderRequestError extends Error {
   }
 }
 
+/**
+ * Extracts structured status/code/message evidence from a failed API response; non-JSON bodies
+ * supply no model-specific evidence.
+ */
 export function apiRequestError(
   status: number,
   body: string,
@@ -119,14 +130,23 @@ export function apiRequestError(
   );
 }
 
+/**
+ * Keeps structured API failure evidence or conservatively classifies the supplied fallback
+ * message.
+ */
 export function failureFromError(error: unknown, message: string): ProviderFailure {
   return error instanceof ProviderRequestError ? error.failure : classifyProviderFailure(message);
 }
 
+/** Formats explicit model-selection recovery guidance without choosing a replacement model. */
 export function modelRecoveryMessage(model: string): string {
   return `The selected model ${model} is unavailable or unsupported for this account. Choose another model with /model, or change provider with /providers.`;
 }
 
+/**
+ * Parses Retry-After seconds or an HTTP date into a positive millisecond delay; invalid/past
+ * values return undefined.
+ */
 export function retryAfterDelay(value: string | null, now = Date.now()): number | undefined {
   if (!value) return undefined;
   const seconds = Number(value);

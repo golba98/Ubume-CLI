@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createTestEnvironment } from "../../../test/environment.js";
 import { workspaceStorageKey } from "../../workspace/appData.js";
 
 for (const backend of ["lm-studio", "unsloth"] as const)
@@ -67,16 +68,14 @@ for (const backend of ["lm-studio", "unsloth"] as const)
       }>((resolve, reject) => {
         const child = spawn(process.execPath, [fixture, backend, String(turn)], {
           cwd: root,
-          env: {
-            ...process.env,
+          env: createTestEnvironment(root, {
             UBUME_DATA_DIR: join(root, "data"),
             CODEXA_DATA_DIR: join(root, "data"),
             UBUME_LOCAL_BASE_URL: `${endpoint}/v1`,
             UBUME_LOCAL_MODEL: "fixture",
             UNSLOTH_STUDIO_URL: endpoint,
             UNSLOTH_API_KEY: "fixture",
-            UBUME_DEV_MODE: "0",
-          },
+          }),
           stdio: ["ignore", "pipe", "pipe"],
         });
         let stdout = "";

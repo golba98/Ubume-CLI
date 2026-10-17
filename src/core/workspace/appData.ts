@@ -1,3 +1,9 @@
+/**
+ * Platform app-data and workspace artifact paths with legacy Codexa compatibility. Most
+ * resolvers only name paths; workspace resolution may trigger a one-time best-effort migration
+ * unless readOnly is set.
+ */
+
 import { createHash } from "node:crypto";
 import { cpSync, existsSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
@@ -17,6 +23,10 @@ function resolveDataDir(platform: Platform, env: Environment, home: string, name
   return join(env["XDG_DATA_HOME"]?.trim() || join(home, ".local", "share"), name.toLowerCase());
 }
 
+/**
+ * Resolves the legacy app-data location from live overrides and platform conventions without
+ * creating it.
+ */
 export function resolveLegacyCodexaDataDir(
   platformOverride?: Platform,
   env: Environment = process.env,
@@ -28,6 +38,10 @@ export function resolveLegacyCodexaDataDir(
   );
 }
 
+/**
+ * Resolves Ubume app data, honoring the legacy data-dir alias; does not create or migrate
+ * directories.
+ */
 export function resolveUbumeDataDir(
   platformOverride?: Platform,
   env: Environment = process.env,
@@ -42,6 +56,10 @@ export function resolveUbumeDataDir(
 
 let dataMigrated = false;
 
+/**
+ * Attempts one non-destructive legacy data copy per process; missing/current destinations and
+ * I/O failures do not block startup.
+ */
 export function maybeMigrateLegacyData(
   platformOverride?: Platform,
   env: Environment = process.env,
@@ -63,14 +81,25 @@ export function maybeMigrateLegacyData(
   }
 }
 
+/**
+ * Allows another legacy-data migration attempt in an isolated test environment.
+ */
 export function resetDataMigrationForTests(): void {
   dataMigrated = false;
 }
 
+/**
+ * Hashes the supplied workspace identity into a stable app-data key; callers provide the
+ * normalized root.
+ */
 export function workspaceStorageKey(workspaceRoot: string): string {
   return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
 }
 
+/**
+ * Names workspace app data. Normal calls may migrate legacy data; readOnly selects existing
+ * legacy data without migration.
+ */
 export function resolveUbumeWorkspaceDataDir(
   workspaceRoot: string,
   options: { readOnly?: boolean } = {},
@@ -82,6 +111,7 @@ export function resolveUbumeWorkspaceDataDir(
   return join(root, "workspaces", workspaceStorageKey(workspaceRoot));
 }
 
+/** Names the current conversation directory under app-data chats without creating it. */
 export function resolveUbumeConversationDir(workspaceRoot: string): string {
   return join(resolveUbumeChatWorkspaceDir(workspaceRoot), "conversations");
 }
@@ -91,10 +121,15 @@ export function resolveUbumeChatWorkspaceDir(workspaceRoot: string): string {
   return join(resolveUbumeDataDir(), "chats", workspaceStorageKey(workspaceRoot));
 }
 
+/** Names the historical workspace conversation directory without triggering migration. */
 export function resolveLegacyConversationDir(workspaceRoot: string): string {
   return join(resolveUbumeWorkspaceDataDir(workspaceRoot, { readOnly: true }), "conversations");
 }
 
+/**
+ * Resolves a configured attachment directory; relative paths stay under workspace app data using
+ * the existing normalization rules.
+ */
 export function resolveUbumeAttachmentDir(workspaceRoot: string, configuredDir: string): string {
   if (isAbsolute(configuredDir)) return configuredDir;
 
@@ -107,6 +142,7 @@ export function resolveUbumeAttachmentDir(workspaceRoot: string, configuredDir: 
   return join(resolveUbumeWorkspaceDataDir(workspaceRoot), safeRelativeDir);
 }
 
+/** Names the shared render diagnostic log in the selected app-data root. */
 export function resolveUbumeDebugLogPath(env: Environment = process.env): string {
   return join(resolveUbumeDataDir(undefined, env), "debug", "render-status.log");
 }

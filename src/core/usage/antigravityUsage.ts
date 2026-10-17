@@ -1,3 +1,8 @@
+/**
+ * Google (Antigravity) adapter: print-mode `agy -p /usage` and `/credits` JSON with per-model-
+ * group quota buckets; rejects replies that ran a turn.
+ */
+
 import { buildSpawnSpec, resolveAgyExecutable } from "../executables/executableResolver.js";
 import { type CommandResult, runCommand } from "../process/commandRunner.js";
 import { LEGACY_GOOGLE_MESSAGE } from "../providerLauncher/providerIdentity.js";
@@ -59,6 +64,10 @@ export function parseAgyCommandOutput(
   return { ok: true, body: { name: command.name, data: command.data } };
 }
 
+/**
+ * Builds separate usage limits for AGY model groups, retaining unknown values rather than
+ * inventing totals.
+ */
 export function parseAgyUsageData(data: Record<string, unknown>, now: number): UsageLimit[] {
   const limits: UsageLimit[] = [];
   const groups = Array.isArray(data.groups) ? data.groups : [];
@@ -91,6 +100,10 @@ export function parseAgyUsageData(data: Record<string, unknown>, now: number): U
   return limits;
 }
 
+/**
+ * Normalizes AGY credit facts and supported HTTPS links without confusing zero credits with
+ * missing data.
+ */
 export function parseAgyCreditsData(data: Record<string, unknown>): {
   fact?: UsageFact;
   link?: UsageLink;
@@ -145,6 +158,10 @@ async function runAgyCommand(
   return { result, parsed };
 }
 
+/**
+ * Combines independent quota and credit results into an AGY usage snapshot with explicit
+ * partial/failure states.
+ */
 export function buildAntigravityUsageSnapshot(
   context: UsageRequestContext,
   usage:

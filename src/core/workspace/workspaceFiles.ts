@@ -1,3 +1,7 @@
+/**
+ * Resolves, reads, and guards workspace file selections.
+ */
+
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
@@ -30,6 +34,10 @@ function safeProjectPath(path: string): boolean {
     !/(^|\/)\.env(?:\.|$)/.test(path)
   );
 }
+/**
+ * Resolves a supported relative project path and rejects traversal, excluded paths and existing
+ * symlink components. Does not create the target.
+ */
 export async function containedFile(root: string, path: string): Promise<string> {
   if (!safeProjectPath(path)) throw new Error(`Unsupported project path: ${path}`);
   const base = await realpath(root);
@@ -48,6 +56,10 @@ export async function containedFile(root: string, path: string): Promise<string>
   }
   return absolute;
 }
+/**
+ * Lists supported project files using Git, with nested-ignore walking as fallback;
+ * sensitive/generated paths are excluded.
+ */
 export async function listWorkspaceFiles(root: string): Promise<string[]> {
   try {
     const { stdout } = await execute(
@@ -91,6 +103,7 @@ export async function listWorkspaceFiles(root: string): Promise<string[]> {
   await walk("", []);
   return files.sort();
 }
+/** Ranks subsequence matches and returns at most 30 project paths for completion. */
 export function fuzzyFiles(paths: readonly string[], query: string): string[] {
   const needle = query.toLowerCase();
   return paths
@@ -111,6 +124,10 @@ export function fuzzyFiles(paths: readonly string[], query: string): string[] {
     .slice(0, 30)
     .map((item) => item.path);
 }
+/**
+ * Reads a regular, contained UTF-8 text file up to 1 MiB and hashes its bytes;
+ * unsupported/binary/oversized files reject.
+ */
 export async function readFileAttachment(root: string, path: string): Promise<FileAttachment> {
   const absolute = await containedFile(root, path);
   const stat = await lstat(absolute);
@@ -123,6 +140,10 @@ export async function readFileAttachment(root: string, path: string): Promise<Fi
   const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   return { path, content, hash: createHash("sha256").update(bytes).digest("hex") };
 }
+/**
+ * Expands registered tokens against the original prompt once, with an 8 MiB aggregate limit;
+ * inserted contents are never recursively expanded.
+ */
 export async function expandFileAttachments(
   value: string,
   registry: Map<string, FileAttachment>,

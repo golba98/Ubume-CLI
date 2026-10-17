@@ -1,3 +1,8 @@
+/**
+ * Serializes and normalizes Ink stdout frames to prevent interleaving, duplicates, width
+ * residue, and resize corruption.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUbumeDebugLogPath } from "../workspace/appData.js";
@@ -15,6 +20,10 @@ interface FrameLockOptions<T extends FrameWritable> {
 
 const resizeFrameCacheResetters = new WeakMap<object, () => void>();
 
+/**
+ * Invalidates the wrapped stream's last-frame cache so identical content can repaint at new
+ * dimensions.
+ */
 export function resetFrameLockForResize(stdout: object): void {
   resizeFrameCacheResetters.get(stdout)?.();
 }

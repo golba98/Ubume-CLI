@@ -488,6 +488,36 @@ test("provider default reasoning round-trips through serialize/parse", () => {
   assert.equal(reparsed.providers?.anthropic?.currentReasoning, "xhigh");
 });
 
+test("reasoning can be saved before a model is selected without creating model overrides", () => {
+  const initial = { providers: { anthropic: { currentReasoning: "medium" } } };
+  const updated = setProviderDefaultReasoning(initial, "anthropic", "high");
+  assert.deepEqual(updated.providers?.anthropic, { currentReasoning: "high" });
+  assert.deepEqual(initial.providers.anthropic, { currentReasoning: "medium" });
+  assert.deepEqual(setProviderDefaultReasoning({}, "anthropic", "high"), {
+    providers: { anthropic: { currentReasoning: "high" } },
+  });
+});
+
+test("reasoning updates preserve model capabilities and other model preferences", () => {
+  const initial = {
+    providers: {
+      anthropic: {
+        currentModel: "sonnet",
+        models: {
+          sonnet: { contextLength: 200_000, reasoningPreference: "medium" },
+          opus: { reasoningPreference: "max" },
+        },
+      },
+    },
+  };
+  const updated = setProviderDefaultReasoning(initial, "anthropic", "high");
+  assert.deepEqual(updated.providers?.anthropic?.models, {
+    sonnet: { contextLength: 200_000, reasoningPreference: "high" },
+    opus: { reasoningPreference: "max" },
+  });
+  assert.equal(initial.providers.anthropic.models.sonnet.reasoningPreference, "medium");
+});
+
 test("Anthropic claudeCommandPath round-trips through serialize/parse", () => {
   const config = parseProviderWorkspaceConfig({
     providers: {

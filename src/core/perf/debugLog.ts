@@ -1,3 +1,9 @@
+/**
+ * Opt-in input, Local stream, model-state and update-check diagnostics sharing a best-effort
+ * writer. Each channel retains its flags, destination and record format; Local content fields
+ * require a separate opt-in to bypass redaction.
+ */
+
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getHomeDir } from "../../config/settings.js";
@@ -15,6 +21,7 @@ function getInputDebugLogPath(): string {
   return process.env.UBUME_DEBUG_INPUT_LOG || join(getHomeDir(), ".ubume-input-debug.log");
 }
 
+/** Reads terminal input diagnostics without changing raw mode, flow or listener ownership. */
 export function getStdinDebugState(stdin: unknown): DebugDetails {
   const input = stdin as
     | {
@@ -36,6 +43,10 @@ export function getStdinDebugState(stdin: unknown): DebugDetails {
   };
 }
 
+/**
+ * Writes opt-in input diagnostics using the input channel's path and sequence; logging failures
+ * are ignored.
+ */
 export function traceInputDebug(event: string, details: DebugDetails = {}): void {
   if (!isInputDebugEnabled()) {
     return;
@@ -83,6 +94,10 @@ function redactStreamDetails(value: unknown, key = ""): unknown {
   return value;
 }
 
+/**
+ * Writes opt-in Local trace records, redacting content-shaped fields unless the separate content
+ * flag is enabled.
+ */
 export function traceLocalStream(
   event: string,
   details: Record<string, unknown>,
@@ -144,6 +159,7 @@ function getModelStateDebugLogPath(): string {
   );
 }
 
+/** Writes opt-in provider/model snapshots; callers must supply diagnostic-safe fields. */
 export function traceModelStateDebug(event: string, details: ModelStateDebugDetails = {}): void {
   if (!isModelStateDebugEnabled()) return;
 

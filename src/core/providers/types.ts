@@ -1,3 +1,9 @@
+/**
+ * Shared execution/callback contracts for interactive and headless callers. Response delivery is
+ * distinct from stopped-resource completion; adapters must preserve that distinction during
+ * cancellation and retries.
+ */
+
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import type { AvailableBackend } from "../../config/settings.js";
 import type { RunProgressSource, RunToolActivity } from "../../session/types.js";
@@ -39,15 +45,21 @@ export interface ToolApprovalRequest {
 
 export type BackendAuthState = "delegated" | "api-key-required" | "coming-soon";
 
+/** Cleanup ownership for one logical run, including any compatibility retry attempts. */
 export interface ProviderRunControl {
+  /** Await before releasing workspace ownership; response delivery alone does not imply teardown. */
   stopped: Promise<void>;
+  /** Optional live steering; false means the provider did not accept the prompt. */
   steer?: (prompt: string) => Promise<boolean>;
 }
 
+/** Normalized provider events; application orchestration owns session state and ignores stale runs. */
 export interface BackendRunHandlers {
   onGenerationMetadata?: (metadata: GenerationMetadata) => void;
   onRunControl?: (control: ProviderRunControl) => void;
+  /** Delivers the completed response; callers separately await run-control cleanup. */
   onResponse: (response: string) => void;
+  /** Reports failure with optional adapter diagnostics and structured recovery evidence. */
   onError: (message: string, rawOutput?: string, failure?: ProviderFailure) => void;
   /** Called with each new structured thinking/progress update while the process is still running. */
   onProgress?: (update: BackendProgressUpdate) => void;
@@ -61,8 +73,9 @@ export interface BackendRunHandlers {
   onToolApproval?: (request: ToolApprovalRequest) => Promise<ToolApprovalDecision>;
   /** Persists invisible rolling memory used only by Local context-window rollover. */
   onLocalContextCheckpoint?: (checkpoint: ConversationContextCheckpoint) => void;
-  /** Persists the opaque DeepSeek Harness session backing a Local conversation. */
+  /** Reports a native CLI session reference for future resume. */
   onNativeSession?: (session: NativeSessionReference) => void;
+  /** Updates opaque Local Harness resume metadata; null invalidates the named session. */
   onLocalHarnessSession?: (session: LocalHarnessSessionMetadata | null, sessionId: string) => void;
   /** Reports authoritative provider token usage when available. */
   onContextUsage?: (usage: ProviderContextUsage) => void;
@@ -104,6 +117,7 @@ export interface GenerationMetadata {
   hostPeakBytes?: number;
 }
 
+/** Backend adapter shared by both entry paths; authentication remains with its provider. */
 export interface BackendProvider {
   id: AvailableBackend;
   label: string;
@@ -112,6 +126,7 @@ export interface BackendProvider {
   authLabel: string;
   statusMessage: string;
   supportsModels: (model: string) => boolean;
+  /** Starts a logical run and returns cancellation; completion/cleanup are reported through handlers. */
   run?: (
     prompt: string,
     options: {

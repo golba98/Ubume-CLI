@@ -1,3 +1,9 @@
+/**
+ * Defines LM Studio/OpenAI-compatible request and response helpers used by the local runtime.
+ * Verifies a local Unsloth Studio instance, resolves secure API authentication, and parses
+ * loaded models.
+ */
+
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -24,6 +30,10 @@ export interface LmStudioModelList {
   object?: string;
 }
 
+/**
+ * Derives the LM Studio management API root from a compatible base URL; invalid URLs return
+ * null.
+ */
 export function deriveLmStudioApiRoot(baseUrl: string): string | null {
   try {
     return `${new URL(baseUrl).origin}/api/v0`;
@@ -32,6 +42,7 @@ export function deriveLmStudioApiRoot(baseUrl: string): string | null {
   }
 }
 
+/** Fetches model metadata with caller-supplied cancellation; request/shape failures return null. */
 export async function fetchLmStudioModelInfo(options: {
   apiRoot: string;
   modelId: string;
@@ -94,6 +105,7 @@ function parseModelInfo(value: unknown): LmStudioModelInfo | null {
   };
 }
 
+/** Normalizes supported LM Studio model-list shapes; malformed responses return null. */
 export function parseLmStudioModelsResponse(body: unknown): LmStudioModelList | null {
   if (!isRecord(body) || !Array.isArray(body.data)) {
     return null;
@@ -106,6 +118,10 @@ export function parseLmStudioModelsResponse(body: unknown): LmStudioModelList | 
   };
 }
 
+/**
+ * Reads the LM Studio management model inventory independently of the OpenAI-compatible model
+ * endpoint.
+ */
 export async function fetchLmStudioModels(options: {
   apiRoot: string;
   fetchImpl?: typeof fetch;
@@ -308,6 +324,10 @@ async function keyAccepted(
   return parseUnslothModels(await response.json());
 }
 
+/**
+ * Verifies a local Unsloth Studio connection and resolves authentication plus loaded-model
+ * metadata before Harness startup.
+ */
 export async function resolveUnslothConnection(
   options: {
     fetchImpl?: FetchImpl;

@@ -1,3 +1,7 @@
+/**
+ * Resolves browser enablement and capability policy from runtime configuration.
+ */
+
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -30,6 +34,10 @@ export interface ComputerUseCapability {
   headedSupported: boolean;
 }
 
+/**
+ * Detects a likely local desktop session; CI and SSH remain headless even when display variables
+ * are present.
+ */
 export function hasDesktopDisplay(
   env: NodeJS.ProcessEnv = process.env,
   platform = process.platform,
@@ -40,6 +48,10 @@ export function hasDesktopDisplay(
     : platform === "darwin" || platform === "win32";
 }
 
+/**
+ * Checks browser configuration, executable presence and Node availability without starting
+ * Chromium or installing dependencies.
+ */
 export function resolveBrowserCapability(
   env: NodeJS.ProcessEnv = process.env,
 ): ComputerUseCapability {

@@ -1,3 +1,8 @@
+/**
+ * Probes Codex authentication and converts results into run gating, labels, guidance, and
+ * likely-auth-failure classification.
+ */
+
 import type { spawn } from "node:child_process";
 import {
   formatCodexLaunchError,
@@ -54,6 +59,7 @@ const AUTH_FAILURE_STATUS_PATTERNS = [
   /\b(?:unauthorized|forbidden)\s*\(?40[13]\)?/i,
 ] as const;
 
+/** Formats authentication state for display without probing the CLI. */
 export function getAuthStateLabel(state: CodexAuthState): string {
   switch (state) {
     case "authenticated":
@@ -67,6 +73,7 @@ export function getAuthStateLabel(state: CodexAuthState): string {
   }
 }
 
+/** Returns manual Codex sign-in instructions; does not change authentication. */
 export function getLoginGuidance(): string {
   return [
     "Sign in to the Ubume neural network to continue.",
@@ -79,6 +86,7 @@ export function getLoginGuidance(): string {
   ].join("\n");
 }
 
+/** Returns manual sign-out instructions; does not invoke logout. */
 export function getLogoutGuidance(): string {
   return [
     "You are managing your Ubume sign-out state.",
@@ -89,6 +97,7 @@ export function getLogoutGuidance(): string {
   ].join("\n");
 }
 
+/** Formats a completed probe, including recovery guidance for unknown or signed-out states. */
 export function getAuthStatusMessage(result: CodexAuthProbeResult): string {
   if (result.state === "authenticated") {
     return [
@@ -129,6 +138,7 @@ interface RunGateDecisionOptions {
   warnOnUnknown?: boolean;
 }
 
+/** Blocks signed-out runs; unknown/checking states remain runnable with an optional warning. */
 export function getRunGateDecision(
   authState: CodexAuthState,
   options: RunGateDecisionOptions = {},
@@ -159,6 +169,10 @@ export function getRunGateDecision(
   return { allowRun: true };
 }
 
+/**
+ * Interprets probe output, retaining the successful-exit compatibility rule and returning
+ * unknown for ambiguous failures.
+ */
 export function inferAuthStateFromProbe(
   exitCode: number | null,
   stdout: string,
@@ -178,6 +192,10 @@ export function inferAuthStateFromProbe(
   return "unknown";
 }
 
+/**
+ * Recognizes explicit authentication failures; bare status-code digits are not sufficient
+ * evidence.
+ */
 export function isLikelyAuthFailure(message: string): boolean {
   const lower = message.toLowerCase();
   return (
@@ -186,6 +204,10 @@ export function isLikelyAuthFailure(message: string): boolean {
   );
 }
 
+/**
+ * Tries JSON then text login-status probes with bounded attempts. Missing or failing CLIs yield
+ * an unknown state and manual recovery guidance.
+ */
 export async function probeCodexAuthStatus(): Promise<CodexAuthProbeResult> {
   const attempts: string[][] = [
     ["login", "status", "--json"],
@@ -251,9 +273,10 @@ function inferAuthStateFromJson(raw: string): CodexAuthState | null {
     const status = payload.status;
     if (typeof status === "string") {
       const lower = status.toLowerCase();
-      if (lower.includes("auth")) return "authenticated";
+      // "unauthenticated" also contains "auth"; signed-out evidence takes precedence.
       if (lower.includes("unauth")) return "unauthenticated";
       if (lower.includes("signed_out")) return "unauthenticated";
+      if (lower.includes("auth")) return "authenticated";
     }
   } catch {
     return null;

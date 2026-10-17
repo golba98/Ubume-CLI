@@ -1,3 +1,9 @@
+/**
+ * Mistral API inventory and Vibe connection resolution. Reads optional user/project
+ * configuration and credentials without echoing them; API-discovered models do not by themselves
+ * prove Vibe execution support.
+ */
+
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseEnv } from "node:util";
@@ -17,6 +23,10 @@ export interface MistralConnection {
   configuredModels: unknown[];
 }
 
+/**
+ * Reads optional user/project Vibe configuration and resolves credentials with
+ * workspace/environment precedence; never logs credential contents.
+ */
 export function resolveMistralConnection(
   cwd: string,
   config?: ProviderWorkspaceOverride,
@@ -73,6 +83,10 @@ const MISTRAL_REASONING_LEVELS = [
   { id: "high", label: "High", description: "Vibe High maps to Mistral reasoning_effort=high." },
 ] as const;
 
+/**
+ * Normalizes active chat-capable API models; API discovery alone leaves custom Vibe execution
+ * unverified.
+ */
 export function parseMistralModels(body: unknown): ProviderModel[] {
   const items = Array.isArray(body)
     ? body
@@ -136,6 +150,10 @@ export function parseMistralModels(body: unknown): ProviderModel[] {
   );
 }
 
+/**
+ * Fetches the API inventory using resolved Vibe credentials; authentication/transport failures
+ * return unverified diagnostics.
+ */
 export async function fetchMistralModels(options: {
   cwd: string;
   providerConfig?: ProviderWorkspaceOverride;

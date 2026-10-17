@@ -1,3 +1,8 @@
+/**
+ * Implements the runnable Codex backend, spawning the CLI and adapting its streams to
+ * BackendRunHandlers.
+ */
+
 import { spawn } from "child_process";
 import { formatConversationHistory } from "../../session/conversation.js";
 import { prepareCodexExecLaunch } from "../codex/codexLaunch.js";
@@ -30,6 +35,10 @@ function isProcessTerminationNoise(line: string): boolean {
   return /^SUCCESS: The process with PID \d+ .* has been terminated\.$/.test(line.trim());
 }
 
+/**
+ * Codex exec backend with one legacy-output retry when structured output is unsupported.
+ * Each run owns its parsers and subprocesses; run control reports teardown separately from text.
+ */
 export const codexSubprocessProvider: BackendProvider = {
   id: "codex-subprocess",
   label: "Ubume",

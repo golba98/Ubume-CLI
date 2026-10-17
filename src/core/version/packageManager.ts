@@ -1,3 +1,7 @@
+/**
+ * Detects how Ubume was installed and derives the appropriate update command.
+ */
+
 import type { ChildProcess } from "node:child_process";
 import {
   type CommandResult,
@@ -53,6 +57,10 @@ export function detectGlobalPackageManager(
   return "npm";
 }
 
+/**
+ * Returns the fixed supported package-manager update argv and display command without running
+ * it.
+ */
 export function getUpdateCommand(pm: GlobalPackageManager): {
   displayCommand: string;
   argv: readonly string[];
@@ -116,6 +124,10 @@ export function isPermissionError(result: CommandResult): boolean {
   return result.exitCode !== 0 && PERMISSION_STDERR_RE.test(result.stderr);
 }
 
+/**
+ * Returns manual recovery guidance for an unwritable global package directory without attempting
+ * elevation.
+ */
 export function formatPermissionGuidance(pm: GlobalPackageManager): string {
   const { displayCommand } = getUpdateCommand(pm);
   const lines = [

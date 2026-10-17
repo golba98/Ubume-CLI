@@ -1,3 +1,7 @@
+/**
+ * Collects opt-in prompt/run phase timings, counters, and session performance summaries.
+ */
+
 import { join } from "path";
 import { getHomeDir } from "../../config/settings.js";
 import { createDebugLog } from "./debugLog.js";
@@ -20,27 +24,36 @@ function isEnabled(): boolean {
   return _enabled;
 }
 
+/**
+ * Starts/replaces the process-local performance session only when UBUME_PERF was enabled on
+ * first use.
+ */
 export function startSession(runId: string): void {
   if (!isEnabled()) return;
   _session = { runId, marks: {}, counters: {}, accumulations: {}, metadata: {} };
 }
 
+/** Records a performance.now timestamp in the active profiling session, if any. */
 export function mark(label: string): void {
   if (_session) _session.marks[label] = performance.now();
 }
 
+/** Adds to a counter in the active profiling session; no active session is a no-op. */
 export function inc(counter: string, by = 1): void {
   if (_session) _session.counters[counter] = (_session.counters[counter] ?? 0) + by;
 }
 
+/** Adds elapsed milliseconds to an active session's accumulated measurement. */
 export function accumulate(key: string, ms: number): void {
   if (_session) _session.accumulations[key] = (_session.accumulations[key] ?? 0) + ms;
 }
 
+/** Attaches caller-supplied metadata to the active profiling session; avoid sensitive values. */
 export function setMeta(key: string, value: unknown): void {
   if (_session) _session.metadata[key] = value;
 }
 
+/** Returns the current mutable profiling record, or null before an enabled session starts. */
 export function getSession(): PerfSession | null {
   return _session;
 }
@@ -66,6 +79,9 @@ const STAGE_ROWS: Array<[from: string, to: string, label: string, note?: string]
   ["finalize_start", "finalize_done", "finalize_start → finalize_done", ""],
 ];
 
+/**
+ * Formats observed phase timings and the largest measured stage; missing marks remain unknown.
+ */
 export function buildSummary(session: PerfSession): string {
   const lines: string[] = [
     "┌── UBUME PERF REPORT ─────────────────────────────────────────",
@@ -114,6 +130,7 @@ export function buildSummary(session: PerfSession): string {
 }
 
 // Sessions are appended as JSONL to ~/.ubume-perf.jsonl for offline analysis.
+/** Appends an explicit profiling record as JSONL to the home log; persistence is best-effort. */
 export function persistSession(session: PerfSession): void {
   try {
     const logPath = join(getHomeDir(), ".ubume-perf.jsonl");

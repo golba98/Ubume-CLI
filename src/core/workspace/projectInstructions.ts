@@ -14,6 +14,10 @@ export type ProjectInstructionsLoadResult =
 
 const PROJECT_INSTRUCTION_CANDIDATES = ["AGENTS.md", join(".codex", "AGENTS.md")] as const;
 
+/**
+ * Reads the first nonempty root AGENTS.md or .codex/AGENTS.md; distinguishes missing
+ * instructions from a read error without throwing.
+ */
 export function loadProjectInstructions(workspaceRoot: string): ProjectInstructionsLoadResult {
   let firstError: Extract<ProjectInstructionsLoadResult, { status: "error" }> | null = null;
 

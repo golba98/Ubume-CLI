@@ -1,3 +1,8 @@
+/**
+ * Local adapter: model, context window (percentage only when verified/configured), harness token
+ * counts, and N/A vs remote-endpoint quota.
+ */
+
 import { getLocalUsageRecord } from "./localUsageTracker.js";
 import { percentOfTotal } from "./normalize.js";
 import type {

@@ -49,14 +49,19 @@ export function parseAnthropicRateLimitHeaders(
 
 const observed = new Map<string, ObservedRateLimits>();
 
+/** Stores a non-null passive observation by usage scope without making a request. */
 export function recordObservedRateLimits(scopeKey: string, value: ObservedRateLimits | null): void {
   if (value) observed.set(scopeKey, value);
 }
 
+/** Reads the most recent passive observation for a scope without contacting its provider. */
 export function getObservedRateLimits(scopeKey: string): ObservedRateLimits | undefined {
   return observed.get(scopeKey);
 }
 
+/**
+ * Clears passive rate-limit observations between tests.
+ */
 export function resetObservedRateLimitsForTests(): void {
   observed.clear();
 }

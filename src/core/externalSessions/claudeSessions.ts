@@ -1,3 +1,8 @@
+/**
+ * Lists Claude Code sessions from `~/.claude/projects` (head/tail reads) and streams a session
+ * JSONL into transcript entries.
+ */
+
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { clampText, titleFromText } from "../shared/text.js";
@@ -113,6 +118,10 @@ async function sessionFiles(dir: string): Promise<string[]> {
   }
 }
 
+/**
+ * Lists native Claude sessions using bounded head/tail metadata reads and optional workspace
+ * filtering.
+ */
 export async function listClaudeSessions(
   scope: ExternalSessionScope,
   options: ExternalSessionOptions = {},
@@ -171,6 +180,9 @@ function toolResultText(block: JsonRecord): string {
   return block.is_error === true ? `Error: ${text}` : text;
 }
 
+/**
+ * Streams a native Claude JSONL transcript, pairing tool results and excluding injected context.
+ */
 export async function readClaudeTranscript(
   summary: ExternalSessionSummary,
 ): Promise<ExternalTranscript> {

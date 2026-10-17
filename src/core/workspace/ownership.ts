@@ -1,3 +1,9 @@
+/**
+ * Workspace execution and conversation leases backed by exclusive lock directories. Tokens guard
+ * release/reclamation against replacement owners; only demonstrably dead processes on the same
+ * host are reclaimable.
+ */
+
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -48,6 +54,7 @@ function readOwner(path: string): OwnershipInfo | null {
     return null;
   }
 }
+/** Reads lock/owner state without reclaiming or creating a lease. */
 export function inspectOwnership(
   workspace: string,
   resource: string,
@@ -64,6 +71,15 @@ function dead(owner: OwnershipInfo | null): boolean {
     return (error as NodeJS.ErrnoException).code === "ESRCH";
   }
 }
+/**
+ * Acquires an exclusive resource lease or throws a busy error. Only dead same-host owners are
+ * reclaimed; callers must release the returned token-checked lease.
+ *
+ * @param workspace - Workspace identity used for app-data lock placement.
+ * @param resource - `execution` or a validated `chat_...` conversation id.
+ * @returns A lease whose release cannot remove a replacement owner's lock.
+ * @throws For a live/unknown owner (exit code 3), invalid resource name, or filesystem failure.
+ */
 export function acquireOwnership(workspace: string, resource: string): OwnershipLease {
   const path = lockPath(workspace, resource);
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });

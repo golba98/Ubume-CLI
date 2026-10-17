@@ -1,3 +1,7 @@
+/**
+ * Tracks intended terminal titles and applies/restores title sequences across lifecycle changes.
+ */
+
 import {
   APP_NAME,
   formatTerminalTitlePath,
@@ -98,6 +102,7 @@ export function __resetTerminalTitleCache() {
   intendedTerminalTitle = DEFAULT_TERMINAL_TITLE;
 }
 
+/** Updates diagnostic lifecycle context for title writes; does not emit title sequences. */
 export function setTerminalTitleLifecycleState(state: string): void {
   terminalTitleLifecycleState = state;
 }
@@ -113,6 +118,7 @@ function looksLikeRawWindowsPath(title: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(title.trim()) || /^\\\\/.test(title.trim());
 }
 
+/** Normalizes an absent/blank title to the established Ubume default. */
 export function normalizeTerminalTitle(title: string | null | undefined): string {
   const cleanTitle = sanitizeTerminalTitle(title ?? "");
   if (!cleanTitle || looksLikeRawWindowsPath(cleanTitle)) {
@@ -121,6 +127,7 @@ export function normalizeTerminalTitle(title: string | null | undefined): string
   return cleanTitle;
 }
 
+/** Records the normalized intended title and writes it through the deduplicating title writer. */
 export function setIntendedTerminalTitle(
   title: string | null | undefined,
   options?: TerminalTitleOptions,
@@ -133,10 +140,12 @@ export function setIntendedTerminalTitle(
   return intendedTerminalTitle;
 }
 
+/** Reads the cached intended title without touching the terminal. */
 export function getIntendedTerminalTitle(): string {
   return intendedTerminalTitle;
 }
 
+/** Attempts to reapply the intended title through the same guarded/cached write boundary. */
 export function reassertIntendedTerminalTitle(options?: TerminalTitleOptions): void {
   writeUbumeTerminalTitle(intendedTerminalTitle, {
     force: true,
@@ -145,6 +154,7 @@ export function reassertIntendedTerminalTitle(options?: TerminalTitleOptions): v
   });
 }
 
+/** Writes a sanitized Ubume title using the configured stream and cache controls. */
 export function writeUbumeTerminalTitle(title: string, options?: TerminalTitleOptions) {
   const cleanTitle = normalizeTerminalTitle(title);
 
@@ -197,6 +207,7 @@ export function writeUbumeTerminalTitle(title: string, options?: TerminalTitleOp
   }
 }
 
+/** Compatibility entry point for the guarded Ubume title writer. */
 export function setTerminalTitle(title: string, options?: TerminalTitleOptions) {
   writeUbumeTerminalTitle(title, options);
 }
@@ -228,6 +239,10 @@ interface TerminalTitleSequenceTraceContext {
   lifecycleState?: string;
 }
 
+/**
+ * Records detected OSC title sequences with source/ownership context when title diagnostics are
+ * enabled.
+ */
 export function traceTerminalTitleSequences(
   input: Buffer | string,
   context: TerminalTitleSequenceTraceContext,
@@ -267,6 +282,7 @@ export function traceTerminalTitleSequences(
   return found;
 }
 
+/** Removes complete OSC title sequences from a complete string. */
 export function stripTerminalTitleSequences(input: string): string {
   const text = input.slice(0, MAX_TERMINAL_TITLE_INPUT_LENGTH);
   if (!text) return "";
@@ -292,12 +308,19 @@ export function stripTerminalTitleSequences(input: string): string {
   return result;
 }
 
+/**
+ * Removes complete title sequences from one chunk; use the stateful stripper when sequences may
+ * span chunks.
+ */
 export function stripTerminalTitleSequencesFromChunk(chunk: Buffer | string): string {
   return stripTerminalTitleSequences(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk);
 }
 
 // Each stripper maintains a carryover buffer so that a title escape sequence
 // split across two Node `data` events is still detected and stripped correctly.
+/**
+ * Buffers split OSC title sequences across chunks; flush pending sequence text at EOF.
+ */
 export function createTerminalTitleSequenceStripper(context: TerminalTitleSequenceTraceContext): {
   process(chunk: Buffer | string): string;
   flush(): string;
@@ -335,6 +358,7 @@ export function createTerminalTitleSequenceStripper(context: TerminalTitleSequen
   };
 }
 
+/** Applies title-sequence filtering/diagnostics at the shared terminal write boundary. */
 export function writeGuardedTerminalOutput(
   write: (chunk: string) => boolean | void,
   chunk: Buffer | string,
@@ -350,6 +374,7 @@ export function writeGuardedTerminalOutput(
   return write(safeText) !== false;
 }
 
+/** Replaces control characters with spaces and trims the title before constructing sequences. */
 export function sanitizeTerminalTitle(title: string): string {
   return title
     .replace(/[\u0000-\u001f\u007f]/g, " ")
@@ -357,6 +382,7 @@ export function sanitizeTerminalTitle(title: string): string {
     .trim();
 }
 
+/** Builds sanitized OSC title sequences without writing them. */
 export function buildTerminalTitleSequence(title: string): string {
   const safeTitle = normalizeTerminalTitle(title);
   // \x1b]0; sets both icon name and window title.
@@ -365,6 +391,7 @@ export function buildTerminalTitleSequence(title: string): string {
   return `\x1b]0;${safeTitle}\x07\x1b]2;${safeTitle}\x07`;
 }
 
+/** Formats the title setting's display label. */
 export function formatTerminalTitleLabel(
   workspaceRoot: string,
   terminalTitleMode: TerminalTitleMode,
@@ -372,6 +399,7 @@ export function formatTerminalTitleLabel(
   return formatTerminalTitlePath(workspaceRoot, terminalTitleMode);
 }
 
+/** Resolves title text for the configured mode and workspace. */
 export function deriveTerminalTitle(
   workspaceRoot: string,
   terminalTitleMode: TerminalTitleMode,

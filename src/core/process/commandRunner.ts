@@ -1,3 +1,8 @@
+/**
+ * Runs shell commands with streamed output, cancellation, summaries, and platform-aware process
+ * cleanup.
+ */
+
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { normalizeLineBreaks } from "../shared/text.js";
@@ -95,6 +100,7 @@ function buildUserMessage(result: {
   return "Command completed.";
 }
 
+/** Builds a display summary from sanitized output while preserving failure messages. */
 export function summarizeCommandResult(
   command: string,
   result: Pick<
@@ -135,6 +141,10 @@ export function summarizeCommandResult(
   return `Produced ${pluralize(stdoutLines.length, "line")} of output.`;
 }
 
+/**
+ * Spawns validated argv directly. result reports completion/timeout; stopped tracks teardown
+ * separately, so cancellation callers should await it before releasing ownership.
+ */
 export function runCommand(
   spec: CommandSpec,
   handlers: CommandStreamHandlers = {},
@@ -147,6 +157,10 @@ export function runCommand(
   return runProcess(spec, handlers);
 }
 
+/**
+ * Runs shell text through /bin/sh or cmd.exe. The caller owns command-policy validation; the
+ * returned runner retains process-group cancellation semantics.
+ */
 export function runShellCommand(
   command: string,
   options: Pick<CommandSpec, "cwd" | "env" | "timeoutMs">,

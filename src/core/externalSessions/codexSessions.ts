@@ -1,3 +1,8 @@
+/**
+ * Lists Codex threads from `state_*.sqlite` (rollout scan fallback) and parses rollout JSONL
+ * into transcript entries.
+ */
+
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { clampText, titleFromText } from "../shared/text.js";
@@ -200,6 +205,9 @@ async function summarizeRollout(
   };
 }
 
+/**
+ * Reads the native thread index, falling back to rollout scanning when the index is unavailable.
+ */
 export async function listCodexSessions(
   scope: ExternalSessionScope,
   options: ExternalSessionOptions = {},
@@ -268,6 +276,7 @@ function toolDetail(body: string): string {
   return body.split("\n")[0] ?? "";
 }
 
+/** Parses native Codex rollout events into user, assistant and tool display entries. */
 export async function readCodexTranscript(
   summary: ExternalSessionSummary,
 ): Promise<ExternalTranscript> {

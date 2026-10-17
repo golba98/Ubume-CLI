@@ -1,3 +1,8 @@
+/**
+ * Discovers Claude Code models and reasoning metadata from native commands, installed package
+ * metadata, settings and fallbacks.
+ */
+
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -97,6 +102,10 @@ function readStringArray(value: unknown): string[] | undefined {
   return result.length > 0 ? result : undefined;
 }
 
+/**
+ * Parses structured Claude authentication output without treating malformed output as
+ * authenticated.
+ */
 export function parseClaudeAuthStatus(stdout: string): ClaudeCodeAuthInfo | null {
   try {
     const parsed = JSON.parse(stdout.trim()) as unknown;
@@ -112,6 +121,10 @@ export function parseClaudeAuthStatus(stdout: string): ClaudeCodeAuthInfo | null
   }
 }
 
+/**
+ * Extracts advertised effort choices; missing metadata returns null rather than inventing
+ * levels.
+ */
 export function parseClaudeEffortLevelsFromHelp(helpText: string): string[] | null {
   const match = helpText.match(/^\s*--effort\b[^\r\n]*\(([^)]+)\)/im);
   if (!match?.[1]) return null;
@@ -498,6 +511,9 @@ function allModelsHaveKnownVersions(models: readonly ClaudeCodeModel[]): boolean
   return models.length > 0 && models.every((model) => Boolean(model.version));
 }
 
+/**
+ * Reads native Claude package metadata as a discovery source without submitting a model prompt.
+ */
 export function discoverModelsFromClaudePackageMetadata(
   resolvedCommand: string,
   metadataPaths?: readonly string[],
@@ -601,6 +617,10 @@ async function discoverModelsFromClaudeHelp(
   return [];
 }
 
+/**
+ * Adapts native Claude discovery records into shared models while retaining reasoning
+ * provenance.
+ */
 export function claudeCodeModelsToProviderModels(
   models: readonly ClaudeCodeModel[],
 ): readonly ProviderModel[] {
@@ -630,6 +650,10 @@ export function claudeCodeModelsToProviderModels(
   }));
 }
 
+/**
+ * Combines bounded native probes, settings and installed package metadata, degrading to explicit
+ * fallback records when discovery is unavailable.
+ */
 export async function discoverClaudeCodeCapabilities(
   options: DiscoverClaudeCodeCapabilitiesOptions,
 ): Promise<ClaudeCodeCapabilityDiscovery> {
@@ -771,6 +795,7 @@ export async function discoverClaudeCodeCapabilities(
   };
 }
 
+/** Resolves a supported default effort for a discovered Claude model or its native alias. */
 export function getClaudeModelDefaultEffort(
   modelId: string,
   models: readonly ProviderModel[],
@@ -787,6 +812,10 @@ export function getClaudeModelDefaultEffort(
   return model?.defaultReasoningLevel ?? "medium";
 }
 
+/**
+ * Checks effort support against native discovery metadata rather than assuming all models share
+ * controls.
+ */
 export function modelSupportsClaudeEffort(
   modelId: string,
   effort: string | null | undefined,

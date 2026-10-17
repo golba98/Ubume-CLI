@@ -1,3 +1,7 @@
+/**
+ * Unicode width measurement, grapheme-based input/wrapping helpers and shared text normalization.
+ */
+
 import stringWidth from "string-width";
 
 interface TextUnit {
@@ -22,6 +26,7 @@ function getCharWidth(char: string): number {
 
 const textSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+/** Segments text into graphemes with source offsets and per-grapheme terminal widths. */
 export function getTextUnits(text: string): TextUnit[] {
   const units: TextUnit[] = [];
   for (const { segment: char, index: offset } of textSegmenter.segment(text)) {
@@ -37,12 +42,14 @@ export function getTextUnits(text: string): TextUnit[] {
   return units;
 }
 
+/** Measures terminal column width while excluding ANSI formatting sequences. */
 export function getTextWidth(text: string): number {
   return stringWidth(text);
 }
 
 // ─── Input window ────────────────────────────────────────────────────────────
 
+/** Returns text before, at and after a visual column using grapheme widths. */
 export function splitTextAtColumn(
   text: string,
   column: number,
@@ -73,6 +80,7 @@ export function splitTextAtColumn(
 
 // ─── Text wrapping ────────────────────────────────────────────────────────────
 
+/** Wraps text by terminal width while retaining source offsets for layout consumers. */
 export function wrapTextRows(
   text: string,
   maxWidth: number,
@@ -184,6 +192,7 @@ export function wrapTextRows(
       ];
 }
 
+/** Wraps plain display text using terminal column widths rather than string length. */
 export function wrapPlainText(
   text: string,
   maxWidth: number,
@@ -192,6 +201,7 @@ export function wrapPlainText(
   return wrapTextRows(text, maxWidth, firstLineWidth).map((row) => row.text);
 }
 
+/** Wraps command tokens with two-space continuation indentation, dropping the indent when a wide grapheme would otherwise prevent progress. */
 export function wrapCommandText(text: string, maxWidth: number): string[] {
   if (maxWidth <= 2) return [];
   const normalized = normalizeLineBreaks(text);
@@ -241,10 +251,17 @@ export function wrapCommandText(text: string, maxWidth: number): string[] {
         const available = maxWidth - currentWidth;
         const split = splitTextAtColumn(token, available);
 
-        currentLine += split.before;
-        rows.push(currentLine);
-
-        token = split.current + split.after;
+        if (!split.before && split.current) {
+          // A wide grapheme may not fit after the continuation indent. Emit it
+          // without indentation so the token shrinks instead of looping forever.
+          if (currentLine.trim()) rows.push(currentLine.trimEnd());
+          rows.push(split.current);
+          token = split.after;
+        } else {
+          currentLine += split.before;
+          rows.push(currentLine);
+          token = split.current + split.after;
+        }
         tokenWidth = getTextWidth(token);
         currentLine = "  ";
         currentWidth = 2;
@@ -308,6 +325,7 @@ export function titleFromText(text: string, max = 72): string {
   return title.length > max ? `${title.slice(0, max - 3).trimEnd()}...` : title;
 }
 
+/** Keeps up to max characters and appends the omitted character count when truncated. */
 export function clampText(text: string, max: number): string {
   return text.length > max
     ? `${text.slice(0, max)}\n[… ${text.length - max} more characters]`

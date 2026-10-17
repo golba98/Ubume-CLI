@@ -1,3 +1,9 @@
+/**
+ * Pure decisions for non-browser Harness tools using workspace guards and runtime policy. The
+ * process owner performs scratch creation and interactive approval; this module has no
+ * filesystem writes.
+ */
+
 import { browserDescription, isBrowserTool } from "../../../../bin/ubume-local-browser-tools.js";
 import { isRecord } from "../../shared/values.js";
 import { mentionsScratchDir } from "../../workspace/scratchDir.js";
@@ -8,10 +14,15 @@ import {
 } from "../../workspace/workspaceGuard.js";
 import type { ProviderChatRequest } from "../types.js";
 
+/** Treats malformed tool arguments as an empty record before policy inspection. */
 export function normalizedArgs(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
 
+/**
+ * Builds the tool description used in activity/approval displays, including browser
+ * descriptions.
+ */
 export function commandFrom(tool: string, args: Record<string, unknown>): string {
   if (isBrowserTool(tool))
     return typeof args.description === "string" ? args.description : browserDescription(tool, args);
@@ -21,12 +32,14 @@ export function commandFrom(tool: string, args: Record<string, unknown>): string
   return tool;
 }
 
+/** Extracts explicit nonempty path fields recognized by the Harness policy bridge. */
 export function pathsFrom(args: Record<string, unknown>): string[] {
   return [args.path, args.file_path, args.old_path, args.new_path].filter(
     (value): value is string => typeof value === "string" && value.trim().length > 0,
   );
 }
 
+/** Identifies the shell and file-edit tool names governed by mutation policy. */
 export function isMutatingTool(tool: string): boolean {
   return ["bash", "pwsh", "write", "edit", "str_replace_editor"].includes(tool);
 }

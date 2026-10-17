@@ -1,3 +1,8 @@
+/**
+ * Codex adapter: `account/read` and `account/rateLimits/read` over the app-server; maps windows,
+ * buckets, credits and API-key/signed-out states.
+ */
+
 import { describeAppServerError, withCodexAppServer } from "../codex/codexAppServerClient.js";
 import { resolveCodexExecutable } from "../executables/codexExecutable.js";
 import { isRecord } from "../shared/values.js";
@@ -28,6 +33,10 @@ type CodexAccount =
   | { kind: "other"; type: string }
   | { kind: "none"; requiresAuth: boolean };
 
+/**
+ * Normalizes structured account/read data into subscription, API-key, unknown-method or signed-
+ * out account identity.
+ */
 export function parseCodexAccount(result: unknown): CodexAccount {
   if (!isRecord(result)) return { kind: "none", requiresAuth: false };
   const account = result.account;
@@ -87,6 +96,7 @@ export interface ParsedCodexRateLimits {
   notes: string[];
 }
 
+/** Normalizes Codex quota buckets, credit facts and notes; unrecognized shapes return null. */
 export function parseCodexRateLimits(result: unknown, now: number): ParsedCodexRateLimits | null {
   if (!isRecord(result)) return null;
   const byId = isRecord(result.rateLimitsByLimitId) ? result.rateLimitsByLimitId : null;
@@ -158,6 +168,10 @@ function baseSnapshot(context: UsageRequestContext): ProviderUsageSnapshot {
   };
 }
 
+/**
+ * Combines account and rate-limit outcomes without interpreting API-key billing as subscription
+ * allowance.
+ */
 export function buildCodexUsageSnapshot(
   context: UsageRequestContext,
   accountResult: unknown,
