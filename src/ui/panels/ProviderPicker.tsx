@@ -251,7 +251,7 @@ export function ProviderPicker({
       ? "Enter use · Esc back"
       : mode === "local-backends"
         ? "Enter use · Esc back"
-        : "Enter use · Esc close";
+        : "Enter use · M models · Esc close";
 
   const openCodexaNativeModels = () => {
     const selectedNativeIndex = codexaNativeModels.findIndex(
@@ -329,6 +329,22 @@ export function ProviderPicker({
         }
         if (key.downArrow || input === "j") {
           setProviderIndex((current) => clampIndex(current + 1, pickerProviders.length));
+          return;
+        }
+        if (input.toLowerCase() === "m" && selectedProvider) {
+          if (
+            mode === "providers" &&
+            selectedProvider.id === "codexa-native" &&
+            codexaNativeModels.length > 0
+          ) {
+            openCodexaNativeModels();
+            return;
+          }
+          onAction(
+            selectedProvider.id,
+            "select-model",
+            mode === "local-backends" ? selectedLocalBackend : undefined,
+          );
           return;
         }
         if (input.toLowerCase() === "u" && selectedProvider) {

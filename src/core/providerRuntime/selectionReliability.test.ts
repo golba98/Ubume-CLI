@@ -3,11 +3,79 @@ import { normalizeRuntimeConfig, resolveRuntimeConfig } from "../../config/runti
 import { assessSavedRoute } from "../../session/sessionCatalog.js";
 import { providerCatalog } from "../models/modelCatalog.js";
 import type { ProviderId } from "../providerLauncher/types.js";
-import type { BackendProvider } from "../providers/types.js";
+import type { BackendProvider, BackendRunHandlers } from "../providers/types.js";
 import { createRoutedProvider, getProviderRuntime } from "./registry.js";
 import type { ProviderModelDiscoveryResult, ProviderRoute } from "./types.js";
 
 const runtime = resolveRuntimeConfig(normalizeRuntimeConfig({}));
+
+test("a late model error cannot refresh over a newer connection catalog", async () => {
+  const native = getProviderRuntime("google");
+  const originalRun = native.run;
+  const originalRefresh = native.refreshModels;
+  let pending!: BackendRunHandlers;
+  let refreshes = 0;
+  const snapshot: ProviderModelDiscoveryResult = {
+    providerId: "google",
+    backendKind: native.backendKind,
+    status: "ready",
+    freshness: "verified",
+    complete: true,
+    models: [
+      {
+        id: "working",
+        modelId: "working",
+        label: "Working",
+        description: null,
+        defaultReasoningLevel: null,
+        supportedReasoningLevels: null,
+      },
+    ],
+  };
+  try {
+    await providerCatalog.refresh(
+      { ...native, discoverModels: () => snapshot, refreshModels: async () => snapshot },
+      { cwd: "/tmp/selection-fixture" },
+    );
+    native.run = (_request, handlers) => {
+      pending = handlers;
+      return () => {};
+    };
+    native.refreshModels = async () => {
+      refreshes++;
+      return snapshot;
+    };
+    const errors: unknown[][] = [];
+    const route: ProviderRoute = {
+      providerId: "google",
+      modelId: "working",
+      backendKind: native.backendKind,
+    };
+    createRoutedProvider(route, { id: "codex-subprocess" } as BackendProvider, {}).run!(
+      "hello",
+      { workspaceRoot: "/tmp/selection-fixture", runtime },
+      { onResponse: () => {}, onError: (...error) => errors.push(error) },
+    );
+    const next = await providerCatalog.refresh(
+      { ...native, discoverModels: () => snapshot, refreshModels: async () => snapshot },
+      {
+        cwd: "/tmp/selection-fixture",
+        providerConfig: { antigravityCommandPath: "/new-account/agy" },
+      },
+    );
+    pending.onError("Model working is unavailable", "original diagnostic");
+    await Promise.resolve();
+    expect(refreshes).toBe(0);
+    expect(providerCatalog.get("google")).toBe(next);
+    expect(errors[0]?.[1]).toBe("original diagnostic");
+    expect(errors[0]?.[2]).toMatchObject({ kind: "model-unavailable" });
+  } finally {
+    native.run = originalRun;
+    native.refreshModels = originalRefresh;
+    providerCatalog.dispose();
+  }
+});
+
 for (const id of ["openai", "anthropic", "google", "mistral", "local"] as ProviderId[])
   test(`${id} refuses a withdrawn persisted model without substituting another`, async () => {
     const native = getProviderRuntime(id);
@@ -22,6 +90,7 @@ for (const id of ["openai", "anthropic", "google", "mistral", "local"] as Provid
       status: "ready",
       models: [],
       freshness: "verified",
+      complete: true,
     };
     try {
       await providerCatalog.refresh(
@@ -78,6 +147,7 @@ test("saved Mistral aliases resolve only through advertised metadata", () => {
     backendKind: "mistral-vibe-cli-auth",
     status: "ready",
     freshness: "verified",
+    complete: true,
     models: [
       {
         id: "native",
@@ -153,6 +223,7 @@ test("ambiguous historical Vibe alias requires explicit reselection instead of c
     backendKind: native.backendKind,
     status: "ready",
     freshness: "verified",
+    complete: true,
     models,
   };
   try {

@@ -5,6 +5,7 @@ import {
   appendRunPlanChunk,
   appendStaticEvents,
   createRunEvent,
+  reduceUIState,
   upsertRunToolActivity,
 } from "./chatLifecycle.js";
 import {
@@ -13,6 +14,18 @@ import {
   type RunToolActivity,
   type TimelineEvent,
 } from "./types.js";
+
+test("committing a replacement model clears stale errors without dismissing questions or active runs", () => {
+  const action = { type: "DISMISS_TRANSIENT" as const, onlyError: true };
+  assert.deepEqual(
+    reduceUIState({ kind: "ERROR", turnId: 1, message: "Model unavailable" }, action),
+    { kind: "IDLE" },
+  );
+  const question = { kind: "AWAITING_USER_ACTION" as const, turnId: 2, question: "Continue?" };
+  assert.equal(reduceUIState(question, action), question);
+  const running = { kind: "THINKING" as const, turnId: 3 };
+  assert.equal(reduceUIState(running, action), running);
+});
 
 test("appendStaticEvents deduplicates consecutive identical system events", () => {
   const events: TimelineEvent[] = [

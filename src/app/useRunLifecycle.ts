@@ -164,7 +164,7 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
       activeRunTimingRef.current = null;
       activeRunIdRef.current = null;
       activeTurnIdRef.current = null;
-      focusManager.focus(FOCUS_IDS.composer);
+      if (screenRef.current === "main") focusManager.focus(FOCUS_IDS.composer);
       cleanup?.();
       const safeMessage = message ? sanitizeTerminalOutput(message) : undefined;
       // When response is undefined, signal the reducer to preserve streamed content as-is.
@@ -275,7 +275,7 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
       activeRunTimingRef.current = null;
       activeRunIdRef.current = null;
       activeTurnIdRef.current = null;
-      focusManager.focus(FOCUS_IDS.composer);
+      if (screenRef.current === "main") focusManager.focus(FOCUS_IDS.composer);
       cleanup?.();
 
       if (retainHistory) {

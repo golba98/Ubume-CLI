@@ -6,9 +6,8 @@ import type {
   CodexModelCapabilities,
   CodexModelCapability,
 } from "../core/models/codexModelCapabilities.js";
-
+import type { SelectionCoordinator } from "../core/models/selectionCoordinator.js";
 import { traceInputDebug } from "../core/perf/debugLog.js";
-
 import type { ProviderId } from "../core/providerLauncher/types.js";
 
 import type { ProviderRoute } from "../core/providerRuntime/types.js";
@@ -20,6 +19,7 @@ import { FOCUS_IDS } from "../ui/input/focus.js";
 import type { PermissionsPanelAction } from "../ui/panels/PermissionsPanel.js";
 
 interface UseOverlayRoutingContext {
+  selectionCoordinator: SelectionCoordinator;
   modelSelectionInFlightRef: React.RefObject<boolean>;
   setPendingRouteProviderId: React.Dispatch<React.SetStateAction<ProviderId | null>>;
   getInputDebugSnapshot: (extra?: Record<string, unknown>) => {
@@ -59,8 +59,7 @@ interface UseOverlayRoutingContext {
 
 export function useOverlayRouting(context: UseOverlayRoutingContext) {
   const {
-    modelSelectionInFlightRef,
-    setPendingRouteProviderId,
+    selectionCoordinator,
     getInputDebugSnapshot,
     screen,
     modelPickerOpenRef,
@@ -83,11 +82,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
   } = context;
 
   const openModelPicker = useCallback(() => {
-    // While a route switch is validating, keep the pending id so the picker
-    // shows the target provider instead of snapping back to the stale route.
-    if (!modelSelectionInFlightRef.current) {
-      setPendingRouteProviderId(null);
-    }
+    selectionCoordinator.navigate(pendingRouteProviderId ?? activeProviderRoute.providerId);
     traceInputDebug(
       "model_picker_open_request",
       getInputDebugSnapshot({
@@ -142,6 +137,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
     );
   }, [
     activeProviderRoute.providerId,
+    selectionCoordinator,
     appendEvent,
     busy,
     ensureProviderModels,

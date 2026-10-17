@@ -391,7 +391,7 @@ test("active Anthropic route persists without secrets", () => {
   }
 });
 
-test("setProviderActiveRoute rejects unconfigured Google routes", () => {
+test("setProviderActiveRoute saves Google preferences independently of runtime readiness", () => {
   resetAntigravityRouteValidationCacheForTests();
   const config = setProviderActiveRoute(
     {
@@ -411,9 +411,9 @@ test("setProviderActiveRoute rejects unconfigured Google routes", () => {
   );
 
   assert.deepEqual(config.activeRoute, {
-    providerId: "openai",
-    modelId: "gpt-5.5",
-    backendKind: "codex-cli-auth",
+    providerId: "google",
+    modelId: "gemini-3.5-flash",
+    backendKind: "antigravity-cli-auth",
     reasoning: "high",
   });
 });

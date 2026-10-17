@@ -13,6 +13,7 @@ import type { CodexAuthProbeResult } from "../core/codex/codexAuth.js";
 import type { ExternalSessionSummary } from "../core/externalSessions/index.js";
 import type { CodexModelCapabilities } from "../core/models/codexModelCapabilities.js";
 import { loadSeededCodexCapabilities } from "../core/models/modelCache.js";
+import { SelectionCoordinator } from "../core/models/selectionCoordinator.js";
 
 import type {
   LocalBackendId,
@@ -80,6 +81,7 @@ interface UseAppStateContext {
 }
 
 export function useAppState(context: UseAppStateContext) {
+  const [selectionCoordinator] = useState(() => new SelectionCoordinator());
   const { providerOverride, launchArgs } = context;
 
   const workspaceRoot = useMemo(() => resolveWorkspaceRoot(), []);
@@ -324,6 +326,7 @@ export function useAppState(context: UseAppStateContext) {
     null,
   );
   return {
+    selectionCoordinator,
     workspaceRoot,
     projectInstructionsLoad,
     projectInstructions,
