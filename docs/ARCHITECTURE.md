@@ -100,12 +100,12 @@ flowchart TD
 
 The intended ownership rules are:
 
-- `app/App.tsx` coordinates subsystems. It may wire hooks, state, providers, commands, and screens, but reusable domain logic should move to the appropriate folder.
+- `app/App.tsx` coordinates subsystems by composing the domain hooks under `src/app/` (`state/`, `lifecycle/`, `settings/`, `providers/`, `models/`, `run/`, `conversation/`, `input/`, `overlays/`). Reusable domain logic belongs in those folders or lower layers. See [src/app architecture](architecture/app.md).
 - `session/` owns serializable chat/timeline state, lifecycle reducers, streaming schedules, and plan flow. It must not render Ink components.
 - `ui/` owns terminal presentation and input behavior. It consumes session/config types but should not launch providers or persist workspace state.
 - `core/` owns non-UI runtime behavior: processes, providers, terminal control, workspace services, model discovery, and diagnostics.
 - `config/` owns configuration parsing, defaults, persistence, trust, and effective runtime policy.
-- `commands/` converts slash-command text into actions; `app/App.tsx` performs those actions.
+- `commands/` converts slash-command text into actions; `app/input/commandDispatch.ts` performs those actions.
 - `headless/` adapts the shared backend contracts to stdout, stderr, and process exit codes without constructing the Ink UI.
 
 ## Interactive startup and prompt flow
@@ -141,7 +141,7 @@ sequenceDiagram
 Important details:
 
 1. `src/index.tsx` wraps stdout with frame locking, configures terminal modes, installs resize and failure cleanup, and renders one `App` root.
-2. `src/app/App.tsx` resolves the current workspace, layered runtime, provider route, model metadata, permissions, and project instructions.
+2. `src/app/state/useAppState.ts` resolves the workspace, project instructions, settings and layered runtime once; `providers/useActiveProviderRoute.ts` and `models/useActiveModelMetadata.ts` derive the provider route and model metadata. Submissions flow through `input/useAppInput.ts` into `run/usePromptRun.ts`.
 3. A submission creates linked user/run events with stable `turnId` and `runId` values.
 4. Provider callbacks are sanitized and batched by the live-render scheduler before entering the session reducer.
 5. The UI derives rows from session events. It does not directly parse provider output.
@@ -207,7 +207,7 @@ Ubume conversation metadata stores the opaque Harness session id and a non-secre
 
 ## Provider usage (`/usage`)
 
-`/usage` is a local slash command: it is parsed in `commands/handler.ts`, never enters conversation history, and never reaches a model. `app/useProviderUsage.ts` resolves the active route through `core/usage/registry.ts`, which picks the adapter for the account that route really executes with and a credential-free scope key. `core/usage/usageService.ts` keeps one cache entry per scope, applies a refresh cooldown (default 30 s, `UBUME_USAGE_COOLDOWN_SECONDS`), shares one in-flight request per scope, and keeps the last good snapshot (labelled stale) when a later attempt fails. Results for a scope the user has left are cached but never rendered.
+`/usage` is a local slash command: it is parsed in `commands/handler.ts`, never enters conversation history, and never reaches a model. `app/providers/useProviderUsage.ts` resolves the active route through `core/usage/registry.ts`, which picks the adapter for the account that route really executes with and a credential-free scope key. `core/usage/usageService.ts` keeps one cache entry per scope, applies a refresh cooldown (default 30 s, `UBUME_USAGE_COOLDOWN_SECONDS`), shares one in-flight request per scope, and keeps the last good snapshot (labelled stale) when a later attempt fails. Results for a scope the user has left are cached but never rendered.
 
 | Route | Source | Reports |
 | --- | --- | --- |
@@ -325,7 +325,7 @@ Local completion explicitly flushes the Harness session journal before publishin
 ### Adding a slash command or panel
 
 1. Parse the command into a typed action in `commands/handler.ts` and expose discoverability through `ui/input/slashCommands.ts`.
-2. Perform side effects in `app/App.tsx`; keep the parser deterministic.
+2. Perform side effects in `app/input/commandDispatch.ts` (or `input/submitSteps.ts` for commands that bypass the parser); keep the parser deterministic.
 3. Put new panels under `ui/panels/` and shared screen chrome under `ui/chrome/`.
 4. Add keyboard/focus tests and small-terminal layout coverage when the screen changes row usage.
 
@@ -362,6 +362,6 @@ The browser backend reuses an ephemeral context per live Harness session, provid
 
 ### App and rendering ownership after cleanup
 
-`src/app/App.tsx` composes the hooks in `src/app/` while retaining clear-frame wiring and the first dispose/sync effects inline. Run refs have a stable owner; render-time assignments and synchronous composer value/cursor updates remain in render/input handlers. `OverlayPanels.tsx` stays un-memoized because AppShell does not compare panel closures.
+`src/app/App.tsx` composes the hooks in `src/app/` while retaining clear-frame wiring and the first dispose/sync effects inline. Hooks split out of larger ones are called at their original positions so effect order is unchanged. Run refs have a stable owner (`state/useRunRefs.ts`); render-time assignments and synchronous composer value/cursor updates remain in render/input handlers. `overlays/OverlayPanels.tsx` stays un-memoized because AppShell does not compare panel closures. [docs/architecture/app.md](architecture/app.md) documents the provider, model, run and conversation lifecycles and these invariants.
 
 Timeline measurement lives in `ui/timeline/measure/`; its facade owns the public cache reset API. Viewport calculation, item construction, row rendering, and viewport effects have separate modules. Composer input/model/keymap logic lives in `ui/chrome/composer/`. Local harness configuration, profiles, event routing, policy decisions, and messages stay within its runtime folder; process and active-run identity guards remain at each asynchronous boundary.

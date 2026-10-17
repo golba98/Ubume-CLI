@@ -33,35 +33,58 @@ Tests and shared test fixtures are colocated or under `src/test/` and are intent
 
 ### `src/app/`
 
+Start with [docs/architecture/app.md](architecture/app.md) for lifecycles and invariants.
+
 | File | Purpose |
 | --- | --- |
-| `src/app/App.tsx` | Composes app hooks, clear-frame wiring, runtime presentation, and the interactive roots. |
-| `src/app/OverlayPanels.tsx` | Renders un-memoized overlays, shared policy selection, and tool approval resolution. |
-| `src/app/commandDispatch.ts` | Dispatches parsed command actions through a typed handler table. |
-| `src/app/conversationPersistence.ts` | Shares conversation saves, recovery cleanup, and scratch-state transitions. |
-| `src/app/promptRunPrep.ts` | Prepares per-turn runtime and history, final responses, authentication text, and shell batching. |
-| `src/app/routeStatus.ts` | Derives the current route status with provider diagnostics. |
-| `src/app/useAppComposer.tsx` | Memoizes the composer element and plan entry panels while preserving callback identities. |
-| `src/app/useAppDebugTracing.ts` | Tracks startup, UI transitions, blank frames, and root measurements. |
-| `src/app/useAppInput.ts` | Validates submissions, interprets commands, imports attachments, and starts runs. |
-| `src/app/useAppState.ts` | Initializes settings, session state, registries, route state, and app refs during render. |
-| `src/app/useComposerEditing.ts` | Handles drafts, paste/image registration, and clearing the conversation. |
-| `src/app/useConversation.ts` | Owns conversation persistence, resume/import flows, autosave, and transcript replacement. |
-| `src/app/useFocusRouting.ts` | Owns focus restoration, input debug snapshots, settings persistence, and cleanup effects. |
-| `src/app/useModelCatalog.ts` | Discovers models, probes authentication, and refreshes provider availability. |
-| `src/app/useModelSelection.ts` | Validates model/reasoning selection and persists route choices. |
-| `src/app/useOverlayRouting.ts` | Opens model/settings/permission panels and routes panel actions. |
-| `src/app/usePlanFlow.ts` | Coordinates plan generation, review, approved execution, startup prompts, and queue draining. |
-| `src/app/usePromptExecution.ts` | Executes shell commands and relaunches workspaces with paired cleanup. |
-| `src/app/usePromptRun.ts` | Owns provider startup, streamed updates, checkpoints, and completion callbacks. |
-| `src/app/useProviderRoute.ts` | Checks local backends, routes provider actions, and launches setup commands. |
-| `src/app/useProviderUsage.ts` | Owns `/usage` panel state for the active route: resolves the usage adapter and scope, opens the panel, requests through the shared usage service, and drops results for a scope the user has left. |
-| `src/app/useRunLifecycle.ts` | Finalizes and cancels runs, resets the home screen, quits, and saves plans. |
-| `src/app/useRunRefs.ts` | Owns the stable shared run refs without moving render-time assignments into effects. |
-| `src/app/useRuntimeSettings.ts` | Applies layered runtime overrides and persists provider routes/defaults. |
-| `src/app/useSettings.ts` | Handles preferences and policy setters, and builds one settings save payload. |
-| `src/app/useUpdateCheck.ts` | Owns the update-check scheduler for the interactive session: runs the startup check behind the initial overlay gate, keeps checking in the background, and applies results to the existing update state without opening overlays or moving focus. Exposes the shared check used by `/update`. |
-| `src/app/useWorkbenchActions.ts` | Coordinates queue edits, interrupts, external editing, rewind, and confirmed imports. |
+| `src/app/App.tsx` | Root component: composes the app hooks in a fixed order, keeps the terminal/clear-frame wiring inline, and renders `TranscriptShell` or `AppShell` with `OverlayPanels`. See [docs/architecture/app.md](architecture/app.md). |
+| `src/app/conversation/conversationMetadata.ts` | Pure conversation transforms: route metadata, interrupted-run notes, restored prompt history, run assistant messages, rewind checkpoints. |
+| `src/app/conversation/conversationPersistence.ts` | Shared conversation save, conversation-switch completion (`finishRecovery`) and scratch-state reset/restore. |
+| `src/app/conversation/useActiveConversation.ts` | Owns the active conversation record: creation on the first prompt, autosave, final checkpoint capture, run messages. |
+| `src/app/conversation/useClearConversation.ts` | `/clear`: cancels the run, saves and detaches the conversation, and swaps in the home screen through the clear-frame boundary. |
+| `src/app/conversation/useConversation.ts` | Composes `useActiveConversation`, `useResumeFlows` and `useStartupNotices` in effect order; defines the shared conversation context type. |
+| `src/app/conversation/useResumeFlows.ts` | Every conversation switch: resume picker, saved and imported sessions, native CLI resume, workspace relaunch, startup `--resume`/`--import`. |
+| `src/app/conversation/useStartupNotices.ts` | Provider migration and project-instruction notices after startup. |
+| `src/app/input/commandDispatch.ts` | Applies parsed slash-command results (`CommandResult`) through a handler table grouped by domain. |
+| `src/app/input/submitSteps.ts` | Submission steps: direct commands, `!shell`, slash-command routing, attachment expansion, outside-workspace interception. |
+| `src/app/input/useAppComposer.tsx` | Memoizes the composer element: plan action picker, plan feedback entry, or the prompt composer. |
+| `src/app/input/useAppInput.ts` | `handleSubmit`: the ordered submission pipeline from composer text to command, shell, queue, plan or run. |
+| `src/app/input/useComposerEditing.ts` | Composer edits, pasted-content registration, clipboard images and prompt-history navigation. |
+| `src/app/input/useInterruptKeys.ts` | Ctrl+C interrupt/two-press exit, and Ctrl+Q/Ctrl+L outside the composer. |
+| `src/app/input/useWorkbenchActions.ts` | Queue actions, `/send-now`, external editor drafts, rewind, redraw, and outside-workspace import confirmation. |
+| `src/app/lifecycle/useAppDebugTracing.ts` | Debug-only render, layout and UI-state tracing. |
+| `src/app/lifecycle/useAppLifecycleEffects.ts` | Base runtime config sync, settings autosave, and unmount cleanup. |
+| `src/app/lifecycle/useFocusRouting.ts` | Routes keyboard focus per screen, preserves an open model picker's focus, and builds input debug snapshots. |
+| `src/app/lifecycle/useTerminalUiState.ts` | Publishes the UI state to the terminal controller and title lifecycle. |
+| `src/app/lifecycle/useUpdateCheck.ts` | Owns the update-check scheduler: the startup check behind the initial overlay gate, background checks, and the shared check used by `/update`. |
+| `src/app/models/catalogLogic.ts` | Pure conversion of an OpenAI catalog snapshot into Codex capabilities. |
+| `src/app/models/selectionLogic.ts` | Pure selection rules: candidate routes, reasoning checks, validation-failure classification, Google reasoning selectors. |
+| `src/app/models/useActiveModelMetadata.ts` | Capabilities and context-window metadata for the active route's model. |
+| `src/app/models/useModelCatalog.ts` | Catalog subscription, Codex model discovery, per-provider refresh, auth and startup availability probes. |
+| `src/app/models/useModelPickerModel.ts` | Everything the model picker shows for the pending or active provider. |
+| `src/app/models/useModelSelection.ts` | Mode, plan-mode and reasoning setters, and the single model activation path (validate, persist, commit or recover). |
+| `src/app/models/useOpenAiModelReconcile.ts` | Blocks prompts for an unavailable configured OpenAI model and normalizes reasoning for an available one. |
+| `src/app/overlays/OverlayPanels.tsx` | Renders the overlay for the current screen (un-memoized) with named handlers. |
+| `src/app/overlays/useOverlayRouting.ts` | Opens overlays and routes permissions-panel actions. |
+| `src/app/providers/providerActions.ts` | Pure provider-picker decisions: saved-model reuse, Local status badges, notices, setup commands. |
+| `src/app/providers/routeStatus.ts` | Builds the `/status` route report (`formatRouteStatus`). |
+| `src/app/providers/useActiveProviderRoute.ts` | Resolves the active route and provider registry; closes Local harness sessions and resets CLI readiness on route changes. |
+| `src/app/providers/useProviderRoute.ts` | Provider picker actions, Local backend probes, diagnostics, CLI launch preflight and setup. |
+| `src/app/providers/useProviderUsage.ts` | `/usage` panel state for the active route through the shared usage service. |
+| `src/app/run/promptGates.ts` | Pure pre-flight checks that decide whether a prompt may start a run. |
+| `src/app/run/promptRunPrep.ts` | Per-turn runtime config, provider history selection, final response choice, live flush timing. |
+| `src/app/run/providerRunSession.ts` | One provider run (React-free): scheduling, workspace preparation, stream handlers, completion and cleanup. |
+| `src/app/run/runFinalize.ts` | Pure response parsing and queue-pause rules for finished runs. |
+| `src/app/run/shellLineBatcher.ts` | Batches shell output lines into flush-interval updates. |
+| `src/app/run/usePlanFlow.ts` | Plan generation, review, approved execution, the startup `--prompt`, and prompt queue draining. |
+| `src/app/run/usePromptExecution.ts` | `!shell` execution with the execution lease, and workspace relaunch. |
+| `src/app/run/usePromptRun.ts` | `startPromptRun`: gates, turn bootstrap, then the provider run session. |
+| `src/app/run/useRunLifecycle.ts` | Finalizes and cancels runs, Esc handling, quit, transcript copy, plan files. |
+| `src/app/settings/useRuntimeSettings.ts` | Session runtime overrides and every `providers.json` write (`updateProviderWorkspaceConfig`, `persistActiveRoute`). |
+| `src/app/settings/useSettings.ts` | UI preference and runtime-policy setters, and the settings save payload. |
+| `src/app/settings/useThemeCommit.ts` | Commits a theme choice, saves it synchronously and shows the header notice. |
+| `src/app/state/useAppState.ts` | Startup initialization (disk reads once) and every shared state slot and ref. |
+| `src/app/state/useRunRefs.ts` | Stable refs for the active run and background work (stopping promises, submission/recovery guards). |
 
 ### `src/commands/`
 

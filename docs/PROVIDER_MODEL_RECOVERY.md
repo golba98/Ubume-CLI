@@ -6,11 +6,11 @@ The investigation used mocked unavailable models and deferred validation respons
 
 The failure involved several independent defects:
 
-1. `isUsableSavedModel` accepted every concrete saved identifier. `handleProviderAction` also attempted restoration whenever that provider was already active. Returning to a provider therefore retried its rejected preference rather than offering another model. See [useProviderRoute.ts](../src/app/useProviderRoute.ts).
-2. Failed activation cleared `pendingRouteProviderId`. After switching away from Google, returning unsuccessfully left the other provider active and removed the Google recovery target. Opening the model picker then showed the other provider. The provider picker had a `select-model` handler but no keyboard action invoking it. See [useModelSelection.ts](../src/app/useModelSelection.ts), [useOverlayRouting.ts](../src/app/useOverlayRouting.ts), and [ProviderPicker.tsx](../src/ui/panels/ProviderPicker.tsx).
-3. The two activation handlers used a shared boolean rather than ordered transitions. An older success could commit over a newer selection; stale completion could also change focus or clear another operation's busy state. Persistence callbacks captured older configuration snapshots, and runtime changes were published before a failed save could be detected. See [useRuntimeSettings.ts](../src/app/useRuntimeSettings.ts).
+1. `isUsableSavedModel` accepted every concrete saved identifier. `handleProviderAction` also attempted restoration whenever that provider was already active. Returning to a provider therefore retried its rejected preference rather than offering another model. See [providerActions.ts](../src/app/providers/providerActions.ts) (where `isUsableSavedModel` and the activation decision now live) and [useProviderRoute.ts](../src/app/providers/useProviderRoute.ts).
+2. Failed activation cleared `pendingRouteProviderId`. After switching away from Google, returning unsuccessfully left the other provider active and removed the Google recovery target. Opening the model picker then showed the other provider. The provider picker had a `select-model` handler but no keyboard action invoking it. See [useModelSelection.ts](../src/app/models/useModelSelection.ts), [useOverlayRouting.ts](../src/app/overlays/useOverlayRouting.ts), and [ProviderPicker.tsx](../src/ui/panels/ProviderPicker.tsx).
+3. The two activation handlers used a shared boolean rather than ordered transitions. An older success could commit over a newer selection; stale completion could also change focus or clear another operation's busy state. Persistence callbacks captured older configuration snapshots, and runtime changes were published before a failed save could be detected. See [useRuntimeSettings.ts](../src/app/settings/useRuntimeSettings.ts).
 4. Request errors triggered catalog refresh through broad regular expressions, without retaining scoped rejection evidence. Model failures shared the `not-configured` validation status with setup/authentication failures. Google readiness also depended on a nonempty model list. See [registry.ts](../src/core/providerRuntime/registry.ts) and [antigravity.ts](../src/core/providerRuntime/antigravity.ts).
-5. In the actual App, Enter on `/model` completed the input to `/models` instead of submitting the exact command. Request finalization could also move focus to the composer while a picker was open. See [useComposerInput.ts](../src/ui/chrome/composer/useComposerInput.ts) and [useRunLifecycle.ts](../src/app/useRunLifecycle.ts).
+5. In the actual App, Enter on `/model` completed the input to `/models` instead of submitting the exact command. Request finalization could also move focus to the composer while a picker was open. See [useComposerInput.ts](../src/ui/chrome/composer/useComposerInput.ts) and [useRunLifecycle.ts](../src/app/run/useRunLifecycle.ts).
 
 A request error alone did not universally prevent the picker from opening. The isolated adapter also successfully processed a mocked replacement model after rejecting another. The reproduction establishes restoration, navigation, command submission, and ordering defects rather than a permanent Google adapter crash.
 
@@ -66,15 +66,15 @@ Application:
 
 ```text
 src/app/App.tsx
-src/app/OverlayPanels.tsx
-src/app/useAppState.ts
-src/app/useModelCatalog.ts
-src/app/useModelSelection.ts
-src/app/useOverlayRouting.ts
-src/app/usePromptRun.ts
-src/app/useProviderRoute.ts
-src/app/useRunLifecycle.ts
-src/app/useRuntimeSettings.ts
+src/app/overlays/OverlayPanels.tsx
+src/app/state/useAppState.ts
+src/app/models/useModelCatalog.ts
+src/app/models/useModelSelection.ts
+src/app/overlays/useOverlayRouting.ts
+src/app/run/usePromptRun.ts
+src/app/providers/useProviderRoute.ts
+src/app/run/useRunLifecycle.ts
+src/app/settings/useRuntimeSettings.ts
 ```
 
 Core, session, and UI:
@@ -102,9 +102,9 @@ src/ui/panels/ProviderPicker.tsx
 Tests and fixture:
 
 ```text
-src/app/modelRecovery.test.tsx
-src/app/modelRecoveryApp.test.ts
-src/app/useRuntimeSettings.test.tsx
+src/app/models/modelRecovery.test.tsx
+src/app/models/modelRecoveryApp.test.ts
+src/app/settings/useRuntimeSettings.test.tsx
 src/core/models/modelSelection.test.ts
 src/core/models/selectionCoordinator.test.ts
 src/core/providerLauncher/registry.test.ts
