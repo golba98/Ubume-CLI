@@ -26,14 +26,17 @@ import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
 import type { buildActiveRuntimeDisplay } from "../../ui/render/runtimeDisplay.js";
 
 interface UseAppComposerContext {
+  // Plan review and revision flow
   planFlow: PlanFlowState;
-  terminalLayout: TerminalViewport;
   handlePlanAction: (action: PlanActionValue) => void;
   handleCancel: () => void;
   initialRevisionText: string;
   setInitialRevisionText: React.Dispatch<React.SetStateAction<string>>;
   handlePlanFeedbackSubmit: (value: string) => void;
   setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
+
+  // Layout, mode and runtime display
+  terminalLayout: TerminalViewport;
   composerInstanceKey: number;
   composerWidth: number;
   uiState: UIState;
@@ -46,6 +49,8 @@ interface UseAppComposerContext {
   interruptHint: InterruptHint | null;
   conversationChars: number;
   currentModelSpec: ModelSpec;
+
+  // Composer text and actions
   inputValue: string;
   cursor: number;
   handleChangeInput: (value: string, nextCursor: number) => void;
@@ -56,16 +61,22 @@ interface UseAppComposerContext {
   openWorkbench: (view: WorkbenchView) => void;
   handleExternalEditor: () => Promise<void>;
   handleSendNow: () => Promise<void>;
+
+  // Attachments, workspace and session state
   fileAttachmentRegistryRef: React.RefObject<Map<string, FileAttachment>>;
   workspaceRoot: string;
   sessionState: SessionState;
   promptQueue: PromptQueue;
+
+  // History, pickers and quit
   handleHistoryUp: () => void;
   handleHistoryDown: () => void;
   openProviderPicker: () => void;
   openModelPicker: () => void;
   cycleModeWithNotice: () => void;
   handleQuit: () => void;
+
+  // Active route and workbench version (re-render triggers)
   activeProviderRoute: ProviderRoute;
   workbenchVersion: number;
 }

@@ -13,18 +13,27 @@ import type { InterruptHint } from "../../ui/chrome/composer/composerModel.js";
 import type { StartupHeaderMode, TerminalViewport } from "../../ui/layout.js";
 
 interface UseAppDebugTracingContext {
+  // Layout and root
   terminalLayout: TerminalViewport;
   activeRootComponent: "TranscriptShell" | "AppShell";
+  composerRows: number;
+
+  // Screen and startup
   screen: Screen;
   startupHeaderMode: StartupHeaderMode;
+
+  // Transcript and UI state
   staticEvents: TimelineEvent[];
   activeEvents: TimelineEvent[];
   uiState: UIState;
+
+  // Composer and input
   inputValue: string;
   interruptHint: InterruptHint | null;
   cursor: number;
   busy: boolean;
-  composerRows: number;
+
+  // Plan and runtime display
   planFlow: PlanFlowState;
   mode: "suggest" | "auto-edit" | "full-auto";
   model: string;
@@ -53,6 +62,7 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
 
   const previousStartupTraceKeyRef = useRef<string | null>(null);
 
+  // Startup trace: fires once per distinct startup-relevant state.
   useEffect(() => {
     const nextKey = [
       terminalLayout.cols,
@@ -65,7 +75,9 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
       activeEvents.length,
       uiState.kind,
     ].join("|");
+
     if (previousStartupTraceKeyRef.current === nextKey) return;
+
     previousStartupTraceKeyRef.current = nextKey;
     renderDebug.traceEvent("startup", "state", {
       cols: terminalLayout.cols,
@@ -91,6 +103,7 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
     uiState.kind,
   ]);
 
+  // Per-render debug payloads.
   renderDebug.useRenderDebug("Root", {
     screen,
     activeRoot: activeRootComponent,
@@ -125,6 +138,8 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
     rawRows: terminalLayout.rawRows,
     composerRows,
   });
+
+  // UI-state transitions.
   const previousUiStateKindRef = useRef(uiState.kind);
   useEffect(() => {
     const previousKind = previousUiStateKindRef.current;
@@ -140,6 +155,8 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
       previousUiStateKindRef.current = uiState.kind;
     }
   }, [activeEvents.length, screen, staticEvents.length, uiState.kind]);
+
+  // Blank-frame detection: the transcript going from events to none.
   const previousEventCountRef = useRef(staticEvents.length + activeEvents.length);
   useEffect(() => {
     const previousCount = previousEventCountRef.current;
@@ -156,6 +173,8 @@ export function useAppDebugTracing(context: UseAppDebugTracingContext) {
     }
     previousEventCountRef.current = nextCount;
   }, [activeEvents.length, screen, staticEvents.length, uiState.kind]);
+
+  // Root measurement changes (composer rows, terminal size, layout epoch).
   const previousRootMeasurements = useRef<{
     composerRows: number;
     cols: number;

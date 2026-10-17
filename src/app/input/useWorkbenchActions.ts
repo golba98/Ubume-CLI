@@ -63,55 +63,70 @@ import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
 import { useInterruptKeys } from "./useInterruptKeys.js";
 
 interface UseWorkbenchActionsContext {
+  // Navigation and workbench view
   setWorkbenchView: React.Dispatch<React.SetStateAction<WorkbenchView>>;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  screen: Screen;
+  screenRef: React.RefObject<Screen>;
+
+  // Session, transcript and composer
   promptQueue: PromptQueue;
   getSessionState: () => SessionState;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  imageAttachmentRegistryRef: React.RefObject<ImageAttachmentRegistry>;
   dispatchSession: (action: SessionAction) => void;
-  saveWorkbenchRef: React.RefObject<(() => void) | null>;
+  resetComposer: () => void;
   bumpWorkbench: React.Dispatch<React.SetStateAction<number>>;
+  saveWorkbenchRef: React.RefObject<(() => void) | null>;
+
+  // Terminal control
   terminalControl: ReturnType<typeof createTerminalModeController>;
   inkInstance: InkRenderInstance | null;
   stdout: NodeJS.WriteStream;
   bumpStaticRepaintGeneration: React.Dispatch<React.SetStateAction<number>>;
+  suspendTerminal: ReturnType<typeof useApp>["suspendTerminal"];
+
+  // Run lifecycle and guards
   handleQuit: () => void;
-  activeRunIdRef: React.RefObject<number | null>;
-  setInterruptHint: React.Dispatch<React.SetStateAction<InterruptHint | null>>;
   handleCancel: () => void;
+  activeRunIdRef: React.RefObject<number | null>;
   stoppingRef: React.RefObject<Promise<void>>;
   isMountedRef: React.RefObject<boolean>;
   submissionRef: React.RefObject<boolean>;
-  pipelineGenerationRef: React.RefObject<number>;
-  resetComposer: () => void;
-  screen: Screen;
-  planFlow: PlanFlowState;
-  pastedContentRegistryRef: React.RefObject<PastedContentRegistry>;
-  fileAttachmentRegistryRef: React.RefObject<Map<string, FileAttachment>>;
-  workspaceRoot: string;
-  suspendTerminal: ReturnType<typeof useApp>["suspendTerminal"];
   recoveryRef: React.RefObject<boolean>;
-  screenRef: React.RefObject<Screen>;
+  pipelineGenerationRef: React.RefObject<number>;
   runControlRef: React.RefObject<ProviderRunControl | null>;
   cancelActiveRun: (retainHistory?: boolean) => boolean;
+  setInterruptHint: React.Dispatch<React.SetStateAction<InterruptHint | null>>;
+
+  // Plan flow
+  planFlow: PlanFlowState;
+  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
+  pendingQuitRef: React.RefObject<(() => void) | null>;
+
+  // Attachments and workspace
+  pastedContentRegistryRef: React.RefObject<PastedContentRegistry>;
+  imageAttachmentRegistryRef: React.RefObject<ImageAttachmentRegistry>;
+  fileAttachmentRegistryRef: React.RefObject<Map<string, FileAttachment>>;
+  workspaceRoot: string;
+
+  // Runs, conversation and rewind
   startPromptRun: (
     displayPrompt: string,
     providerPrompt: string,
     lifecycle?: PromptRunLifecycle,
   ) => boolean;
   activeConversationRef: React.RefObject<ConversationRecord | null>;
+  conversationStore: ConversationStore;
   restoredFileBoundaryRef: React.RefObject<FileBoundary | undefined>;
   checkpointsRef: React.RefObject<FileCheckpoint[]>;
   snapshotRef: React.RefObject<(() => WorkbenchSnapshot) | null>;
-  conversationStore: ConversationStore;
   armTranscriptReplacement: (source: string) => {
     clearGeneration: number;
     clearBoundaryArmed: boolean;
     finish: () => void;
   };
-  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
-  pendingQuitRef: React.RefObject<(() => void) | null>;
+
+  // Outside-workspace import confirmation
   pendingImport: {
     prompt: string;
     providerPrompt: string;
@@ -180,6 +195,11 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     setWorkbenchView(view);
     setScreen("workbench-panel");
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Prompt queue
+  // ---------------------------------------------------------------------------
+
   /**
    * Moves a queued prompt back into an empty composer for editing. Editing
    * uses the immutable expanded file context; image chips are re-attached so
@@ -260,6 +280,9 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     resetInkOutputForFreshFrame({ instance: inkInstance, columns: stdout.columns });
     bumpStaticRepaintGeneration((value) => value + 1);
   }, [terminalControl, inkInstance, stdout]);
+
+  // Global interrupt keys (Ctrl+C/Ctrl+Q/Ctrl+L) — shares the queue, quit and
+  // cancel handlers above.
   useInterruptKeys({
     promptQueue,
     handleQuit,
@@ -276,6 +299,10 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     screen,
     planFlow,
   });
+
+  // ---------------------------------------------------------------------------
+  // External editor
+  // ---------------------------------------------------------------------------
 
   /** Edits the draft (with attachments expanded) in $EDITOR, suspending the TUI. */
   const handleExternalEditor = useCallback(async () => {
@@ -299,6 +326,11 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
       handleRedraw();
     }
   }, [appendEvent, dispatchSession, getSessionState, handleRedraw, suspendTerminal, workspaceRoot]);
+
+  // ---------------------------------------------------------------------------
+  // /send-now
+  // ---------------------------------------------------------------------------
+
   /** Queues the composer draft (unless it is a command) with its attachments expanded. */
   const queueDraftForSendNow = useCallback(async () => {
     const draft = getSessionState().inputValue.trim();
@@ -342,28 +374,37 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     if (blocked) {
       return;
     }
+
     submissionRef.current = true;
     const generation = pipelineGenerationRef.current;
+
     try {
       await queueDraftForSendNow();
+
       if (!promptQueue.items.length) {
         return;
       }
+
+      // Providers that support steering receive the batch mid-run.
       const control = runControlRef.current;
       const batch = [...promptQueue.items];
       const steered =
         control?.steer && (await control.steer(batch.map((item) => item.submitted).join("\n\n")));
+
       if (steered) {
         for (const item of batch) {
           promptQueue.remove(item.id);
         }
       } else {
+        // Otherwise cancel the active run and restart with one merged prompt.
         promptQueue.paused = true;
         cancelActiveRun(true);
         await stoppingRef.current;
+
         if (generation !== pipelineGenerationRef.current) {
           return;
         }
+
         const merged = queuedPrompt(
           batch.map((item) => item.display).join("\n\n"),
           batch.map((item) => item.submitted).join("\n\n"),
@@ -375,6 +416,7 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
           queuedPromptIds: batch.map((item) => item.id),
           imageAttachments: merged.images,
         });
+
         if (started) {
           for (const item of batch) {
             promptQueue.remove(item.id);
@@ -396,6 +438,10 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     queueDraftForSendNow,
     startPromptRun,
   ]);
+  // ---------------------------------------------------------------------------
+  // Rewind
+  // ---------------------------------------------------------------------------
+
   /**
    * Rewinds to `checkpoint`. Depending on `recoveryMode` it restores the
    * selected file edits, branches the conversation at that turn (the original
@@ -476,6 +522,10 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     [armTranscriptReplacement, conversationStore, dispatchSession, promptQueue, workspaceRoot],
   );
 
+  // ---------------------------------------------------------------------------
+  // Outside-workspace imports
+  // ---------------------------------------------------------------------------
+
   /**
    * Copies the outside-workspace files the prompt mentions into the
    * attachments folder, rewrites the prompt to point at the copies, and runs
@@ -525,6 +575,7 @@ export function useWorkbenchActions(context: UseWorkbenchActionsContext) {
     setPendingImport(null);
     setScreen("main");
   }, [pendingImport, dispatchSession]);
+
   return {
     openWorkbench,
     handleQueueAction,

@@ -254,6 +254,8 @@ interface OverlayPanelsProps {
 export function OverlayPanels(props: OverlayPanelsProps) {
   const {
     screen,
+
+    // Workbench
     workbenchView,
     staticEvents,
     activeEvents,
@@ -264,6 +266,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     handleQueueAction,
     handleRewind,
     setScreen,
+
+    // Resume picker and session viewers
     resumeConversations,
     resumeConversation,
     loadResumeSessions,
@@ -278,6 +282,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     locateSavedWorkspace,
     externalViewerSession,
     loadExternalTranscript,
+
+    // Provider picker and setup
     providerSetup,
     providerRegistry,
     runProviderSetup,
@@ -285,11 +291,14 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     terminalLayout,
     handleProviderAction,
     providerWorkspaceConfig,
+    updateProviderWorkspaceConfig,
     localBackendStatuses,
     probeLocalBackends,
     modelPickerOpenRef,
     setPendingRouteProviderId,
     pendingRouteProviderId,
+
+    // Model picker
     modelPickerModels,
     modelPickerCurrentModel,
     modelPickerCurrentReasoning,
@@ -302,6 +311,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     appendEvent,
     setModelAndReasoningWithNotice,
     returnToChatMode,
+
+    // Mode and reasoning pickers
     mode,
     planMode,
     setPlanModeWithNotice,
@@ -311,12 +322,16 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     currentModelCapability,
     currentReasoningSourceLabel,
     setReasoningWithNotice,
+
+    // Auth panel
     provider,
     authPreference,
     authStatus,
     authStatusBusy,
     setAuthPreferenceWithNotice,
     refreshAuthStatus,
+
+    // Permissions panels
     runtimeConfig,
     resolvedRuntimeConfig,
     handlePermissionsPanelAction,
@@ -325,6 +340,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     setNetworkAccessWithNotice,
     addWritableRootWithNotice,
     removeWritableRootWithNotice,
+
+    // Theme picker and settings
     themeSelection,
     themePreviewTimerRef,
     repaintCommittedTheme,
@@ -333,6 +350,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     setThemeSelection,
     currentUserSettings,
     saveSettingsFromPanel,
+
+    // Import confirmation and tool approval
     pendingImport,
     workspaceRoot,
     activeRouteProvider,
@@ -342,6 +361,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     toolApprovalResolverRef,
     setToolApproval,
     handleCancel,
+
+    // Update prompt and usage
     updateCheckResult,
     globalPackageManager,
     handleSkipUpdateForSession,
@@ -350,7 +371,6 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     usageView,
     usageRefreshAvailableAt,
     refreshUsage,
-    updateProviderWorkspaceConfig,
   } = props;
 
   // --- Provider setup ---------------------------------------------------------

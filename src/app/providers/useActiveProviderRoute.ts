@@ -50,11 +50,16 @@ interface UseActiveProviderRouteContext
     | "deferredRouteCloseRef"
     | "stoppingRef"
   > {
+  // Launch and model
   launchArgs: LaunchArgs;
-  /** Changes whenever the selection coordinator publishes a new state. */
-  selectionVersion: number;
   model: string;
   reasoningLevel: string;
+
+  // Selection state
+  /** Changes whenever the selection coordinator publishes a new state. */
+  selectionVersion: number;
+
+  // Provider diagnostics
   providerDiagnosticsRef: React.RefObject<ProviderDiagnostics>;
   providerRouteErrorsRef: React.RefObject<Record<string, string>>;
 }

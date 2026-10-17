@@ -108,6 +108,7 @@ export interface ActiveRunCapture {
 
 /** Shared app state and services a provider run reads or updates. */
 export interface ProviderRunDeps {
+  // Run inputs
   workspaceRoot: string;
   backend: "codex-subprocess";
   projectInstructions: ProjectInstructions | null;
@@ -116,12 +117,21 @@ export interface ProviderRunDeps {
   conversationStore: ConversationStore;
   selectionCoordinator: SelectionCoordinator;
 
+  // Run identity and output capture
   activeRunIdRef: React.RefObject<number | null>;
   activeRunCaptureRef: React.RefObject<ActiveRunCapture | null>;
   rolloverResponseCharsRef: React.RefObject<number>;
+
+  // Live-render completion
   finalFlushRef: React.RefObject<{ runId: number; flush: () => void } | null>;
+
+  // Provider process control
   processStoppedRef: React.RefObject<Promise<void>>;
   runControlRef: React.RefObject<ProviderRunControl | null>;
+  stoppingRef: React.RefObject<Promise<void>>;
+  cleanupRef: React.RefObject<(() => void) | null>;
+
+  // Workspace lease and rewind checkpoints
   workspaceLeaseRef: React.RefObject<OwnershipLease | undefined>;
   restoredFileBoundaryRef: React.RefObject<FileBoundary | undefined>;
   checkpointsRef: React.RefObject<FileCheckpoint[]>;
@@ -131,15 +141,18 @@ export interface ProviderRunDeps {
     store: CheckpointStore;
   } | null>;
   pendingCaptureRef: React.RefObject<Promise<void>>;
-  saveWorkbenchRef: React.RefObject<(() => void) | null>;
+
+  // Conversation persistence
   activeConversationRef: React.RefObject<ConversationRecord | null>;
-  externalCliStatusRef: React.RefObject<ExternalCliStatus>;
-  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
-  cleanupRef: React.RefObject<(() => void) | null>;
-  stoppingRef: React.RefObject<Promise<void>>;
+  saveWorkbenchRef: React.RefObject<(() => void) | null>;
   snapshotRef: React.RefObject<(() => WorkbenchSnapshot) | null>;
   lastSaveErrorRef: React.RefObject<string | null>;
 
+  // UI and tool approval
+  externalCliStatusRef: React.RefObject<ExternalCliStatus>;
+  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
+
+  // Session and UI callbacks
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
   dispatchSession: (action: SessionAction) => void;
   finalizePromptRun: (
@@ -159,18 +172,29 @@ export interface ProviderRunDeps {
 
 /** Everything decided about this run before it starts. */
 export interface ProviderRunPlan {
+  // Identity
   runId: number;
   turnId: number;
+
+  // Route, lifecycle and timing
   route: ProviderRoute;
   lifecycle: PromptRunLifecycle;
   submitTiming: PromptRunTiming;
+
+  // Prompts
   safeDisplayPrompt: string;
   safeProviderPrompt: string;
+
+  // Runtime
   runtimeForTurn: Parameters<NonNullable<BackendProvider["run"]>>[1]["runtime"];
   fastCleanupRun: boolean;
   effectiveMode: string;
+
+  // Provider content
   conversationHistory: readonly ConversationMessage[];
   imageAttachments: readonly ProviderImageAttachment[];
+
+  // Model evidence and provider entry point
   /** Connection and selection revision used to record model evidence. */
   modelConnection: string;
   modelRevision: number;

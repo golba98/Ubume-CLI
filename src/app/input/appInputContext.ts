@@ -44,6 +44,7 @@ import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
 import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
 
 export interface UseAppInputContext {
+  // Session and run guards
   activeConversationRef: React.RefObject<ConversationRecord | null>;
   submissionRef: React.RefObject<boolean>;
   recoveryRef: React.RefObject<boolean>;
@@ -59,6 +60,8 @@ export interface UseAppInputContext {
   stoppingRef: React.RefObject<Promise<void>>;
   activeRunIdRef: React.RefObject<number | null>;
   handleShellExecute: (command: string) => Promise<void>;
+
+  // Runtime config and presentation values
   layeredRuntimeConfig: LayeredConfigResult;
   runtimeConfig: RuntimeConfig;
   resolvedRuntimeConfig: ResolvedRuntimeConfig;
@@ -71,9 +74,13 @@ export interface UseAppInputContext {
   routeStatusMessage: string;
   activeRouteProvider: ProviderConfig;
   projectInstructionsLoad: ProjectInstructionsLoadResult;
+
+  // Session commands
   handleQuit: () => void;
   handleClear: () => Promise<void>;
   openResumePicker: () => void;
+
+  // Setting setters used by slash commands (each announces its change)
   setModelWithNotice: (nextModel: AvailableModel) => Promise<void>;
   setModeWithNotice: (nextMode: AvailableMode) => void;
   setReasoningWithNotice: (nextReasoningLevel: ReasoningLevel) => void;
@@ -96,6 +103,8 @@ export interface UseAppInputContext {
   setShowBusyLoader: React.Dispatch<React.SetStateAction<boolean>>;
   repaintCommittedTheme: (themeName: string) => void;
   refreshAuthStatus: (announce: boolean) => Promise<void>;
+
+  // Panels, pickers and clipboard
   openProviderPicker: () => void;
   openModelPicker: () => void;
   openModePicker: () => void;
@@ -110,6 +119,8 @@ export interface UseAppInputContext {
   handleCopy: () => Promise<void>;
   handlePasteImage: (replaceCommand?: boolean) => Promise<void>;
   handleWorkspaceRelaunch: (targetPath: string) => void;
+
+  // Model discovery and update checks
   modelCapabilities: CodexModelCapabilities | null;
   refreshModelCapabilities: (
     forceRefresh?: boolean,
@@ -119,6 +130,8 @@ export interface UseAppInputContext {
   requestUpdateCheck: () => Promise<UpdateCheckResult>;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
   globalPackageManager: GlobalPackageManager;
+
+  // Attachment registries and workspace
   pastedContentRegistryRef: React.RefObject<PastedContentRegistry>;
   imageAttachmentRegistryRef: React.RefObject<ImageAttachmentRegistry>;
   fileAttachmentRegistryRef: React.RefObject<Map<string, FileAttachment>>;
@@ -126,6 +139,8 @@ export interface UseAppInputContext {
   uiState: UIState;
   staticEvents: TimelineEvent[];
   activeEvents: TimelineEvent[];
+
+  // Prompt runs
   startPromptRun: (
     displayPrompt: string,
     providerPrompt: string,
@@ -143,6 +158,8 @@ export interface UseAppInputContext {
       attachmentsDir: string;
     } | null>
   >;
+
+  // Plan mode
   planMode: boolean;
   mode: "suggest" | "auto-edit" | "full-auto";
   setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;

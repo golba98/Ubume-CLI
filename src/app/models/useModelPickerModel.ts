@@ -43,11 +43,16 @@ interface UseModelPickerModelContext
     | "workspaceRoot"
     | "providerModelErrors"
   > {
+  // Active route and model
   activeProviderRoute: ProviderRoute;
-  modelCapabilities: CodexModelCapabilities | null;
-  providerRegistry: ProviderConfig[];
   model: string;
   reasoningLevel: string;
+
+  // Capabilities and registry
+  modelCapabilities: CodexModelCapabilities | null;
+  providerRegistry: ProviderConfig[];
+
+  // Selection state
   /** Changes whenever the selection coordinator publishes a new state. */
   selectionVersion: number;
 }

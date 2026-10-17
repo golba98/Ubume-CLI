@@ -48,15 +48,18 @@ interface UseClearConversationContext
     | "providerWorkspaceConfig"
     | "pendingQuitRef"
   > {
+  // Conversation actions
+  cancelActiveRun: (retainHistory?: boolean) => boolean;
+  saveActiveConversation: () => void;
+  resetToHomeScreen: (seedEvents?: TimelineEvent[]) => void;
+
+  // Transcript swap and plan flow
   armTranscriptReplacement: (source: string) => {
     clearGeneration: number;
     clearBoundaryArmed: boolean;
     finish: () => void;
   };
-  cancelActiveRun: (retainHistory?: boolean) => boolean;
-  saveActiveConversation: () => void;
   setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
-  resetToHomeScreen: (seedEvents?: TimelineEvent[]) => void;
 }
 
 export function useClearConversation(context: UseClearConversationContext) {

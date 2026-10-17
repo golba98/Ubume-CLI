@@ -110,6 +110,7 @@ export function matchDirectCommand(
   if (value === "/codexa" || value.startsWith("/codexa ")) {
     return () => handleCodexaCommand(ctx, value, submitTiming);
   }
+
   if (value === "/perf") {
     return () => {
       const session = perf.getSession();
@@ -121,18 +122,21 @@ export function matchDirectCommand(
       ctx.resetComposer();
     };
   }
+
   if (WORKBENCH_COMMANDS.includes(value)) {
     return () => {
       ctx.resetComposer();
       ctx.openWorkbench(value.slice(1) as WorkbenchView);
     };
   }
+
   if (value === "/send-now") {
     return async () => {
       ctx.resetComposer();
       await ctx.handleSendNow();
     };
   }
+
   if (value.startsWith("/resume ")) {
     return () => {
       if (!ctx.busy) {
@@ -140,6 +144,7 @@ export function matchDirectCommand(
       }
     };
   }
+
   return null;
 }
 
@@ -224,11 +229,13 @@ export async function expandPromptAttachments(
       ctx.imageAttachmentRegistryRef.current,
       ctx.fileAttachmentRegistryRef.current,
     );
+
     const providerValue = await expandFileAttachments(
       expandPastedContent(value, ctx.pastedContentRegistryRef.current),
       ctx.fileAttachmentRegistryRef.current,
       ctx.workspaceRoot,
     );
+
     for (const attachment of selectImageAttachments(
       value,
       ctx.imageAttachmentRegistryRef.current,
@@ -237,9 +244,11 @@ export async function expandPromptAttachments(
         throw new Error(`Image attachment is missing: ${attachment.name}`);
       }
     }
+
     if (generation !== ctx.pipelineGenerationRef.current) {
       return null;
     }
+
     await ctx.stoppingRef.current;
     return providerValue;
   } catch (error) {

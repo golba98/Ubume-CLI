@@ -61,25 +61,34 @@ const POLICY_FIELDS: {
 };
 
 interface UseSettingsContext {
-  setAuthPreference: React.Dispatch<
-    React.SetStateAction<"chatgpt-login-goal" | "api-key-first" | "runner-managed">
-  >;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+  // Display preferences
   setWorkspaceDisplayMode: React.Dispatch<React.SetStateAction<"dir" | "name" | "simple">>;
-  setTerminalTitleMode: React.Dispatch<React.SetStateAction<"dir" | "name" | "simple">>;
   workspaceDisplayMode: "dir" | "name" | "simple";
+  setTerminalTitleMode: React.Dispatch<React.SetStateAction<"dir" | "name" | "simple">>;
   terminalTitleMode: "dir" | "name" | "simple";
   showBusyLoader: boolean;
   setShowBusyLoader: React.Dispatch<React.SetStateAction<boolean>>;
+
+  // Auth preference
+  setAuthPreference: React.Dispatch<
+    React.SetStateAction<"chatgpt-login-goal" | "api-key-first" | "runner-managed">
+  >;
+
+  // Navigation
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
   returnFromUpdateOverlay: () => void;
+
+  // Runtime policy and config
   updateRuntimePolicy: (
     updater: (current: RuntimeConfig["policy"]) => RuntimeConfig["policy"],
   ) => void;
-  workspaceRoot: string;
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
+  workspaceRoot: string;
   baseLayeredConfig: LayeredConfigResult;
   reloadBaseLayeredConfig: () => LayeredConfigResult;
+
+  // Feedback
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
 }
 
 export function useSettings(context: UseSettingsContext) {

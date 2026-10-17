@@ -43,6 +43,7 @@ import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
 import type { ActiveRunCapture } from "../run/providerRunSession.js";
 
 export interface UseConversationContext {
+  // Transcript swap and the active conversation record
   armTranscriptReplacement: (source: string) => {
     clearGeneration: number;
     clearBoundaryArmed: boolean;
@@ -56,6 +57,8 @@ export interface UseConversationContext {
   lastSaveErrorRef: React.RefObject<string | null>;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
   saveWorkbenchRef: React.RefObject<(() => void) | null>;
+
+  // Composer, workbench and run guards
   inputValue: string;
   cursor: number;
   workbenchVersion: number;
@@ -63,6 +66,16 @@ export interface UseConversationContext {
   busy: boolean;
   stoppingRef: React.RefObject<Promise<void>>;
   workspaceLeaseRef: React.RefObject<OwnershipLease | undefined>;
+  submissionRef: React.RefObject<boolean>;
+  recoveryRef: React.RefObject<boolean>;
+  pipelineGenerationRef: React.RefObject<number>;
+
+  // Active-run bookkeeping (checkpoints, captures, lifecycle, control)
+  activeRunIdRef: React.RefObject<number | null>;
+  activeTurnIdRef: React.RefObject<number | null>;
+  activeRunLifecycleRef: React.RefObject<PromptRunLifecycle | null>;
+  activeRunTimingRef: React.RefObject<(PromptRunTiming & { runId: number; turnId: number }) | null>;
+  runControlRef: React.RefObject<ProviderRunControl | null>;
   captureFinalRef: React.RefObject<((runId: number) => void) | null>;
   activeCheckpointRef: React.RefObject<{
     runId: number;
@@ -73,55 +86,61 @@ export interface UseConversationContext {
   pendingCaptureRef: React.RefObject<Promise<void>>;
   deferredRouteCloseRef: React.RefObject<string | undefined>;
   activeRunCaptureRef: React.RefObject<ActiveRunCapture | null>;
-  setResumeConversations: React.Dispatch<React.SetStateAction<ConversationListEntry[]>>;
-  catalogListsRef: React.RefObject<Map<ExternalListScope, Promise<SessionCatalogResult>>>;
-  resumePickerPositionRef: React.RefObject<ResumePickerPosition | undefined>;
-  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
-  workspaceRoot: string;
-  activeRunIdRef: React.RefObject<number | null>;
-  submissionRef: React.RefObject<boolean>;
-  recoveryRef: React.RefObject<boolean>;
-  launchContext: LaunchContext;
-  exit: (errorOrResult?: Error | unknown) => void;
-  setExternalViewerSession: React.Dispatch<React.SetStateAction<ExternalSessionSummary | null>>;
-  externalViewerSession: ExternalSessionSummary | null;
-  setSavedViewerSession: React.Dispatch<React.SetStateAction<SessionSummary | null>>;
-  busyRef: React.RefObject<boolean>;
-  providerWorkspaceConfig: ProviderWorkspaceConfig;
-  isMountedRef: React.RefObject<boolean>;
-  externalCliLaunchHooks: {
-    stdin: NodeJS.ReadStream;
-    beforeLaunch: () => void;
-    afterLaunch: () => void;
-  };
-  setConversationChars: React.Dispatch<React.SetStateAction<number>>;
-  pipelineGenerationRef: React.RefObject<number>;
-  runControlRef: React.RefObject<ProviderRunControl | null>;
-  activeRunLifecycleRef: React.RefObject<PromptRunLifecycle | null>;
-  activeRunTimingRef: React.RefObject<(PromptRunTiming & { runId: number; turnId: number }) | null>;
-  activeTurnIdRef: React.RefObject<number | null>;
+
+  // Tool approval
   toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
+
+  // Attachment and checkpoint registries
   pastedContentRegistryRef: React.RefObject<PastedContentRegistry>;
   imageAttachmentRegistryRef: React.RefObject<ImageAttachmentRegistry>;
   fileAttachmentRegistryRef: React.RefObject<Map<string, FileAttachment>>;
   checkpointsRef: React.RefObject<FileCheckpoint[]>;
   restoredFileBoundaryRef: React.RefObject<FileBoundary | undefined>;
   promptQueue: PromptQueue;
-  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
+
+  // Session dispatch and plan flow
   dispatchSession: (action: SessionAction) => void;
+  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
   bumpWorkbench: React.Dispatch<React.SetStateAction<number>>;
-  providerOverride: BackendProvider | undefined;
-  routeChoiceRequiredRef: React.RefObject<string | null>;
-  setConversationRouteOverride: React.Dispatch<React.SetStateAction<ProviderRoute | null>>;
-  intendedFocusTargetRef: React.RefObject<string>;
-  focusManager: ReturnType<typeof useFocusManager>;
-  pendingQuitRef: React.RefObject<(() => void) | null>;
-  providerRegistry: ProviderConfig[];
+
+  // Resume picker, viewers and conversation switches
+  setResumeConversations: React.Dispatch<React.SetStateAction<ConversationListEntry[]>>;
+  catalogListsRef: React.RefObject<Map<ExternalListScope, Promise<SessionCatalogResult>>>;
+  resumePickerPositionRef: React.RefObject<ResumePickerPosition | undefined>;
+  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  workspaceRoot: string;
+  launchContext: LaunchContext;
+  exit: (errorOrResult?: Error | unknown) => void;
+  setExternalViewerSession: React.Dispatch<React.SetStateAction<ExternalSessionSummary | null>>;
+  externalViewerSession: ExternalSessionSummary | null;
+  setSavedViewerSession: React.Dispatch<React.SetStateAction<SessionSummary | null>>;
   savedViewerSession: SessionSummary | null;
   startupResumeHandledRef: React.RefObject<boolean>;
   launchArgs: LaunchArgs;
-  providerMigrationNoticeShownRef: React.RefObject<boolean>;
+
+  // Provider config and route override
+  providerWorkspaceConfig: ProviderWorkspaceConfig;
+  providerOverride: BackendProvider | undefined;
+  providerRegistry: ProviderConfig[];
+  routeChoiceRequiredRef: React.RefObject<string | null>;
+  setConversationRouteOverride: React.Dispatch<React.SetStateAction<ProviderRoute | null>>;
+
+  // Focus routing and lifecycle
+  busyRef: React.RefObject<boolean>;
+  isMountedRef: React.RefObject<boolean>;
+  intendedFocusTargetRef: React.RefObject<string>;
+  focusManager: ReturnType<typeof useFocusManager>;
+  pendingQuitRef: React.RefObject<(() => void) | null>;
+  externalCliLaunchHooks: {
+    stdin: NodeJS.ReadStream;
+    beforeLaunch: () => void;
+    afterLaunch: () => void;
+  };
+
+  // Usage totals and startup notices
+  setConversationChars: React.Dispatch<React.SetStateAction<number>>;
   appendStaticEvent: (event: TimelineEvent) => void;
   projectInstructionsLoad: ProjectInstructionsLoadResult;
+  providerMigrationNoticeShownRef: React.RefObject<boolean>;
 }

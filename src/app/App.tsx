@@ -64,6 +64,7 @@ import { createEventId } from "../session/eventIds.js";
 import { createInitialPlanFlowState, type PlanFlowState } from "../session/planFlow.js";
 import type { Screen, TimelineEvent } from "../session/types.js";
 import { isBusy as isUiBusy } from "../session/types.js";
+import type { WorkbenchSnapshot } from "../session/workbench.js";
 import { AppShell } from "../ui/chrome/AppShell.js";
 import { measureBottomComposerRows } from "../ui/chrome/composer/composerModel.js";
 import { FOCUS_IDS } from "../ui/input/focus.js";
@@ -238,7 +239,11 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   );
   const [verboseMode, setVerboseMode] = useState(false);
   const [planFlow, setPlanFlow] = useState<PlanFlowState>(createInitialPlanFlowState);
-  snapshotRef.current = () => {
+
+  // The workbench snapshot saved with the active conversation. Defined as a
+  // named builder, then assigned during render (never in an effect) so save
+  // paths always serialize the state of the render being committed.
+  const buildWorkbenchSnapshot = (): WorkbenchSnapshot => {
     const state = getSessionState();
     return {
       version: 1,
@@ -256,6 +261,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       restoredFileBoundary: restoredFileBoundaryRef.current,
     };
   };
+  snapshotRef.current = buildWorkbenchSnapshot;
+
   const [initialRevisionText, setInitialRevisionText] = useState("");
   const [updateCheckResult, setUpdateCheckResult] = useState<UpdateCheckResult | null>(
     initialUpdateCheckResult.current,
@@ -788,6 +795,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     setPlanModeWithNotice,
     setModelAndReasoningWithNotice,
   } = modelSelection;
+
   const settings = useSettings({
     ...appState,
     ...runtimeSettings,
@@ -804,6 +812,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     addWritableRootWithNotice,
     removeWritableRootWithNotice,
   } = settings;
+
   const { probeLocalBackends, openProviderPicker, handleProviderAction, runProviderSetup } =
     useProviderRoute({
       ...appState,
@@ -827,6 +836,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       externalCliLaunchHooks,
       updateProviderWorkspaceConfig: runtimeSettings.updateProviderWorkspaceConfig,
     });
+
   const overlayRouting = useOverlayRouting({
     ...appState,
     ...settings,
@@ -845,6 +855,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     runtimeConfig,
   });
   const { handlePermissionsPanelAction } = overlayRouting;
+
   const runLifecycle = useRunLifecycle({
     ...appState,
     ...conversation,
@@ -860,6 +871,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     staticEvents,
   });
   const { handleCancel } = runLifecycle;
+
   const {
     handleChangeInput,
     handleRegisterPaste,
@@ -874,6 +886,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     cursorRef,
     appendEvent,
   });
+
   const { handleClear } = useClearConversation({
     ...appState,
     ...conversation,
@@ -881,6 +894,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     armTranscriptReplacement,
     setPlanFlow,
   });
+
   const promptExecution = usePromptExecution({
     ...appState,
     allowedWritableRoots,
@@ -889,6 +903,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     busy,
     exit,
   });
+
   const { startPromptRun } = usePromptRun({
     ...appState,
     ...conversation,
@@ -904,6 +919,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     externalCliStatusRef,
     refreshAuthStatus,
   });
+
   const workbenchActions = useWorkbenchActions({
     armTranscriptReplacement,
     ...appState,
@@ -920,6 +936,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   });
   const { handleQueueAction, handleRewind, handleImportConfirm, handleImportCancel } =
     workbenchActions;
+
   const { runPlanGeneration, handlePlanAction, handlePlanFeedbackSubmit } = usePlanFlow({
     ...runLifecycle,
     ...runtimeSettings,
@@ -936,6 +953,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     mode,
     uiState,
   });
+
   const providerUsage = useProviderUsage({
     activeProviderRoute,
     providerWorkspaceConfig,
@@ -943,6 +961,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     activeContextMetadata,
     setScreen,
   });
+
   const { handleSubmit } = useAppInput({
     ...appState,
     ...runLifecycle,

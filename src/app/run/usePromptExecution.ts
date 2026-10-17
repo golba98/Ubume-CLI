@@ -85,21 +85,28 @@ async function acquireExecutionLease(workspaceRoot: string): Promise<OwnershipLe
 }
 
 interface UsePromptExecutionContext {
+  // Workspace and guard
   workspaceRoot: string;
   allowedWritableRoots: string[];
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  pipelineGenerationRef: React.RefObject<number>;
+
+  // Active-run identity and lifecycle
   activeRunIdRef: React.RefObject<number | null>;
-  recoveryRef: React.RefObject<boolean>;
-  dispatchSession: (action: SessionAction) => void;
+  activeTurnIdRef: React.RefObject<number | null>;
   activeRunLifecycleRef: React.RefObject<PromptRunLifecycle | null>;
   activeRunTimingRef: React.RefObject<(PromptRunTiming & { runId: number; turnId: number }) | null>;
-  activeTurnIdRef: React.RefObject<number | null>;
   processStoppedRef: React.RefObject<Promise<void>>;
   stoppingRef: React.RefObject<Promise<void>>;
   cleanupRef: React.RefObject<(() => void) | null>;
+  pipelineGenerationRef: React.RefObject<number>;
+  recoveryRef: React.RefObject<boolean>;
+
+  // Session dispatch and UI
+  dispatchSession: (action: SessionAction) => void;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
   focusManager: ReturnType<typeof useFocusManager>;
   busy: boolean;
+
+  // Launch and exit
   launchContext: LaunchContext;
   exit: (errorOrResult?: Error | unknown) => void;
 }
@@ -291,7 +298,7 @@ export function usePromptExecution(context: UsePromptExecutionContext) {
         appendEvent("error", "Workspace relaunch failed", message);
       }
     },
-    [appendEvent, appendEvent, busy, exit, launchContext],
+    [appendEvent, busy, exit, launchContext],
   );
 
   return { handleShellExecute, handleWorkspaceRelaunch };

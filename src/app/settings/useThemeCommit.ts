@@ -14,6 +14,7 @@ import { buildSettingsPayload } from "./useSettings.js";
 const THEME_NOTICE_MS = 1800;
 
 interface UseThemeCommitContext {
+  // Persisted UI preferences
   initialSettings: React.RefObject<ReturnType<typeof loadSettings>>;
   workspaceDisplayMode: "dir" | "name" | "simple";
   terminalTitleMode: "dir" | "name" | "simple";
@@ -21,6 +22,8 @@ interface UseThemeCommitContext {
   customTheme: Partial<Theme> | undefined;
   authPreference: "chatgpt-login-goal" | "api-key-first" | "runner-managed";
   headerConfig: HeaderConfig;
+
+  // Theme commit actions
   setThemeSelection: React.Dispatch<React.SetStateAction<ThemeSelectionState>>;
   setThemeNotice: React.Dispatch<React.SetStateAction<string | null>>;
   themeNoticeTimerRef: React.RefObject<ReturnType<typeof setTimeout> | null>;

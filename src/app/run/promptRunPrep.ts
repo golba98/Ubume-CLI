@@ -17,7 +17,10 @@ import {
 import type { ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
 import type { ModelContextMetadata } from "../../core/providerRuntime/contextMetadata.js";
 import type { ProviderImageAttachment, ProviderRoute } from "../../core/providerRuntime/types.js";
-import type { ConversationRecord } from "../../core/workspace/conversationStore.js";
+import type {
+  ConversationMessage,
+  ConversationRecord,
+} from "../../core/workspace/conversationStore.js";
 import {
   selectConversationContext,
   toProviderConversationHistory,
@@ -30,18 +33,25 @@ import type { PromptRunTiming } from "../../session/eventIds.js";
  * and Codexa replays each set the fields they need.
  */
 export interface PromptRunLifecycle {
-  historyOverride?: readonly import("../../core/workspace/conversationStore.js").ConversationMessage[];
+  // History and attachments
+  historyOverride?: readonly ConversationMessage[];
+  imageAttachments?: readonly ProviderImageAttachment[];
+
+  // Run behavior
   parseActionRequired?: boolean;
   disableModeAutoUpgrade?: boolean;
   runtimeOverride?: PartialRuntimeConfig;
   responsePresentation?: "assistant" | "plan";
   approvedPlan?: string;
+  runIntent?: "normal" | "plan" | "approved-execution";
+
+  // Submission handling
   submitTiming?: PromptRunTiming;
   commitPrompt?: boolean;
   preserveInput?: boolean;
   queuedPromptIds?: readonly string[];
-  runIntent?: "normal" | "plan" | "approved-execution";
-  imageAttachments?: readonly ProviderImageAttachment[];
+
+  // Completion callbacks
   onCompleted?: (result: { response: string; turnId: number; runId: number }) => void;
   onFailed?: (result: { message: string; turnId: number; runId: number }) => void;
   onCanceled?: (result: { turnId: number; runId: number }) => void;
@@ -111,6 +121,7 @@ export function preparePromptRun(
 ) {
   const requestedRuntime = mergeRuntimeConfig(runtimeConfig, lifecycle.runtimeOverride ?? {});
   const requestedMode = requestedRuntime.mode;
+
   const executionModeDecision =
     activeProviderRoute.providerId === "codexa-native"
       ? { mode: "suggest" as const, autoUpgraded: false }
@@ -118,6 +129,7 @@ export function preparePromptRun(
         ? { mode: requestedMode, autoUpgraded: false }
         : resolveExecutionMode(requestedMode, safeProviderPrompt);
   const effectiveMode = executionModeDecision.mode;
+
   const runtimeConfigForTurn = {
     ...requestedRuntime,
     mode: effectiveMode,
@@ -128,11 +140,13 @@ export function preparePromptRun(
       : {}),
   };
   let runtimeForTurn = resolveRuntimeConfig(runtimeConfigForTurn);
+
   const fastCleanupRun =
     activeProviderRoute.providerId !== "codexa-native" &&
     isClearlySafeGeneratedCleanupRequest(safeProviderPrompt) &&
     effectiveMode !== "suggest" &&
     runtimeForTurn.policy.sandboxMode !== "read-only";
+
   if (fastCleanupRun && ["medium", "high", "xhigh"].includes(runtimeForTurn.reasoningLevel)) {
     runtimeForTurn = resolveRuntimeConfig({
       ...runtimeConfigForTurn,

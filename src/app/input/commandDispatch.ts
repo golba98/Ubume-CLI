@@ -62,16 +62,22 @@ type CommandAction = CommandResult["action"];
 type CommandHandler = () => void | Promise<void>;
 
 interface CommandDispatchContext {
+  // The parsed command this dispatch applies.
   commandResult: CommandResult;
+
+  // Session commands
   handleQuit: () => void;
   handleClear: () => Promise<void>;
   openResumePicker: () => void;
+
+  // Model, mode and reasoning
   setModelWithNotice: (nextModel: AvailableModel) => Promise<void>;
   setModeWithNotice: (nextMode: AvailableMode) => void;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
   setReasoningWithNotice: (nextReasoningLevel: ReasoningLevel) => void;
   setPlanModeWithNotice: (nextEnabled: boolean) => void;
-  setProjectTrustWithNotice: (trusted: boolean) => void;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+
+  // Runtime policy
   setApprovalPolicyWithNotice: (nextValue: RuntimeApprovalPolicy) => void;
   setSandboxModeWithNotice: (nextValue: RuntimeSandboxMode) => void;
   setNetworkAccessWithNotice: (nextValue: RuntimeNetworkAccess) => void;
@@ -80,15 +86,22 @@ interface CommandDispatchContext {
   clearWritableRootsWithNotice: () => void;
   setServiceTierWithNotice: (nextValue: RuntimeServiceTier) => void;
   setPersonalityWithNotice: (nextValue: RuntimePersonality) => void;
+
+  // Config, trust and auth
+  setProjectTrustWithNotice: (trusted: boolean) => void;
   setAuthPreferenceWithNotice: (nextPreference: AuthPreference) => void;
+  refreshAuthStatus: (announce: boolean) => Promise<void>;
   providerDiagnosticsRef: React.RefObject<
     Record<string, Record<string, string | number | boolean | null>>
   >;
+
+  // UI settings
   setWorkspaceDisplayModeWithNotice: (nextMode: WorkspaceDisplayMode) => void;
   setTerminalTitleModeWithNotice: (nextMode: TerminalTitleMode) => void;
   setShowBusyLoader: React.Dispatch<React.SetStateAction<boolean>>;
   repaintCommittedTheme: (themeName: string) => void;
-  refreshAuthStatus: (announce: boolean) => Promise<void>;
+
+  // Panels, pickers and debug
   openProviderPicker: () => void;
   openModelPicker: () => void;
   openModePicker: () => void;
@@ -100,9 +113,13 @@ interface CommandDispatchContext {
   openUsagePanel: () => void;
   setVerboseMode: React.Dispatch<React.SetStateAction<boolean>>;
   verboseMode: boolean;
+
+  // Clipboard and workspace
   handleCopy: () => Promise<void>;
   handlePasteImage: (replaceCommand?: boolean) => Promise<void>;
   handleWorkspaceRelaunch: (targetPath: string) => void;
+
+  // Model discovery and update checks
   modelCapabilities: CodexModelCapabilities | null;
   refreshModelCapabilities: (
     forceRefresh?: boolean,
@@ -110,6 +127,8 @@ interface CommandDispatchContext {
   ) => Promise<CodexModelCapabilities>;
   updateCheckResult: UpdateCheckResult | null;
   requestUpdateCheck: () => Promise<UpdateCheckResult>;
+
+  // Screen and package manager
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
   globalPackageManager: GlobalPackageManager;
 }

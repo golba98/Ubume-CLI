@@ -63,6 +63,7 @@ const ACTIVE_SAVE_OPTIONS = {
 
 export function useActiveConversation(context: ActiveConversationContext) {
   const {
+    // Transcript swap and the active conversation record
     activeConversationRef,
     snapshotRef,
     preserveSavedRouteRef,
@@ -71,6 +72,8 @@ export function useActiveConversation(context: ActiveConversationContext) {
     lastSaveErrorRef,
     appendEvent,
     saveWorkbenchRef,
+
+    // Composer, workbench and run guards
     inputValue,
     cursor,
     workbenchVersion,
@@ -78,6 +81,8 @@ export function useActiveConversation(context: ActiveConversationContext) {
     busy,
     stoppingRef,
     workspaceLeaseRef,
+
+    // Active-run bookkeeping (checkpoints, captures, lifecycle, control)
     captureFinalRef,
     activeCheckpointRef,
     processStoppedRef,

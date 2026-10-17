@@ -29,14 +29,17 @@ import { FOCUS_IDS } from "../../ui/input/focus.js";
 import type { PermissionsPanelAction } from "../../ui/panels/PermissionsPanel.js";
 
 interface UseOverlayRoutingContext {
+  // Selection and navigation
   selectionCoordinator: SelectionCoordinator;
-  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
-  screen: Screen;
   modelPickerOpenRef: React.RefObject<boolean>;
   intendedInputModeRef: React.RefObject<"chat/input" | "model-picker">;
   intendedFocusTargetRef: React.RefObject<string>;
   focusManager: ReturnType<typeof useFocusManager>;
   pendingRouteProviderId: ProviderId | null;
+  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  screen: Screen;
+
+  // Model discovery and capabilities
   activeProviderRoute: ProviderRoute;
   modelCapabilities: CodexModelCapabilities | null;
   refreshModelCapabilities: (
@@ -44,14 +47,18 @@ interface UseOverlayRoutingContext {
     announce?: boolean,
   ) => Promise<CodexModelCapabilities>;
   ensureProviderModels: (providerId: ProviderId, forceRefresh?: boolean) => Promise<unknown>;
-  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  busy: boolean;
   currentModelCapability: CodexModelCapability | null;
   modelCapabilitiesBusy: boolean;
   model: string;
+
+  // UI feedback and policy
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+  busy: boolean;
   runtimeConfig: RuntimeConfig;
   clearWritableRootsWithNotice: () => void;
+
+  // Debug
+  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export function useOverlayRouting(context: UseOverlayRoutingContext) {
