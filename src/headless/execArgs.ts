@@ -1,82 +1,106 @@
+/**
+ * Argument parser for `ubume exec` and `ubume --headless-benchmark`.
+ *
+ * The parser is pure: it never reads stdin, the environment or the filesystem, and
+ * reports problems as values rather than exceptions, so the dispatcher can turn them
+ * into a `USAGE` error (exit 2).
+ *
+ * Options may appear before or after the prompt. Value options accept `--flag value`
+ * and, except for `-m`, `--flag=value`. The `=` form is the documented escape hatch for
+ * values that start with `-`. Options that also mean something to the provider CLI
+ * (`--profile`, `--model`, `--reasoning`, `-c/--config`, `--skip-git-repo-check`) are
+ * recorded in `launchArgs.passthroughArgs` exactly as the caller spelled them.
+ */
 import type { LaunchArgs } from "../config/launchArgs.js";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface HeadlessExecArgs {
+/** A parsed `ubume exec` invocation. */
+export interface HeadlessExecArgs {
   help: boolean;
   json: boolean;
+  /** Read the prompt from stdin (exclusive with a positional prompt and `--prompt`). */
   stdin: boolean;
   noSave: boolean;
   resumeId?: string;
   providerId?: string;
   cwd?: string;
+  /** `--file` attachments, in order. */
   files: string[];
+  /** `--benchmark-diagnostics`, which implies `timing`. */
   benchmarkDiagnostics: boolean;
   timing: boolean;
   promptPolicy: "raw" | "wrapped";
+  /** The prompt text, or `""` for `--stdin` and `--help`. */
   prompt: string;
   launchArgs: LaunchArgs;
 }
 
-type HeadlessExecArgsParseResult =
+export type HeadlessExecArgsParseResult =
   | { ok: true; value: HeadlessExecArgs }
   | { ok: false; error: string };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+/** Value options that also accept the `--flag=value` spelling. */
+const INLINE_VALUE_FLAGS = new Set([
+  "--prompt",
+  "--profile",
+  "--model",
+  "--reasoning",
+  "-c",
+  "--config",
+  "--resume",
+  "--provider",
+  "--cwd",
+  "--file",
+  "--ubume-prompt-policy",
+  // Pre-rename spelling, still accepted.
+  "--codexa-prompt-policy",
+]);
 
 function normalizeNonEmpty(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
 
+/** A trimmed `key=value` pair with a non-empty key and value, else null. */
 function parseConfigFlagValue(raw: string | undefined): string | null {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return null;
-  }
+  const trimmed = normalizeNonEmpty(raw);
+  if (!trimmed) return null;
 
   const separatorIndex = trimmed.indexOf("=");
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
-    return null;
-  }
-
+  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) return null;
   return trimmed;
 }
 
-function parseModelFlagValue(raw: string | undefined): string | null {
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : null;
+/**
+ * Splits `--flag=value` for flags that accept it. Any other argument is returned whole
+ * as the flag, so an unknown spelling such as `--json=1` is reported verbatim.
+ */
+function splitOption(arg: string): { flag: string; inlineValue?: string } {
+  const separatorIndex = arg.indexOf("=");
+  if (separatorIndex < 0) return { flag: arg };
+
+  const flag = arg.slice(0, separatorIndex);
+  if (!INLINE_VALUE_FLAGS.has(flag)) return { flag: arg };
+  return { flag, inlineValue: arg.slice(separatorIndex + 1) };
 }
 
-function quoteTomlString(value: string): string {
-  return JSON.stringify(value);
-}
+const fail = (error: string): HeadlessExecArgsParseResult => ({ ok: false, error });
 
-function buildLaunchArgs(params: {
-  prompt: string | null;
-  profile: string | null;
-  configOverrides: string[];
-  passthroughArgs: string[];
-  modelOverride: string | null;
-}): LaunchArgs {
-  return {
-    help: false,
-    version: false,
-    initialPrompt: params.prompt,
-    profile: params.profile,
-    configOverrides: params.configOverrides,
-    passthroughArgs: params.passthroughArgs,
-    modelOverride: params.modelOverride,
-    noClear: false,
-  };
-}
-
-// ─── Parser ──────────────────────────────────────────────────────────────────
-
+/**
+ * Parses the arguments that follow `exec` (or `--headless-benchmark`).
+ *
+ * Validation, in order: unknown options and missing option values; a positional
+ * prompt combined with `--prompt`; `--stdin` combined with another prompt source;
+ * `--no-save` combined with `--resume`; and finally a missing prompt (skipped when
+ * `--help` or `--stdin` is present).
+ *
+ * @param argv - Arguments after the command name.
+ * @returns The parsed arguments, or the first usage error encountered.
+ */
 export function parseHeadlessExecArgs(argv: readonly string[]): HeadlessExecArgsParseResult {
   const configOverrides: string[] = [];
   const passthroughArgs: string[] = [];
   const positionalPromptParts: string[] = [];
+  const files: string[] = [];
   let explicitPrompt: string | null = null;
   let profile: string | null = null;
   let modelOverride: string | null = null;
@@ -87,221 +111,132 @@ export function parseHeadlessExecArgs(argv: readonly string[]): HeadlessExecArgs
   let resumeId: string | undefined;
   let providerId: string | undefined;
   let cwd: string | undefined;
-  const files: string[] = [];
   let benchmarkDiagnostics = false;
   let timing = false;
   let promptPolicy: "raw" | "wrapped" = "raw";
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (!arg) {
-      continue;
-    }
-    if (
-      ["--prompt", "--profile", "--model", "-m", "--reasoning"].includes(arg) &&
-      (!argv[index + 1]?.trim() || argv[index + 1]!.startsWith("-"))
-    ) {
-      return {
-        ok: false,
-        error: `Missing value for ${arg}. Use ${arg}=VALUE for an option-like value.`,
-      };
-    }
-
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    if (arg === "--stdin") {
-      stdin = true;
-      continue;
-    }
-    if (arg === "--no-save") {
-      noSave = true;
-      continue;
-    }
-    const name = arg.split("=")[0];
-    if (["--resume", "--provider", "--cwd", "--file"].includes(name)) {
-      const value = normalizeNonEmpty(
-        arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++index],
-      );
-      if (!value || (!arg.includes("=") && value.startsWith("--")))
-        return { ok: false, error: `Missing value for ${name}.` };
-      if (name === "--resume") resumeId = value;
-      else if (name === "--provider") providerId = value;
-      else if (name === "--cwd") cwd = value;
-      else files.push(value);
-      continue;
-    }
-
-    if (arg === "--help" || arg === "-h") {
-      help = true;
-      continue;
-    }
-
-    if (arg === "--benchmark-diagnostics") {
-      benchmarkDiagnostics = true;
-      timing = true;
-      continue;
-    }
-
-    if (arg === "--timing") {
-      timing = true;
-      continue;
-    }
-
-    if (arg === "--skip-git-repo-check") {
-      passthroughArgs.push(arg);
-      continue;
-    }
-
-    // --codexa-prompt-policy is the pre-rename spelling; keep accepting it.
-    if (arg === "--ubume-prompt-policy" || arg === "--codexa-prompt-policy") {
-      const value = normalizeNonEmpty(argv[index + 1]);
-      if (value !== "raw" && value !== "wrapped") {
-        return {
-          ok: false,
-          error: "Missing or invalid value for --ubume-prompt-policy. Use raw or wrapped.",
-        };
-      }
-      promptPolicy = value;
-      index += 1;
-      continue;
-    }
-
-    if (arg.startsWith("--ubume-prompt-policy=") || arg.startsWith("--codexa-prompt-policy=")) {
-      const value = normalizeNonEmpty(arg.slice(arg.indexOf("=") + 1));
-      if (value !== "raw" && value !== "wrapped") {
-        return { ok: false, error: "Invalid value for --ubume-prompt-policy. Use raw or wrapped." };
-      }
-      promptPolicy = value;
-      continue;
-    }
+    if (!arg) continue;
 
     if (arg === "--") {
       positionalPromptParts.push(...argv.slice(index + 1));
       break;
     }
-
-    if (arg === "--prompt") {
-      const value = normalizeNonEmpty(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: "Missing value for --prompt." };
-      }
-      explicitPrompt = value;
-      index += 1;
+    if (!arg.startsWith("-")) {
+      positionalPromptParts.push(arg);
       continue;
     }
 
-    if (arg.startsWith("--prompt=")) {
-      const value = normalizeNonEmpty(arg.slice("--prompt=".length));
-      if (!value) {
-        return { ok: false, error: "Missing value for --prompt." };
+    const { flag, inlineValue } = splitOption(arg);
+    const inline = inlineValue !== undefined;
+    /** Records a provider-visible option in the same spelling the caller used. */
+    const passThrough = (value: string) => {
+      if (inline) passthroughArgs.push(`${flag}=${value}`);
+      else passthroughArgs.push(flag, value);
+    };
+
+    switch (flag) {
+      case "--json":
+        json = true;
+        break;
+      case "--stdin":
+        stdin = true;
+        break;
+      case "--no-save":
+        noSave = true;
+        break;
+      case "--help":
+      case "-h":
+        help = true;
+        break;
+      case "--benchmark-diagnostics":
+        benchmarkDiagnostics = true;
+        timing = true;
+        break;
+      case "--timing":
+        timing = true;
+        break;
+      case "--skip-git-repo-check":
+        passthroughArgs.push(arg);
+        break;
+
+      case "--prompt":
+      case "--profile":
+      case "--model":
+      case "-m":
+      case "--reasoning": {
+        let value: string | null;
+        if (inline) {
+          value = normalizeNonEmpty(inlineValue);
+          if (!value) return fail(`Missing value for ${flag}.`);
+        } else {
+          // Never consume a following option as the value; `--flag=-x` is the escape hatch.
+          const next = argv[index + 1];
+          if (!next?.trim() || next.startsWith("-")) {
+            return fail(`Missing value for ${flag}. Use ${flag}=VALUE for an option-like value.`);
+          }
+          value = next.trim();
+          index += 1;
+        }
+
+        if (flag === "--prompt") {
+          explicitPrompt = value;
+        } else if (flag === "--profile") {
+          profile = value;
+          passThrough(value);
+        } else if (flag === "--reasoning") {
+          configOverrides.push(`model_reasoning_effort=${value}`);
+          passThrough(value);
+        } else {
+          // A JSON string literal is also a valid TOML basic string.
+          configOverrides.push(`model=${JSON.stringify(value)}`);
+          passThrough(value);
+          modelOverride = value;
+        }
+        break;
       }
-      explicitPrompt = value;
-      continue;
-    }
 
-    if (arg === "--profile") {
-      const value = normalizeNonEmpty(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: "Missing value for --profile." };
+      case "-c":
+      case "--config": {
+        const value = parseConfigFlagValue(inline ? inlineValue : argv[++index]);
+        if (!value) return fail(`Missing key=value payload for ${flag}.`);
+        configOverrides.push(value);
+        passThrough(value);
+        break;
       }
-      profile = value;
-      passthroughArgs.push(arg, value);
-      index += 1;
-      continue;
-    }
 
-    if (arg.startsWith("--profile=")) {
-      const value = normalizeNonEmpty(arg.slice("--profile=".length));
-      if (!value) {
-        return { ok: false, error: "Missing value for --profile." };
+      case "--resume":
+      case "--provider":
+      case "--cwd":
+      case "--file": {
+        const value = normalizeNonEmpty(inline ? inlineValue : argv[++index]);
+        if (!value || (!inline && value.startsWith("--")))
+          return fail(`Missing value for ${flag}.`);
+        if (flag === "--resume") resumeId = value;
+        else if (flag === "--provider") providerId = value;
+        else if (flag === "--cwd") cwd = value;
+        else files.push(value);
+        break;
       }
-      profile = value;
-      passthroughArgs.push(`--profile=${value}`);
-      continue;
-    }
 
-    if (arg === "-c" || arg === "--config") {
-      const value = parseConfigFlagValue(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: `Missing key=value payload for ${arg}.` };
+      case "--ubume-prompt-policy":
+      case "--codexa-prompt-policy": {
+        const value = normalizeNonEmpty(inline ? inlineValue : argv[++index]);
+        if (value !== "raw" && value !== "wrapped") {
+          return fail(
+            inline
+              ? "Invalid value for --ubume-prompt-policy. Use raw or wrapped."
+              : "Missing or invalid value for --ubume-prompt-policy. Use raw or wrapped.",
+          );
+        }
+        promptPolicy = value;
+        break;
       }
-      configOverrides.push(value);
-      passthroughArgs.push(arg, value);
-      index += 1;
-      continue;
-    }
 
-    if (arg.startsWith("--config=")) {
-      const value = parseConfigFlagValue(arg.slice("--config=".length));
-      if (!value) {
-        return { ok: false, error: "Missing key=value payload for --config." };
-      }
-      configOverrides.push(value);
-      passthroughArgs.push(`--config=${value}`);
-      continue;
+      default:
+        return fail(`Unknown option for ubume exec: ${arg}`);
     }
-
-    if (arg.startsWith("-c=")) {
-      const value = parseConfigFlagValue(arg.slice(3));
-      if (!value) {
-        return { ok: false, error: "Missing key=value payload for -c." };
-      }
-      configOverrides.push(value);
-      passthroughArgs.push(`-c=${value}`);
-      continue;
-    }
-
-    if (arg === "--model" || arg === "-m") {
-      const value = parseModelFlagValue(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: `Missing value for ${arg}.` };
-      }
-      configOverrides.push(`model=${quoteTomlString(value)}`);
-      passthroughArgs.push(arg, value);
-      modelOverride = value;
-      index += 1;
-      continue;
-    }
-
-    if (arg.startsWith("--model=")) {
-      const value = parseModelFlagValue(arg.slice("--model=".length));
-      if (!value) {
-        return { ok: false, error: "Missing value for --model." };
-      }
-      configOverrides.push(`model=${quoteTomlString(value)}`);
-      passthroughArgs.push(`--model=${value}`);
-      modelOverride = value;
-      continue;
-    }
-
-    if (arg === "--reasoning") {
-      const value = parseModelFlagValue(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: `Missing value for ${arg}.` };
-      }
-      configOverrides.push(`model_reasoning_effort=${value}`);
-      passthroughArgs.push(arg, value);
-      index += 1;
-      continue;
-    }
-
-    if (arg.startsWith("--reasoning=")) {
-      const value = parseModelFlagValue(arg.slice("--reasoning=".length));
-      if (!value) {
-        return { ok: false, error: "Missing value for --reasoning." };
-      }
-      configOverrides.push(`model_reasoning_effort=${value}`);
-      passthroughArgs.push(`--reasoning=${value}`);
-      continue;
-    }
-
-    if (arg.startsWith("-")) {
-      return { ok: false, error: `Unknown option for ubume exec: ${arg}` };
-    }
-
-    positionalPromptParts.push(arg);
   }
 
   const positionalPrompt =
@@ -312,46 +247,16 @@ export function parseHeadlessExecArgs(argv: readonly string[]): HeadlessExecArgs
       .trim() || null;
 
   if (explicitPrompt && positionalPrompt) {
-    return { ok: false, error: "Provide a prompt either positionally or with --prompt, not both." };
+    return fail("Provide a prompt either positionally or with --prompt, not both.");
   }
+  if (stdin && (explicitPrompt || positionalPrompt)) {
+    return fail("--stdin cannot be combined with another prompt source.");
+  }
+  if (noSave && resumeId) return fail("--no-save cannot be combined with --resume.");
 
-  if (stdin && (explicitPrompt || positionalPrompt))
-    return { ok: false, error: "--stdin cannot be combined with another prompt source." };
-  if (noSave && resumeId)
-    return { ok: false, error: "--no-save cannot be combined with --resume." };
   const prompt = explicitPrompt ?? positionalPrompt;
-  if (help) {
-    return {
-      ok: true,
-      value: {
-        help,
-        json,
-        stdin,
-        noSave,
-        resumeId,
-        providerId,
-        cwd,
-        files,
-        benchmarkDiagnostics,
-        timing,
-        promptPolicy,
-        prompt: prompt ?? "",
-        launchArgs: buildLaunchArgs({
-          prompt,
-          profile,
-          configOverrides,
-          passthroughArgs,
-          modelOverride,
-        }),
-      },
-    };
-  }
-
-  if (!prompt && !stdin) {
-    return {
-      ok: false,
-      error: 'Missing prompt. Use ubume exec "prompt" or ubume exec --prompt "prompt".',
-    };
+  if (!help && !prompt && !stdin) {
+    return fail('Missing prompt. Use ubume exec "prompt" or ubume exec --prompt "prompt".');
   }
 
   return {
@@ -369,13 +274,16 @@ export function parseHeadlessExecArgs(argv: readonly string[]): HeadlessExecArgs
       timing,
       promptPolicy,
       prompt: prompt ?? "",
-      launchArgs: buildLaunchArgs({
-        prompt,
+      launchArgs: {
+        help: false,
+        version: false,
+        initialPrompt: prompt,
         profile,
         configOverrides,
         passthroughArgs,
         modelOverride,
-      }),
+        noClear: false,
+      },
     },
   };
 }
