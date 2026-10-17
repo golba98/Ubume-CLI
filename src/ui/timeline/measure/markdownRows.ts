@@ -1,3 +1,20 @@
+/**
+ * Measure stage for markdown: parsed `Segment[]` (from `render/markdownParser.ts`)
+ * → width-fitted, theme-neutral span rows.
+ *
+ * `buildMarkdownRows` is the single layout implementation for response text:
+ * the measured transcript (response, plan cards) and the React
+ * `MemoizedRenderMessage` both consume its output, so markdown looks and
+ * measures identically everywhere. Rendered block rows are padded to the full width, while blank separator and
+ * error-fallback rows are left unpadded for `createRow` to pad. Diff/code colouring is applied here as tones (raw ANSI was stripped
+ * upstream).
+ *
+ * Caching: four module-level `MarkdownCache`s (display widths, wrapped table
+ * cells, folded code lines, whole rendered blocks), each bounded by entry
+ * count and character budget and cleared by `resetMarkdownCaches()`. Block
+ * keys include the full segment JSON and width, so content or width changes
+ * miss rather than return stale rows.
+ */
 import { getTextUnits, getTextWidth, wrapPlainText } from "../../../core/shared/text.js";
 import { sanitizeTerminalOutput } from "../../../core/terminal/terminalSanitize.js";
 import { maybeRenderDiff } from "../../render/diffRenderer.js";
@@ -29,6 +46,10 @@ function padMarkdownRow(row: TimelineRowSpan[], width: number): TimelineRowSpan[
   return padding > 0 ? [...row, createSpan(" ".repeat(padding))] : row;
 }
 
+/**
+ * Convert parsed inline parts to spans: inline code → "info", link text →
+ * "muted", everything else → `tone`; bold/italic/underline/strike carried over.
+ */
 export function inlinePartsToSpans(
   parts: InlinePart[],
   tone: TimelineTone = "text",
@@ -70,6 +91,16 @@ function prefixedRows(
   ]);
 }
 
+/**
+ * Column widths for a grid table, or null when even the minimum widths do not
+ * fit (the caller then falls back to stacked "Header: value" records).
+ *
+ * Natural widths are capped at 40; each column gets its minimum, then spare
+ * width is handed out one column at a time to the column furthest below its
+ * natural width.
+ * While streaming, only header widths are used (doubled, at least 12) so the
+ * layout does not jump as each new row arrives.
+ */
 function tableColumnWidths(table: TableSegment, width: number): number[] | null {
   const headerWidths = table.headers.map((cell) =>
     textWidth(cell.map((part) => part.text).join("")),
@@ -171,6 +202,7 @@ function buildTableRows(table: TableSegment, width: number): TimelineRowSpan[][]
   return rows;
 }
 
+// Expand tabs to 2-column tab stops (code is parsed with tabs preserved).
 function expandCodeTabs(line: string): string {
   if (!line.includes("\t")) return line;
   let expanded = "";
@@ -207,6 +239,12 @@ function diffTone(line: string): TimelineTone {
   return "text";
 }
 
+/**
+ * Code block: a dim language label row, then each source line hard-folded to
+ * the content width behind a `│ ` gutter (`↳ ` on continuation rows). Code is
+ * never word-wrapped, so whitespace is preserved exactly. Diff-looking blocks
+ * (or ```diff fences) get per-line add/remove/hunk/header tones.
+ */
 function buildCodeRows(
   segment: Extract<Segment, { type: "code" }>,
   width: number,
@@ -295,7 +333,16 @@ function renderSegment(
   }
 }
 
-/** All response surfaces consume these exact theme-neutral rows. */
+/**
+ * All response surfaces consume these exact theme-neutral rows.
+ *
+ * Lays out `segments` at `width` columns (non-finite widths fall back to 80),
+ * separating blocks with one blank row; rendered block rows are padded to the
+ * width. Callers turn each span row into one `TimelineRow` via `createRow`.
+ * `brightHeadings` renders level 3+ headings in the "text" tone instead of
+ * "muted". If laying out a segment throws, its sanitized raw source is
+ * plain-wrapped instead so a malformed block never breaks the transcript.
+ */
 export function buildMarkdownRows(
   segments: Segment[],
   width: number,

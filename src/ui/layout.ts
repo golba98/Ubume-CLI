@@ -1,13 +1,18 @@
 /**
- * Responsive layout constants and hook.
+ * Terminal geometry for the whole UI: layout modes, shell/content widths, the
+ * header/transcript/composer row budget, the resize-aware viewport hook, and the
+ * React contexts that hand panel sizes from `AppShell` to the overlay panels.
  *
- * Five modes based on both terminal columns and rows:
+ * Layout modes (`computeMode`): `compact` when the terminal is ≤ 24 rows or
+ * ≤ 100 columns; `expanded` at ≥ 140 columns and ≥ 30 rows; `regular` otherwise.
+ * Below `MIN_TERMINAL_COLS` × `MIN_TERMINAL_ROWS` the shell shows a "cramped"
+ * placeholder instead of the UI.
  *
- *   micro    very small rows/cols → one-line shell
- *   compact  normal short terminal → compact shell, no large logo
- *   normal   standard terminal → compact header, roomy content
- *   wide     large terminal → decorative header allowed
- *   max      maximized terminal → full decorative layout
+ * Everything here is pure except `useTerminalViewport` (subscribes to stdout
+ * `resize`) and the context hooks. Repainting the screen on resize is owned by
+ * `core/terminal/clearFrameBoundary.ts`, not by this module: the viewport hook only
+ * reports dimensions, debounced so the layout does not tear while a window is
+ * being dragged.
  */
 
 import { useStdout } from "ink";
@@ -406,6 +411,15 @@ export function advanceTerminalViewport(
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 /** React hook — returns live layout that ignores transient invalid restore sizes. */
+/**
+ * Current terminal viewport, updated on stdout `resize`.
+ *
+ * Leading edge of a resize: flag `isResizing` (and the global terminal-resizing
+ * flag that pauses animations) but keep the old dimensions, so frames are not
+ * laid out against intermediate sizes. Trailing edge (`RESTORE_SETTLE_MS` after
+ * the last event, 0 in tests): commit the final dimensions in one update. Unchanged
+ * measurements return the previous object, so consumers do not re-render.
+ */
 export function useTerminalViewport(): TerminalViewport {
   const { stdout } = useStdout();
   const [viewport, setViewport] = useState<TerminalViewport>(() =>
@@ -506,4 +520,91 @@ export function getAvailableRowsForPanel(layout: Layout, passedAvailableRows?: n
   }
 
   return computeAppLayoutBudget({ cols: layout.cols, rows: layout.rows }).panelRows;
+}
+
+/** Inputs for {@link resolvePickerPanelGeometry}; every layout source is optional. */
+export interface PickerPanelGeometryInput {
+  /** Terminal layout; when absent a 120×24 regular terminal is assumed. */
+  layout?: Layout & { contentWidth?: number };
+  /** Explicit panel layout (prop), which wins over everything else. */
+  panelLayout?: PanelLayout;
+  /** Panel layout provided by `AppShell` through `PanelLayoutContext`. */
+  contextPanelLayout?: PanelLayout;
+  /** Measured panel box (prop, else `ActivePanelLayoutContext`). */
+  activePanelLayout?: ActivePanelLayout;
+  /** Explicit row budget (prop, else `PanelAvailableRowsContext`). */
+  availableRows?: number;
+  /** Smallest outer panel width when it is derived from the terminal width. */
+  minPanelWidth: number;
+  /** Smallest usable column count when it is derived from the terminal width. */
+  minAvailableCols: number;
+}
+
+/** Resolved size of a picker panel. */
+export interface PickerPanelGeometry {
+  shellWidth: number;
+  panelLayout: PanelLayout;
+  /** Outer width of the bordered panel. */
+  panelWidth: number;
+  /** Usable text width inside the panel's border and padding. */
+  innerWidth: number;
+}
+
+const FALLBACK_PICKER_LAYOUT: Layout & { contentWidth?: number } = {
+  cols: 120,
+  rows: DEFAULT_ROWS,
+  mode: "regular",
+};
+
+/**
+ * Resolves how much room a picker panel (model or provider picker) has.
+ *
+ * Precedence for the panel layout: explicit `panelLayout` prop → the shell's
+ * `PanelLayoutContext` → derived from the measured panel box, or, failing that,
+ * from the terminal size. Panels mounted by `AppShell` always receive the context;
+ * the fallbacks keep a picker usable when it is rendered on its own (tests,
+ * isolated previews).
+ */
+export function resolvePickerPanelGeometry(input: PickerPanelGeometryInput): PickerPanelGeometry {
+  const layout = input.layout ?? FALLBACK_PICKER_LAYOUT;
+  const active = input.activePanelLayout;
+  const shellWidth = getShellWidth(layout.cols);
+
+  const panelLayout = input.panelLayout ??
+    input.contextPanelLayout ?? {
+      mode: layout.mode,
+      availableRows: active
+        ? active.availableRows
+        : getAvailableRowsForPanel(layout, input.availableRows),
+      availableCols: active
+        ? active.availableCols
+        : Math.max(input.minAvailableCols, shellWidth - 4),
+    };
+
+  const panelWidth = active
+    ? active.width
+    : Math.max(input.minPanelWidth, Math.min(layout.contentWidth ?? shellWidth, shellWidth - 2));
+  // 4 = round border (2) + paddingX={1} on both sides (2). The reservation is kept
+  // even when a very short terminal makes the provider picker drop its border.
+  const innerWidth = Math.max(1, Math.min(panelLayout.availableCols, panelWidth - 4));
+
+  return { shellWidth, panelLayout, panelWidth, innerWidth };
+}
+
+/**
+ * {@link resolvePickerPanelGeometry} with the shell's layout contexts filled in.
+ * Explicit props passed in `input` take precedence over the contexts.
+ */
+export function usePickerPanelGeometry(
+  input: Omit<PickerPanelGeometryInput, "contextPanelLayout">,
+): PickerPanelGeometry {
+  const contextPanelLayout = usePanelLayout();
+  const contextActiveLayout = useActivePanelLayout();
+  const contextAvailableRows = usePanelAvailableRows();
+  return resolvePickerPanelGeometry({
+    ...input,
+    contextPanelLayout,
+    activePanelLayout: input.activePanelLayout ?? contextActiveLayout,
+    availableRows: input.availableRows ?? contextAvailableRows,
+  });
 }

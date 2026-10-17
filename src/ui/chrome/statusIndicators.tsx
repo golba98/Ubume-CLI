@@ -1,11 +1,27 @@
+/**
+ * Small animated status primitives used by the composer status line:
+ * `Spinner`, `AnimatedStatusText`, and the busy-frame helpers.
+ *
+ * Consumers: `chrome/BottomComposer.tsx` and `chrome/composer/composerModel.ts`.
+ * Each animated component owns a local `setInterval` that is cleared on
+ * unmount (and, for the status text, whenever it goes inactive), so animation
+ * re-renders stay inside this leaf instead of re-rendering the composer or
+ * shell. No stdin or focus handling.
+ *
+ * Environment: `UBUME_DEBUG_STATIC_STATUS=1` freezes the dots on their last
+ * frame (deterministic output for debugging); `NO_COLOR` disables the `flow`
+ * highlight animation.
+ */
 import { Text } from "ink";
 import { startTransition, useEffect, useState } from "react";
 import * as renderDebug from "../../core/perf/renderDebug.js";
 import { sanitizeTerminalOutput } from "../../core/terminal/terminalSanitize.js";
 import { useTheme } from "../theme.js";
 
+/** Braille spinner frames, advanced every 80 ms. */
 const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/** Braille spinner with its own 80 ms timer; defaults to `theme.textDim`. */
 export function Spinner({ color }: { color?: string }) {
   const theme = useTheme();
   const [frame, setFrame] = useState(0);
@@ -26,26 +42,42 @@ export function Spinner({ color }: { color?: string }) {
   return <Text color={activeColor}>{frames[frame]}</Text>;
 }
 
+/** Interval for the trailing-dots animation (the `flow` style ticks every 120 ms instead). */
 export const BUSY_STATUS_FRAME_MS = 900;
 export const BUSY_STATUS_FRAMES = [" .  ", " .. ", " ..."] as const;
 
+/** Dots frame for a tick count; negative/fractional indices are clamped and floored. */
 export function getBusyStatusFrame(frameIndex: number): string {
   const safeIndex = Math.max(0, Math.floor(frameIndex));
   return BUSY_STATUS_FRAMES[safeIndex % BUSY_STATUS_FRAMES.length]!;
 }
 
+/** True for `UIState` kinds that should show an animated status. */
 export function isAnimatedBusyState(kind: string): boolean {
   return kind === "THINKING" || kind === "RESPONDING" || kind === "SHELL_RUNNING";
 }
 
 interface AnimatedStatusTextProps {
+  /** Label text; sanitized before rendering. */
   baseText: string;
+  /** Whether to animate at all. */
   isActive: boolean;
+  /** Render in the error color instead of `info`. */
   isError?: boolean;
+  /**
+   * Externally driven dots frame. When provided, the local timer is not started
+   * and this string is used as the suffix.
+   */
   animationFrame?: string;
+  /** `dots`: trailing dots suffix. `flow`: a 3-character highlight sweeping across the label. */
   animationStyle?: "dots" | "flow";
 }
 
+/**
+ * Local tick counter for `AnimatedStatusText`. Restarts from 0 when the label,
+ * style or active flag changes. The interval is `unref`'d so it never keeps the
+ * process alive on its own.
+ */
 function useLocalBusyStatusFrame(isActive: boolean, label: string, flow: boolean): number {
   const [frameIndex, setFrameIndex] = useState(0);
   const staticStatus = process.env.UBUME_DEBUG_STATIC_STATUS === "1";
@@ -80,6 +112,7 @@ function useLocalBusyStatusFrame(isActive: boolean, label: string, flow: boolean
   return frameIndex;
 }
 
+/** Status label with a dots suffix or a sweeping highlight, animated by a local timer. */
 export function AnimatedStatusText({
   baseText,
   isActive,

@@ -1,3 +1,13 @@
+/**
+ * React (Ink) card for an `AWAITING_USER_ACTION` verification question.
+ *
+ * Part of the React component path rooted at `TurnGroup`, which the app does
+ * not mount in production: the transcript renders measured rows, and the
+ * measured equivalent of this card is `buildActionRequiredRows` in
+ * `measure/eventRows.ts`. The two are not row-for-row identical (this uses an
+ * Ink border box with margins), so changes here do not affect viewport
+ * measurement.
+ */
 import { Box, Text } from "ink";
 import { wrapPlainText } from "../../core/shared/text.js";
 import { getUsableShellWidth } from "../layout.js";
@@ -9,6 +19,7 @@ interface ActionRequiredBlockProps {
   question: string;
 }
 
+/** Bordered "[N] ACTION REQUIRED" card showing the wrapped question text. */
 export function ActionRequiredBlock({ cols, turnIndex, question }: ActionRequiredBlockProps) {
   const theme = useTheme();
   const contentWidth = Math.max(1, getUsableShellWidth(cols, 6));

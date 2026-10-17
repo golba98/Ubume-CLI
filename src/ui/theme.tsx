@@ -1,3 +1,19 @@
+/**
+ * Color themes, the React theme context, and pure theme-selection reducers.
+ *
+ * Exposes the built-in palettes (`THEMES`, `DARK_THEME`), `ThemeProvider` /
+ * `useTheme()` for components, and the `ThemeSelectionState` helpers that let
+ * the theme picker preview a theme without persisting it. `src/app/App.tsx`
+ * owns the `ThemeSelectionState`, renders `ThemeProvider` with
+ * `getDisplayedThemeName(...)`, `app/overlays/OverlayPanels.tsx` previews and
+ * cancels, and `app/settings/useThemeCommit.ts` commits.
+ *
+ * Also hosts `shouldBumpComposerInstance`, a screen-transition predicate used by
+ * `app/lifecycle/useFocusRouting.ts`; despite its location it is not
+ * theme-specific.
+ *
+ * No side effects beyond render-debug instrumentation in `ThemeProvider`.
+ */
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
 import type { Theme } from "../config/settings.js";
@@ -6,6 +22,7 @@ import type { Screen } from "../session/types.js";
 
 // ─── Theme definitions ────────────────────────────────────────────────────────
 
+/** Default palette; also the fallback for unknown names and the base for `custom`. */
 export const DARK_THEME = {
   bg: "#0E0E10",
   surface: "#18181B",
@@ -208,6 +225,7 @@ const OCEAN_THEME = {
 
 // ─── Theme registry ───────────────────────────────────────────────────────────
 
+/** Built-in palettes by persisted theme name (`settings.theme`). `custom` is not listed here. */
 export const THEMES: Record<string, Theme> = {
   dark: DARK_THEME,
   purple: PURPLE_THEME,
@@ -224,11 +242,14 @@ export const THEMES: Record<string, Theme> = {
 const ThemeContext = createContext<Theme>(DARK_THEME);
 
 interface ThemeProviderProps {
+  /** Theme name; unknown names fall back to `dark`. `"custom"` selects `customTheme`. */
   theme?: string;
+  /** Overrides layered on top of `DARK_THEME`; only used when `theme === "custom"`. */
   customTheme?: Partial<Theme>;
   children: ReactNode;
 }
 
+/** Provide the resolved palette to every `useTheme()` consumer below it. */
 export function ThemeProvider({
   theme: themeName = "dark",
   customTheme,
@@ -247,19 +268,26 @@ export function ThemeProvider({
   return <ThemeContext.Provider value={activeTheme as Theme}>{children}</ThemeContext.Provider>;
 }
 
+/** Current palette; `DARK_THEME` when rendered outside a `ThemeProvider` (e.g. in tests). */
 export function useTheme() {
   return useContext(ThemeContext);
 }
 
+/**
+ * Theme picker state: the persisted theme plus an optional live preview shown
+ * while the picker cursor moves.
+ */
 export interface ThemeSelectionState {
   committedTheme: string;
   previewTheme: string | null;
 }
 
+/** Theme that should be rendered right now: the preview if any, else the committed one. */
 export function getDisplayedThemeName(state: ThemeSelectionState): string {
   return state.previewTheme ?? state.committedTheme;
 }
 
+/** Show `nextTheme` temporarily without changing the committed theme. */
 export function previewThemeSelection(
   state: ThemeSelectionState,
   nextTheme: string,
@@ -270,6 +298,7 @@ export function previewThemeSelection(
   };
 }
 
+/** Make `nextTheme` the committed theme and drop any preview. Persisting is the caller's job. */
 export function commitThemeSelection(
   _state: ThemeSelectionState,
   nextTheme: string,
@@ -280,6 +309,7 @@ export function commitThemeSelection(
   };
 }
 
+/** Drop the preview and revert to the committed theme. */
 export function cancelThemeSelection(state: ThemeSelectionState): ThemeSelectionState {
   return {
     committedTheme: state.committedTheme,
@@ -287,6 +317,11 @@ export function cancelThemeSelection(state: ThemeSelectionState): ThemeSelection
   };
 }
 
+/**
+ * True when leaving any overlay back to `main`. `useFocusRouting` then bumps
+ * `composerInstanceKey`, which remounts the composer (it is rendered with that
+ * key) and re-runs focus routing for it.
+ */
 export function shouldBumpComposerInstance(previousScreen: Screen, nextScreen: Screen): boolean {
   return previousScreen !== "main" && nextScreen === "main";
 }

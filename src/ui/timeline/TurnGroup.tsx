@@ -1,3 +1,21 @@
+/**
+ * React (Ink) component rendering of one transcript turn, plus the shared
+ * `TurnOpacity` / `TurnRunPhase` types and `resolveTurnRunPhase`.
+ *
+ * Production status: the app does not mount `<TurnGroup>`. Both transcript
+ * surfaces (`TranscriptShell`, `Timeline`) render measured rows from
+ * `measure/` via `TimelineRowView`, and only those rows drive viewport and
+ * live-window heights. This component tree is exercised by tests
+ * (`TurnGroup.test.tsx`). It shares text helpers with the row builders
+ * (`progressEntries`, `runActivityView`, `MemoizedRenderMessage` →
+ * `buildMarkdownRows`), so markdown and reasoning text wrap identically, but
+ * its card chrome is NOT row-for-row equivalent — e.g. actions render here as
+ * bordered `DashCard`s, whereas `buildActionEventRows` emits a single compact
+ * line. Do not treat this file as the reference for measured heights.
+ *
+ * `resolveTurnRunPhase` and the exported types ARE on the production path:
+ * `timelineItems.ts` uses them to build render state for every turn.
+ */
 import { Box, Text } from "ink";
 import { memo, useMemo } from "react";
 import { formatDuration, wrapCommandText, wrapPlainText } from "../../core/shared/text.js";
@@ -32,6 +50,7 @@ import {
   selectVisibleRunActivity,
 } from "./runActivityView.js";
 
+/** Visual emphasis of a turn relative to the active one (see `createTurnOpacityResolver`). */
 export type TurnOpacity = "active" | "recent" | "dim";
 
 interface TurnGroupProps {
@@ -179,6 +198,10 @@ type ResolvedStreamEvent =
   | { kind: "response"; streamSeq: number; segment: RunResponseSegment }
   | { kind: "plan"; streamSeq: number; planText: string; approved: boolean };
 
+// React-path counterpart of measure/streamRows.ts `collectStreamEvents`. It is
+// NOT identical: here a completed reasoning block is revealed mid-run (only
+// active ones are hidden), whereas the measured path defers all reasoning
+// until the run finishes to keep live block order append-only.
 function resolveStreamEvents(
   run: RunEvent,
   assistant: AssistantEvent | null,
@@ -581,6 +604,11 @@ const StreamEventList = memo(
 
 // ─── TurnGroup ───────────────────────────────────────────────────────────────
 
+/**
+ * One turn as React components: prompt card, unified stream (or a bare
+ * `AgentBlock` when there is no run), verbose file-scan card, and the pending
+ * question card. `streamPreviewRows` / `streamMode` are accepted but unused.
+ */
 export function TurnGroup({
   cols,
   turnIndex,
@@ -637,8 +665,16 @@ export function TurnGroup({
   );
 }
 
+/** Rendering phase of a turn's run: no run, waiting for output, streaming, or final. */
 export type TurnRunPhase = "none" | "thinking" | "streaming" | "final";
 
+/**
+ * Derive a turn's run phase from its run status and the global UI state.
+ *
+ * Note: during ANSWER_VISIBLE this reports "final" while the run is still
+ * `running`. Height-affecting decisions that must not fire on a live run (e.g.
+ * `compactActionBursts`) therefore key off `run.status`, not this phase.
+ */
 export function resolveTurnRunPhase(
   run: RunEvent | null,
   assistant: AssistantEvent | null,

@@ -1,3 +1,15 @@
+/**
+ * `/permissions` overlay: a `SelectionPanel` menu showing the effective
+ * (resolved) approval policy, sandbox mode and network access next to the
+ * configured values, plus writable-root actions.
+ *
+ * Stateless: it only maps a choice to a `PermissionsPanelAction`, which
+ * `src/app/overlays/useOverlayRouting.ts` handles: opening a sub-picker or
+ * writable-root entry screen, printing the writable-root summary, or clearing
+ * the roots. When `providerManaged` is true the provider enforces its
+ * own permissions, so the menu collapses to a single "Back to chat" item and
+ * every selection cancels.
+ */
 import type { ResolvedRuntimeConfig, RuntimeConfig } from "../../config/runtimeConfig.js";
 import {
   formatApprovalPolicyLabel,
@@ -7,6 +19,7 @@ import {
 import { FOCUS_IDS } from "../input/focus.js";
 import { SelectionPanel } from "./SelectionPanel.js";
 
+/** Menu choices reported to the app via `onSelect`. */
 export type PermissionsPanelAction =
   | "approval-policy"
   | "sandbox"
@@ -17,8 +30,11 @@ export type PermissionsPanelAction =
   | "writable-roots-clear";
 
 interface PermissionsPanelProps {
+  /** Configured policy (shown as "configured: …" and used for the writable-root count). */
   runtime: RuntimeConfig;
+  /** Effective policy after resolution; shown as the primary value. */
   resolvedRuntime: ResolvedRuntimeConfig;
+  /** True when the active provider manages permissions itself (see module header). */
   providerManaged?: boolean;
   onSelect: (action: PermissionsPanelAction) => void;
   onCancel: () => void;

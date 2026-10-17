@@ -1,3 +1,15 @@
+/**
+ * Shortens local file references in model output for terminal display.
+ *
+ * Absolute paths, `file://` URLs and markdown links pointing at local files are
+ * rewritten to a compact, project-relative-looking form (`src/foo.ts:12`),
+ * with GitHub-style `#L12-L20` anchors converted to `:12-20`. Remote
+ * `http(s)` links are left untouched. Used by `markdownParser.ts` (link
+ * labels) and `timeline/runActivityView.ts` (action command text). Pure
+ * string transforms; no filesystem access, so the "project root" is a
+ * heuristic based on well-known top-level folder names, not the real
+ * workspace root.
+ */
 const MARKDOWN_LINK_RE = /!?\[([^\]\n]+)\]\(([^)\n]+)\)/g;
 const FILE_URL_RE = /\bfile:\/\/\/?[^\s`"'<>)]*/gi;
 const WINDOWS_ABSOLUTE_PATH_RE =
@@ -76,6 +88,13 @@ function looksLikePathLabel(label: string): boolean {
   return /[\\/]/.test(label) || /^[\w.-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?$/.test(label);
 }
 
+/**
+ * Compact one local path: strip `file:` prefixes and URL decoding, normalize
+ * separators to `/`, then keep everything from the first well-known root
+ * segment (`src`, `docs`, `test`, …); otherwise keep just the file name.
+ * A trailing `#L…` anchor becomes a `:line[-end]` suffix. `http(s)` URLs are
+ * returned unchanged.
+ */
 export function formatLocalPathForTerminal(rawPath: string): string {
   if (/^https?:\/\//i.test(rawPath.trim())) {
     return rawPath;
@@ -115,6 +134,12 @@ function formatLocalMarkdownLink(label: string, target: string): string {
   return cleanLabel ? `${cleanLabel} (${compactTarget})` : compactTarget;
 }
 
+/**
+ * Rewrite every local file reference in `text`, in this order: markdown links
+ * with local targets, `file://` URLs, Windows absolute paths, and Unix
+ * absolute paths under common home/workspace roots. The bare Windows/Unix path
+ * patterns only match paths ending in a recognized source-file extension.
+ */
 export function formatTerminalAnswerInline(text: string): string {
   if (!text) return text;
 

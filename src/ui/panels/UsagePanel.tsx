@@ -1,3 +1,18 @@
+/**
+ * `/usage` overlay (`usage-panel` screen): renders the active provider's usage
+ * snapshot (rows built by `usagePanelRows.ts`) in a scrollable, bordered box
+ * with a footer showing refresh/scroll hints.
+ *
+ * State: local scroll `offset` and a `clock` that ticks every second so
+ * relative times ("resets in …") and the refresh cooldown stay current; the
+ * interval is cleared on unmount. The usage view, cooldown and callbacks come
+ * from `src/app/providers/useProviderUsage.ts`.
+ *
+ * Focus: registers `focusId` with `autoFocus`; input is handled only while
+ * focused. Keys: R refreshes (ignored while a fetch is in flight or during the
+ * cooldown), Up/k and Down/j scroll by a row, PageUp/PageDown by a page, Esc or
+ * q closes.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import type { Theme } from "../../config/settings.js";
@@ -15,9 +30,11 @@ interface UsagePanelProps {
   onClose: () => void;
   /** Test seam for a deterministic clock. */
   now?: () => number;
+  /** IANA time zone for absolute times; defaults to the system zone. Test seam. */
   timeZone?: string;
 }
 
+/** Map a semantic row tone to a theme color (unknown tones use `theme.text`). */
 function toneColor(theme: Theme, tone: UsageRowTone): string {
   switch (tone) {
     case "muted":

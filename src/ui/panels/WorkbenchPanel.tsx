@@ -1,3 +1,31 @@
+/**
+ * Multi-view workbench overlay (`workbench-panel` screen) behind `/queue`,
+ * `/transcript`, `/diff` and `/rewind`. `view` selects which one is shown.
+ *
+ * - queue: queued prompts; edit/remove/reorder, pause, or continue sending.
+ * - transcript: tool activity and output (`inspectionEntries(events)`) as
+ *   collapsible entries with search.
+ * - diff: files changed for the whole session (default) or one turn, from the
+ *   checkpoint store; Enter loads that file's patch into a scrollable view.
+ * - rewind: previous turns; preview a conversation, file, or combined
+ *   recovery, then confirm with Enter.
+ *
+ * State (local): selection index, diff turn (-1 = whole session), scroll
+ * offset, search query, expanded entries, loaded patch text, restore preview,
+ * notice line, and a `working` flag that blocks input while an async store or
+ * rewind operation runs. Queue contents, checkpoints and the store come from
+ * `src/app` (`useWorkbenchActions`), which also performs queue actions and the
+ * rewind itself via `onQueueAction` / `onRewind`.
+ *
+ * Focus: registers the `workbench-panel` id (`FOCUS_IDS.workbench`) with
+ * `autoFocus`; input is handled only while focused and ignored for Ctrl/Meta
+ * chords. Common keys: Up/k, Down/j select (or scroll a patch/preview),
+ * PageUp/PageDown scroll, Esc closes the preview/patch first, then the panel.
+ * Per view: queue — e edit, d/Delete remove, [ ] reorder, Space pause, s/Enter
+ * continue and close; rewind — c/f/b (Enter = b) preview, Enter again applies;
+ * diff — Left/Right change turn, Enter opens patch; transcript — Enter toggles,
+ * `/` searches (Enter keeps, Esc clears the query).
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import { wrapPlainText } from "../../core/shared/text.js";
@@ -14,16 +42,24 @@ import { inspectionEntries } from "../../session/workbench.js";
 import { usePanelLayout } from "../layout.js";
 import { useTheme } from "../theme.js";
 
+/** Which workbench view to show. */
 export type WorkbenchView = "queue" | "transcript" | "diff" | "rewind";
+/** Queue operations; `pause` and `continue` apply to the whole queue (no id). */
 export type QueueAction = "edit" | "remove" | "up" | "down" | "pause" | "continue";
+/** What a rewind restores: the conversation, the files, or both. */
 export type RecoveryMode = "conversation" | "files" | "both";
 interface Props {
   view: WorkbenchView;
+  /** Timeline events for the transcript view. */
   events: readonly TimelineEvent[];
   queue: readonly QueuedPrompt[];
+  /** Queue paused flag, shown in the title. */
   paused: boolean;
+  /** Per-turn file checkpoints, oldest first; used by diff and rewind. */
   checkpoints: readonly FileCheckpoint[];
+  /** Session-diff end boundary after a restore; otherwise the last checkpoint's `after` is used. */
   restoredFileBoundary?: FileBoundary;
+  /** Checkpoint store for diffs, patches and restore previews; null when unavailable. */
   store: CheckpointStore | null;
   onQueueAction: (action: QueueAction, id?: string) => void;
   onRewind: (
@@ -33,6 +69,7 @@ interface Props {
   ) => Promise<void>;
   onClose: () => void;
 }
+/** Workbench overlay; see the module header for views and keys. */
 export function WorkbenchPanel({
   view,
   events,
@@ -71,11 +108,15 @@ export function WorkbenchPanel({
       ),
     [events, query],
   );
+  // Diff range: a single turn's before/after, or (turn -1) the whole session
+  // from the first checkpoint to the restored boundary / last checkpoint.
   const point = turn < 0 ? null : checkpoints[turn];
   const before = point?.before ?? checkpoints[0]?.before;
   const after =
     point?.after ??
     (turn < 0 ? (restoredFileBoundary ?? checkpoints[checkpoints.length - 1]?.after) : undefined);
+  // Body height: available rows minus title, footer and borders, and the
+  // optional notice / skipped-files lines.
   const height = Math.max(
     1,
     (layout?.availableRows ?? 20) - 5 - (notice ? 1 : 0) - (before?.skipped.length ? 1 : 0),
@@ -132,12 +173,19 @@ export function WorkbenchPanel({
             ...(expanded.has(entry.id) ? entry.details.split("\n").map((line) => `  ${line}`) : []),
           ])
       : lines.slice(0, index);
+  // Wrapped row index of the selected item, so the list auto-scrolls to keep it
+  // visible. Patch and preview views scroll freely by `offset` instead.
   const selectedRow = selectedLines.reduce(
     (total, line) => total + wrapPlainText(sanitizeTerminalOutput(line), width).length,
     0,
   );
   const start =
     patch !== null || preview ? offset : Math.max(offset, Math.max(0, selectedRow - height + 1));
+  /**
+   * Build a restore preview for the selected checkpoint. Conversation-only
+   * rewinds touch no files; file modes ask the store which files the restore
+   * would delete/create/restore. Errors are shown in the notice line.
+   */
   const prepare = async (mode: RecoveryMode) => {
     const checkpoint = checkpoints[index];
     if (!checkpoint) return;

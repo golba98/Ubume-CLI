@@ -1,3 +1,13 @@
+/**
+ * Ubume logo art variants and their size breakpoints.
+ *
+ * Consumed by the intro row builder (`timeline/measure/eventRows.ts`
+ * `buildIntroRows`), `TranscriptShell` (startup tracing) and
+ * `chrome/TopHeader.tsx`. The intro builder colors the 6-row large logo by row
+ * index (primary / secondary / shadow), so changing its row count changes its
+ * coloring. Selection reads the `UBUME_*` / legacy `CODEXA_*` env overrides on
+ * every call; nothing is cached.
+ */
 import { getTextWidth } from "../../core/shared/text.js";
 
 // ─── Logo constants ───────────────────────────────────────────────────────────
@@ -68,6 +78,8 @@ function isCompactLogoEnv(): boolean {
 
 /**
  * Returns the best logo variant for the given terminal column count.
+ * Never returns the medium ASCII variant: below the large breakpoint it drops
+ * straight to the compact logo (or nothing).
  *
  * Env overrides:
  *   UBUME_NO_ASCII_LOGO=1 / CODEXA_NO_ASCII_LOGO=1  → always text-only (empty array)

@@ -1,3 +1,39 @@
+/**
+ * Fixed-height shell that renders overlay screens (pickers, settings, viewers):
+ * header, a panel stage sized by the app layout budget, an optional hint, and
+ * the composer.
+ *
+ * Role in the app: `src/app/App.tsx` renders `TranscriptShell` for
+ * `screen === "main"` (native Ink Static scrollback) and renders `AppShell` only
+ * while `screen !== "main"`, passing `<OverlayPanels/>` as `panel`
+ * (`src/appRenderStability.test.ts` guards this split, and that AppShell never
+ * uses Ink's Static component — that test greps this file's source, so do not
+ * write the JSX tag name here, even in comments). The `screen === "main"` branches here (Timeline,
+ * `mainPanel`, `full-output`) are still supported and exercised by tests.
+ *
+ * Layout: sizes come from `computeAppLayoutBudget` in `../layout.ts`. The shell
+ * publishes them to panels through four contexts — `AppLayoutBudgetContext`,
+ * `PanelAvailableRowsContext`, `ActivePanelLayoutContext`, `PanelLayoutContext`
+ * (read via `usePanelLayout()` etc.) — and also clones them as props onto the
+ * `panel` element (`injectPanelLayout`).
+ *
+ * State: owns none besides `previousMeasurements`, a ref holding the last valid
+ * transcript row budget so a transient invalid measurement (e.g. mid-resize)
+ * reuses the previous height instead of collapsing the stage. Everything else is
+ * received as props from App.
+ *
+ * Memoization (do not "simplify"): `AppShell` is `memo`ized with a custom
+ * comparator so streaming deltas that do not change any compared prop skip the
+ * shell's render. It compares `layout` by fields (cols, rows, mode,
+ * `layoutEpoch`) rather than identity, everything else by identity, and the
+ * panel props only for the screen that shows them (`mainPanel` on main;
+ * `panel` + `panelHint` on overlays). `session/appSession.ts` deliberately
+ * preserves `uiState` identity so the `uiState` check can bail out. Adding a
+ * prop that changes during streaming defeats this, and a new prop that is not
+ * in the comparator will not trigger a re-render on its own.
+ *
+ * No timers, stdin listeners or focus handling live here; panels own their focus.
+ */
 import { Box, Text } from "ink";
 import React, { memo, useEffect, useMemo, useRef } from "react";
 import type { RuntimeSummary } from "../../config/runtimeConfig.js";
@@ -26,6 +62,8 @@ import { useTheme } from "../theme.js";
 import { Timeline } from "../timeline/Timeline.js";
 import { MemoizedTopHeader, measureTopHeaderRows, type UpdateAvailableInfo } from "./TopHeader.js";
 
+// Header-to-composer gap by terminal height tier for the cold-start spacer.
+// Currently all tiers are 1 row; kept separate so the tiers can diverge.
 const COMPACT_HEADER_TO_COMPOSER_GAP_ROWS = 1;
 const MEDIUM_HEADER_TO_COMPOSER_GAP_ROWS = 1;
 const TALL_HEADER_TO_COMPOSER_GAP_ROWS = 1;
@@ -34,6 +72,7 @@ const TALL_HEADER_TO_COMPOSER_GAP_ROWS = 1;
 
 type AppShellLayout = TerminalViewport;
 interface AppShellProps {
+  /** Terminal viewport; compared by cols/rows/mode/layoutEpoch in the memo comparator. */
   layout: AppShellLayout;
   screen: Screen;
   authState: CodexAuthState;
@@ -43,20 +82,36 @@ interface AppShellProps {
   staticEvents: TimelineEvent[];
   activeEvents: TimelineEvent[];
   uiState: UIState;
+  /** Overlay content shown when `screen !== "main"` (App passes `<OverlayPanels/>`). */
   panel: React.ReactNode;
+  /** Replaces the Timeline on the main screen when non-null. */
   mainPanel?: React.ReactNode;
+  /**
+   * `viewport` clips `mainPanel` to the transcript budget; `full-output` renders
+   * header + `mainPanel` + composer unclipped at natural height.
+   */
   mainPanelMode?: "viewport" | "full-output";
+  /** Composer element; always rendered below the stage. */
   composer: React.ReactNode;
+  /** Rows the composer occupies; feeds the layout budget. */
   composerRows: number;
+  /** Optional hint under the panel stage on overlay screens; reserves 2 rows when present. */
   panelHint?: React.ReactNode;
   verboseMode?: boolean;
+  /** Bumped by `/clear`; used as the Timeline `key` so it remounts empty. */
   clearCount?: number;
+  /** Header field visibility. Note: not part of the memo comparator. */
   headerConfig?: HeaderConfig;
   updateAvailable?: UpdateAvailableInfo | null;
 }
 
 // ─── Helpers & subcomponents ─────────────────────────────────────────────────
 
+/**
+ * Rows of blank spacer needed to fill the shell below intro + content and above
+ * the composer, so short content still pins the composer to the bottom. Pure;
+ * currently referenced only by `AppShell.test.tsx`.
+ */
 export function calculateNativeSpacerRows({
   shellRows,
   introRows,
@@ -75,6 +130,12 @@ export function calculateNativeSpacerRows({
   return Math.max(0, availableBodyRows - visibleBodyContentRows);
 }
 
+/**
+ * Gap between the header and composer before any transcript exists, bounded by
+ * `availableRows` and by the rows left after header + composer. One row in
+ * compact layouts or terminals of 18 rows or fewer, otherwise the height-tier
+ * constant. Pure; currently referenced only by tests.
+ */
 export function calculateColdStartSpacerRows({
   shellRows,
   headerRows,
@@ -103,11 +164,13 @@ export function calculateColdStartSpacerRows({
   return Math.max(0, Math.min(availableRows, rowsAfterHeaderAndComposer, preferredRows));
 }
 
+/** One blank row under the header, except in compact layouts / terminals of 18 rows or fewer. Pure; test-only. */
 export function calculateHeaderToContentGapRows(layout: Layout): number {
   if (layout.mode === "compact" || layout.rows <= 18) return 0;
   return 1;
 }
 
+/** Replaces the whole shell when the terminal is below `MIN_TERMINAL_COLS` x `MIN_TERMINAL_ROWS`. */
 function CrampedView({ layout }: { layout: Layout }) {
   const theme = useTheme();
   return (
@@ -132,6 +195,14 @@ function CrampedView({ layout }: { layout: Layout }) {
   );
 }
 
+/**
+ * Clone `element` with `availableRows`, `activePanelLayout` and `panelLayout`
+ * props, recursing into fragments. Lets a panel passed directly as `panel`
+ * (as the AppShell integration tests do with `ProviderPicker`) receive its size
+ * as props. Components that do not declare these props (e.g. `OverlayPanels`)
+ * ignore them; such panels read the layout contexts instead. Non-elements are
+ * returned unchanged.
+ */
 function injectPanelLayout(
   element: React.ReactNode,
   availableRows: number,
@@ -220,6 +291,8 @@ function AppShellInner({
   const showMainPanelFullOutput = showMainPanel && mainPanelMode === "full-output";
   const showTimeline = screen === "main" && !showMainPanel;
   const showPanelStage = screen !== "main";
+  // Short terminals with an overlay open: force the compact header (and cap its
+  // width) so the panel stage keeps as many rows as possible.
   const headerLayout =
     showPanelStage && layout.rows <= 24
       ? { ...layout, cols: Math.min(layout.cols, 71), mode: "compact" as const }
@@ -252,6 +325,10 @@ function AppShellInner({
   const finalShellHeight = shellHeight;
   const finalShellWidth = shellWidth;
 
+  // Guard against transient invalid measurements (zero/NaN shell size or a
+  // budget below 2 rows): reuse the last committed row count instead of
+  // collapsing the stage. Without a previous value the budget is used with a
+  // 2-row floor.
   const { finalTimelineRows: resolvedTimelineRows } = useMemo(() => {
     const prev = previousMeasurements.current;
     const isValid =
@@ -273,6 +350,8 @@ function AppShellInner({
     };
   }, [shellHeight, shellWidth, finalTimelineRows]);
 
+  // Record the committed measurement after render so the guard above compares
+  // against what is actually on screen.
   useEffect(() => {
     previousMeasurements.current = {
       timelineRows: resolvedTimelineRows,
@@ -287,6 +366,9 @@ function AppShellInner({
 
   const panelAvailableRows = appLayoutBudget.panelRows;
 
+  // Inner size of a bordered panel box inside the stage. The border (and its
+  // title row) is dropped below 7 rows and the header row below 9, so tiny
+  // terminals still get at least one content row.
   const activePanelLayout = useMemo<ActivePanelLayout>(() => {
     const panelBoxHeight = Math.max(3, resolvedTimelineRows - 2 * panelStagePaddingY);
     const showBorder = panelBoxHeight >= 7;
@@ -315,6 +397,8 @@ function AppShellInner({
     };
   }, [appLayoutBudget.mode, appLayoutBudget.activePanelRows, appLayoutBudget.activePanelCols]);
 
+  // Note: the Timeline below stays mounted while hidden (display="none") rather
+  // than being conditionally rendered.
   const mainContent = (
     <AppLayoutBudgetContext.Provider value={appLayoutBudget}>
       <Box flexDirection="column" width={contentWidth} height="100%">
@@ -399,6 +483,7 @@ function AppShellInner({
     </AppLayoutBudgetContext.Provider>
   );
 
+  // Full-output mode: natural height, with no fixed shell height or clipping.
   if (showMainPanelFullOutput) {
     const fullOutputContent = (
       <Box flexDirection="column" width={contentWidth}>
@@ -448,6 +533,12 @@ function AppShellInner({
   );
 }
 
+/**
+ * Memoized shell. The comparator returns true (skip render) only when every
+ * compared prop is unchanged; see the module header for why it exists and the
+ * rules for adding props. `panel`/`panelHint` are ignored on the main screen and
+ * `mainPanel` is always compared.
+ */
 export const AppShell = memo(AppShellInner, (prev, next) => {
   const panelPropsEqual =
     next.screen === "main"

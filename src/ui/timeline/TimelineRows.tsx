@@ -1,3 +1,19 @@
+/**
+ * Renders measured `TimelineRow`s as Ink elements — the final stage of the
+ * render pipeline.
+ *
+ * Each row must render as exactly one terminal line: the row builders have
+ * already wrapped and padded spans to the target width, so this component must
+ * not add padding, margins or borders of its own, and builders must never emit
+ * a row wider than the width it is rendered at (Ink's default text wrapping
+ * would then spill it onto extra lines). Anything that changed a row's
+ * on-screen height here would desynchronize the viewport and live-window math
+ * that count rows.
+ *
+ * Tones are theme-neutral in measured rows and resolved to theme colors only
+ * here, so a theme change needs no re-measurement. Memoization relies on row
+ * object identity, which the measurement caches keep stable for unchanged rows.
+ */
 import { Box, Text } from "ink";
 import { memo, useEffect } from "react";
 
@@ -9,6 +25,7 @@ import type { TimelineRow, TimelineTone } from "./timelineMeasure.js";
 
 // ─── Row rendering ────────────────────────────────────────────────────────────
 
+/** Map a theme-neutral `TimelineTone` to the active theme's color (undefined = terminal default). */
 export function getToneColor(
   theme: ReturnType<typeof useTheme>,
   tone: TimelineTone | undefined,
@@ -49,6 +66,11 @@ export function getToneColor(
   }
 }
 
+/**
+ * One measured row as one Ink line. Re-renders only when the row object
+ * identity changes. Action rows (key contains `-action-`) additionally emit
+ * flicker/lifecycle traces for the env-gated render debugger.
+ */
 export const TimelineRowView = memo(
   function TimelineRowView({ row }: { row: TimelineRow }) {
     const isActionRow = row.key.includes("-action-");
@@ -100,6 +122,7 @@ export const TimelineRowView = memo(
   (prev, next) => prev.row === next.row,
 );
 
+/** Shallow element-identity comparison of two row arrays. */
 export function rowArraysEqual(left: TimelineRow[], right: TimelineRow[]): boolean {
   if (left === right) return true;
   if (left.length !== right.length) return false;
@@ -109,6 +132,10 @@ export function rowArraysEqual(left: TimelineRow[], right: TimelineRow[]): boole
   return true;
 }
 
+/**
+ * Render a row list (used by `Timeline` for its viewport slice). Skips the
+ * re-render when a freshly sliced array holds the same row objects.
+ */
 export const TimelineRowsView = memo(
   function TimelineRowsView({ rows }: { rows: TimelineRow[] }) {
     return (

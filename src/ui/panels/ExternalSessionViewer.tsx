@@ -1,3 +1,30 @@
+/**
+ * Read-only transcript viewers for the `external-session-viewer` and
+ * `saved-session-viewer` screens.
+ *
+ * `SessionTranscriptViewer` is the shared component: it loads a transcript
+ * asynchronously, shows entries as collapsible sections (prompts, replies and
+ * notes expanded; tool calls folded), supports search, and scrolls by wrapped
+ * row. `ExternalSessionViewer` wraps it for native Claude Code / Codex / Gemini
+ * / Mistral Vibe sessions (with "open natively" and "continue here"), and
+ * `SavedSessionViewer` for an Ubume conversation from another workspace (with
+ * "locate original folder").
+ *
+ * State (local): load state, expanded entry ids, query/search mode, selected
+ * entry, scroll offset, and a wrap cache keyed by entry id + width. All
+ * transcript text is passed through `sanitizeTerminalOutput` before rendering.
+ * Late load results after unmount (or after `loadTranscript` changes) are
+ * ignored. `loadTranscript` should be referentially stable: a new function
+ * triggers a reload.
+ *
+ * Focus: registers the `external-session-viewer` id (shared by both screens)
+ * with `autoFocus`; input is handled only while focused. Keys: Up/k, Down/j
+ * select an entry; PageUp/PageDown scroll a page; Home/End jump; Enter toggles
+ * the selected entry; `e` expands/collapses all tool entries; `/` starts
+ * search; `o` opens natively and `c` continues (when provided); Esc goes back.
+ * Search mode: type to filter, Backspace/Delete erase, Enter keeps the query,
+ * Esc clears it.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -16,6 +43,7 @@ import { inspectionEntries } from "../../session/workbench.js";
 import { usePanelLayout } from "../layout.js";
 import { useTheme } from "../theme.js";
 
+/** Props for the external-session wrapper; callbacks receive the session summary. */
 interface ExternalSessionViewerProps {
   summary: ExternalSessionSummary;
   loadTranscript: () => Promise<ExternalTranscript>;
@@ -25,12 +53,18 @@ interface ExternalSessionViewerProps {
 }
 
 interface SessionTranscriptViewerProps {
+  /** Header info: title, working folder and optional session id. */
   summary: { title: string; cwd: string | null; id?: string };
+  /** Source name shown in the title and the "open in …" hint. */
   label: string;
+  /** Loads the entries (and an optional notice line); keep it stable across renders. */
   loadTranscript: () => Promise<Pick<ExternalTranscript, "entries" | "notice">>;
   onBack: () => void;
+  /** `o` action; the hint is hidden when omitted. */
   onOpenNative?: () => void;
+  /** `c` action; the hint is hidden when omitted. */
   onContinue?: () => void;
+  /** Hint text for the `c` action. */
   continueLabel?: string;
 }
 
@@ -39,6 +73,7 @@ type LoadState =
   | { status: "ready"; transcript: Pick<ExternalTranscript, "entries" | "notice"> }
   | { status: "error"; message: string };
 
+/** One rendered line: an entry header or a wrapped body line of entry index `entry`. */
 interface TranscriptRow {
   entry: number;
   kind: ExternalTranscriptEntryKind;
@@ -46,6 +81,7 @@ interface TranscriptRow {
   text: string;
 }
 
+/** Local `HH:MM` for an entry timestamp, or "" when missing/invalid. */
 function entryTime(timestamp: string | undefined): string {
   if (!timestamp) return "";
   const date = new Date(timestamp);
@@ -54,6 +90,7 @@ function entryTime(timestamp: string | undefined): string {
     : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Sanitize and wrap entry text to `width`, preserving blank lines. */
 function wrapEntryText(text: string, width: number): string[] {
   return sanitizeTerminalOutput(text)
     .split("\n")
@@ -117,6 +154,8 @@ export function SessionTranscriptViewer({
 
   const notice = state.status === "ready" ? state.transcript.notice : undefined;
   const width = Math.max(8, (layout?.availableCols ?? 80) - 4);
+  // Body height: available rows minus title, metadata and footer lines and the
+  // two border rows, minus the notice line when shown.
   const height = Math.max(1, (layout?.availableRows ?? 20) - 5 - (notice ? 1 : 0));
 
   const { rows, headerRows } = useMemo(() => {
@@ -150,12 +189,14 @@ export function SessionTranscriptViewer({
   const start = Math.min(offset, maxOffset);
   const selectedIndex = Math.min(selected, Math.max(0, entries.length - 1));
 
+  // Select an entry and scroll its header into view if needed.
   const select = (index: number) => {
     const next = Math.max(0, Math.min(entries.length - 1, index));
     setSelected(next);
     const header = headerRows[next] ?? 0;
     if (header < start || header >= start + height) setOffset(header);
   };
+  // Scroll to a row (page keys) and select the entry that row belongs to.
   const scrollTo = (row: number) => {
     const next = Math.max(0, Math.min(maxOffset, row));
     setOffset(next);
@@ -311,6 +352,7 @@ export function SessionTranscriptViewer({
   );
 }
 
+/** Viewer for a native external CLI session, labelled with its source CLI. */
 export function ExternalSessionViewer({
   summary,
   loadTranscript,
@@ -330,6 +372,13 @@ export function ExternalSessionViewer({
   );
 }
 
+/**
+ * Viewer for an Ubume conversation saved under another workspace. Builds
+ * entries from the recorded session events when available (kind inferred from
+ * the inspection entry id prefix), otherwise from the plain message list. The
+ * `c` action asks the user to locate the original folder (`onLocateWorkspace`).
+ * Throws (shown as a load error) if the session is not an Ubume conversation.
+ */
 export function SavedSessionViewer({
   session,
   onBack,

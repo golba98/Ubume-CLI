@@ -1,3 +1,13 @@
+/**
+ * React (Ink) card for an assistant answer that has no associated run.
+ *
+ * Part of the React component path: `TurnGroup` renders it only for turns with
+ * an assistant event but no `RunEvent`, and the app itself does not mount
+ * `TurnGroup` in production (the transcript renders measured rows from
+ * `measure/`). The markdown body still goes through `MemoizedRenderMessage`,
+ * so its text rows match the measured markdown rows; the surrounding card,
+ * cursor and status lines are not measured anywhere.
+ */
 import { Box, Text } from "ink";
 import { memo, useDeferredValue, useMemo } from "react";
 import { formatDuration, wrapPlainText } from "../../core/shared/text.js";
@@ -44,6 +54,12 @@ const StreamingCursor = memo(function StreamingCursor() {
   );
 });
 
+/**
+ * Assistant answer inside a `DashCard` titled with the run's model (or
+ * "Codex"), with a status/duration badge, failure/cancel notices and a
+ * streaming cursor. `turnIndex`, `streamingPreviewRows` and `streamingMode`
+ * are accepted but unused.
+ */
 export function AgentBlock({
   cols,
   assistant,
@@ -60,6 +76,8 @@ export function AgentBlock({
   const renderContent = streaming ? content : deferredContent;
   const contentWidth = Math.max(1, getUsableShellWidth(cols, 4));
 
+  // The cacheKey lets parseMarkdown reuse the already-parsed prefix of an
+  // append-only stream instead of re-parsing the whole answer per delta.
   const pipelineState = useMemo(() => {
     const formatted = parseMarkdown(renderContent, {
       streaming,

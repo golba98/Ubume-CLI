@@ -1,3 +1,12 @@
+/**
+ * Composer view model: the props contract (`BottomComposerProps`), persona
+ * selection from the run state, slash-command suggestion state, status-line text,
+ * the context meter, and row measurement (`measureBottomComposerRows`), which
+ * `src/app` uses to budget terminal rows before rendering.
+ *
+ * Pure functions only; the measurement must stay in step with what
+ * `BottomComposer.tsx` renders, or the transcript and composer will overlap.
+ */
 import type { ModelSpec } from "../../../core/providerRuntime/contextMetadata.js";
 import { formatContextCompact } from "../../../core/providerRuntime/contextMetadata.js";
 

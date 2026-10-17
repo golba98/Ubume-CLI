@@ -1,7 +1,19 @@
+/**
+ * Plan review prompt shown in place of the composer when a plan is ready:
+ * "Implement in Auto" or "Redo plan", chosen with ←/→ (or ↑/↓, Tab) and Enter, or
+ * the I / R (U) hotkeys. Esc cancels the review.
+ *
+ * It takes the composer's focus id, because it occupies the composer's slot, and
+ * re-claims focus whenever Ink blurs it. Esc is delayed by `ESCAPE_SETTLE_MS` so
+ * that an arrow key split across two stdin reads moves the selection instead of
+ * cancelling. `measurePlanActionPickerRows` must match the rendered height (1
+ * row, or 3 below `VERTICAL_LAYOUT_BREAKPOINT` columns).
+ */
 import { Box, Text, useFocus, useFocusManager, useInput, useStdin } from "ink";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FOCUS_IDS } from "../input/focus.js";
 import { type ArrowDirection, getArrowDirection } from "../input/rawArrowKeys.js";
+import { isMouseReportSequence, useRawStdinSignals } from "../input/rawStdinSignals.js";
 import { useTheme } from "../theme.js";
 
 export type PlanActionValue = "implement" | "revise" | "cancel";
@@ -18,6 +30,8 @@ const VERTICAL_LAYOUT_BREAKPOINT = 56;
  */
 const ESCAPE_SETTLE_MS = 60;
 const RAW_BUFFER_IDLE_MS = 120;
+/** Swallow the printable fragments Ink emits for a terminal mouse report. */
+const RAW_SIGNALS = { mouse: { matches: isMouseReportSequence, holdMs: 32 } } as const;
 
 interface PlanActionPickerProps {
   cols?: number;
@@ -35,8 +49,6 @@ export function PlanActionPicker({ cols = 80, onSelect, onCancel }: PlanActionPi
   const { focus } = useFocusManager();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const { stdin } = useStdin();
-  const mouseEventTickRef = useRef(false);
-  const mouseEventTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rawBufferRef = useRef("");
   const rawBufferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingEscapeRef = useRef(false);
@@ -65,47 +77,43 @@ export function PlanActionPicker({ cols = 80, onSelect, onCancel }: PlanActionPi
     if (!isFocused) focus(FOCUS_IDS.composer);
   }, [focus, isFocused]);
 
-  useEffect(() => {
-    const handleRawInput = (chunk: Buffer | string) => {
-      const raw = typeof chunk === "string" ? chunk : chunk.toString();
-      if (/\u001b\[<\d+;\d+;\d+[Mm]/.test(raw) || /\u001b\[M/.test(raw)) {
-        rawBufferRef.current = "";
-        mouseEventTickRef.current = true;
-        if (mouseEventTimeoutRef.current) clearTimeout(mouseEventTimeoutRef.current);
-        mouseEventTimeoutRef.current = setTimeout(() => {
-          mouseEventTickRef.current = false;
-        }, 32);
-        return;
-      }
-
-      rawBufferRef.current = `${rawBufferRef.current}${raw}`.slice(-16);
-      if (rawBufferTimeoutRef.current) clearTimeout(rawBufferTimeoutRef.current);
-      rawBufferTimeoutRef.current = setTimeout(() => {
-        rawBufferRef.current = "";
-      }, RAW_BUFFER_IDLE_MS);
-
-      const direction = getArrowDirection(rawBufferRef.current);
-      if (!direction) return;
+  // Ink may deliver an arrow key split across two stdin reads as a bare ESC (which
+  // arms a cancel, see ESCAPE_SETTLE_MS) followed by printable "[B". Reassemble the
+  // raw bytes here and apply the movement while the cancel is still pending.
+  const handleRawChunk = (raw: string) => {
+    if (isMouseReportSequence(raw)) {
       rawBufferRef.current = "";
-      // Ink already delivered the leading ESC as a cancel-in-waiting, so it will
-      // never surface this chunk as an arrow key — apply the movement here.
-      if (pendingEscapeRef.current) {
-        clearPendingEscape();
-        moveSelection(direction);
-      }
-    };
-    stdin.on("data", handleRawInput);
+      return;
+    }
+
+    rawBufferRef.current = `${rawBufferRef.current}${raw}`.slice(-16);
+    if (rawBufferTimeoutRef.current) clearTimeout(rawBufferTimeoutRef.current);
+    rawBufferTimeoutRef.current = setTimeout(() => {
+      rawBufferRef.current = "";
+    }, RAW_BUFFER_IDLE_MS);
+
+    const direction = getArrowDirection(rawBufferRef.current);
+    if (!direction) return;
+    rawBufferRef.current = "";
+    // Ink already delivered the leading ESC as a cancel-in-waiting, so it will
+    // never surface this chunk as an arrow key — apply the movement here.
+    if (pendingEscapeRef.current) {
+      clearPendingEscape();
+      moveSelection(direction);
+    }
+  };
+  const rawSignals = useRawStdinSignals(stdin, RAW_SIGNALS, handleRawChunk);
+
+  useEffect(() => {
     return () => {
-      stdin.off("data", handleRawInput);
-      if (mouseEventTimeoutRef.current) clearTimeout(mouseEventTimeoutRef.current);
       if (rawBufferTimeoutRef.current) clearTimeout(rawBufferTimeoutRef.current);
       if (escapeTimeoutRef.current) clearTimeout(escapeTimeoutRef.current);
     };
-  }, [clearPendingEscape, moveSelection, stdin]);
+  }, []);
 
   useInput(
     (input, key) => {
-      if (mouseEventTickRef.current) return;
+      if (rawSignals.isActive("mouse")) return;
 
       if (key.escape) {
         pendingEscapeRef.current = true;

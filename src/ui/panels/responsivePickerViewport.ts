@@ -1,11 +1,25 @@
+/**
+ * Pure scroll-window math shared by the list pickers (SelectionPanel,
+ * ResumePicker, ProviderPicker, ModelPickerScreen).
+ *
+ * Callers keep the returned `start` as their scroll offset and pass it back on
+ * the next render. All inputs are sanitized (non-finite values become 0,
+ * fractions are floored), so a transient bad layout measurement cannot produce
+ * a negative or NaN window. No state, no side effects.
+ */
 interface ResponsivePickerViewportOptions {
   itemCount: number;
+  /** Desired selection; clamped into range and echoed back as `selectedIndex`. */
   selectedIndex: number;
+  /** Rows the picker may use in total, including its chrome. */
   availableRows: number;
+  /** Rows taken by title/footer/etc.; the list gets the rest (at least 1 row when non-empty). */
   chromeRows: number;
+  /** Previous `start`, so the window only moves when the selection leaves it. */
   scrollOffset?: number;
 }
 
+/** Visible window `[start, end)` plus overflow counts for "N more" indicators. */
 interface ResponsivePickerViewport {
   start: number;
   end: number;

@@ -1,3 +1,12 @@
+/**
+ * Row builders for non-stream content: the verbose file-scan card, the
+ * action-required question card, standalone system/error/shell events, and
+ * the startup intro (logo + metadata).
+ *
+ * All output goes through `createRow`, so each row is one terminal line padded
+ * to `width`. Callers cache results (`stableSnapshot.ts`, `getStaticRows`);
+ * these functions are pure apart from the shared row interning.
+ */
 import { clampVisualText, getTextWidth, wrapPlainText } from "../../../core/shared/text.js";
 import { sanitizeTerminalOutput } from "../../../core/terminal/terminalSanitize.js";
 import {
@@ -24,6 +33,7 @@ import type {
 
 // ─── Agent & action builders ──────────────────────────────────────────────────
 
+/** Verbose-mode "Scanning workspace ..." card listing recently touched files. */
 export function buildFileScanRows(item: TurnRenderItem, width: number): TimelineRow[] {
   const run = item.item.run!;
   const { visible, hiddenCount } = selectVisibleRunActivity(run);
@@ -46,6 +56,10 @@ export function buildFileScanRows(item: TurnRenderItem, width: number): Timeline
   });
 }
 
+/**
+ * Square-bordered "[N] ACTION REQUIRED" card for the turn's pending question,
+ * or `[]` when there is none. These rows carry no `frame` metadata.
+ */
 export function buildActionRequiredRows(item: TurnRenderItem, width: number): TimelineRow[] {
   const question = item.renderState.question;
   if (!question) return [];
@@ -122,6 +136,11 @@ export function buildActionRequiredRows(item: TurnRenderItem, width: number): Ti
 
 // ─── Standalone event & intro rows ───────────────────────────────────────────
 
+/**
+ * Rows for a standalone timeline event: shell runs (heading, summary, and a
+ * stderr excerpt on failure), errors, and system notices (title + full
+ * multi-line content, indented by two columns).
+ */
 export function buildStandaloneEventRows(
   item: Extract<RenderTimelineItem, { type: "event" }>,
   width: number,
@@ -239,6 +258,12 @@ export function buildStandaloneEventRows(
   return rows;
 }
 
+/**
+ * Startup header rows. "tiny" mode prints only text lines; otherwise a logo
+ * (large mode: best fitting variant; compact mode: the one-line mark) is laid
+ * out beside the metadata when it fits, or stacked above it, followed by one
+ * blank gap row.
+ */
 export function buildIntroRows(
   item: Extract<RenderTimelineItem, { type: "intro" }>,
   width: number,
@@ -372,6 +397,7 @@ export function buildIntroRows(
   return rows;
 }
 
+/** Last path segment of the workspace label (handles both `/` and `\`). */
 function getWorkspaceDisplayName(workspaceLabel: string): string {
   const sanitized = sanitizeTerminalOutput(workspaceLabel).trim();
   if (!sanitized) return "";

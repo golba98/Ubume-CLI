@@ -1,28 +1,48 @@
+/**
+ * Model picker overlay: lists the active provider's models, lets the user choose a
+ * model and a reasoning level (discrete levels, a token budget, or Gemini effort
+ * variants), and reports the choice through `onSelect(modelId, reasoning)`.
+ *
+ * Rendering and key handling live here; selection rules, variant grouping and the
+ * responsive window are pure functions in `modelPickerModel.ts`. The draft is held
+ * in a reducer so it can be re-synchronised safely when the model list or active
+ * route changes while the picker is open (see `modelPickerSelectionReducer`).
+ *
+ * Keys: ↑/↓ or j/k move, Home/End/PgUp/PgDn jump, ←/→ or h/l change reasoning,
+ * A/D set an automatic/disabled thinking budget, R refreshes, Enter selects, Esc or
+ * Ctrl+C/Ctrl+Q cancels. Enter on an empty list cancels with `empty-selection`.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { formatReasoningLabel } from "../../config/settings.js";
-import {
-  type CodexModelCapability,
-  normalizeReasoningForModelCapabilities,
-  type ReasoningEffortCapability,
+import type {
+  CodexModelCapability,
+  ReasoningEffortCapability,
 } from "../../core/models/codexModelCapabilities.js";
-import { reconcileReasoning, stepReasoningBudget } from "../../core/models/reasoningControl.js";
 import { traceInputDebug } from "../../core/perf/debugLog.js";
 import { clampVisualText } from "../../core/shared/text.js";
 import { FOCUS_IDS } from "../input/focus.js";
 import {
   type ActivePanelLayout,
-  getAvailableRowsForPanel,
-  getShellWidth,
   type Layout,
   type PanelLayout,
-  useActivePanelLayout,
   useAppLayoutBudget,
-  usePanelAvailableRows,
-  usePanelLayout,
+  usePickerPanelGeometry,
 } from "../layout.js";
 import { useTheme } from "../theme.js";
-import { calculateResponsivePickerViewport } from "./responsivePickerViewport.js";
+import {
+  calculateModelPickerWindow,
+  collapseGeminiEffortVariants,
+  getCompactModelName,
+  getModelName,
+  getModelSourceMarker,
+  getReasoningLevels,
+  initModelPickerSelection,
+  isModelIdentifiedBy,
+  modelPickerSelectionReducer,
+  normalizeDraftReasoning,
+  resolveVariantModelId,
+} from "./modelPickerModel.js";
 
 // ─── Types & helpers ─────────────────────────────────────────────────────────
 
@@ -46,221 +66,6 @@ interface ModelPickerScreenProps {
   onRefresh?: () => void;
   refreshMessage?: string;
   onCancel: (reason?: ModelPickerCloseReason) => void;
-}
-
-function getInitialCursor(models: readonly CodexModelCapability[], currentModel: string): number {
-  const index = models.findIndex(
-    (model) =>
-      model.model === currentModel ||
-      model.id === currentModel ||
-      getVariantModelIds(model).includes(currentModel),
-  );
-  return Math.max(0, index);
-}
-
-function getModelName(model: CodexModelCapability): string {
-  const raw = model.raw as { mistralExecutionClass?: unknown } | null;
-  const suffix =
-    raw?.mistralExecutionClass === "native-vibe"
-      ? " · Native Vibe"
-      : raw?.mistralExecutionClass === "custom-vibe"
-        ? " · Custom via Vibe (request unverified)"
-        : raw?.mistralExecutionClass === "local-vibe"
-          ? " · Local via Vibe"
-          : raw?.mistralExecutionClass === "unsupported"
-            ? " · Unsupported"
-            : "";
-  return `${model.label}${suffix}`;
-}
-
-function getReasoningLevels(
-  model: CodexModelCapability | undefined,
-): readonly ReasoningEffortCapability[] {
-  return model?.supportedReasoningLevels ?? [];
-}
-
-const GEMINI_EFFORT_IDS = new Set(["low", "medium", "high", "xhigh", "max"]);
-
-function collapseGeminiEffortVariants(
-  models: readonly CodexModelCapability[],
-): readonly CodexModelCapability[] {
-  const groups = new Map<string, CodexModelCapability>();
-  const variantIds = new Map<string, string[]>();
-  const variantLevels = new Map<string, Set<string>>();
-
-  for (const model of models) {
-    const match = model.model.match(/^(.*?)-(low|medium|high|xhigh|max)$/i);
-    if (
-      !match ||
-      !GEMINI_EFFORT_IDS.has(match[2]!.toLowerCase()) ||
-      model.reasoningControl?.kind !== "levels" ||
-      model.reasoningControl.transport !== "variant"
-    ) {
-      groups.set(model.id, model);
-      continue;
-    }
-
-    const familyId = match[1]!;
-    const existing = groups.get(familyId);
-    const level = match[2]!.toLowerCase();
-    const ids = variantIds.get(familyId) ?? [];
-    ids.push(model.model);
-    variantIds.set(familyId, ids);
-    const levels = variantLevels.get(familyId) ?? new Set<string>();
-    levels.add(level);
-    variantLevels.set(familyId, levels);
-
-    const label = model.label.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, "");
-    if (!existing) {
-      groups.set(familyId, {
-        ...model,
-        id: familyId,
-        model: familyId,
-        label,
-        description: `Select the intelligence level for ${label}.`,
-        defaultReasoningLevel: level,
-        supportedReasoningLevels: [
-          { id: level, label: formatReasoningLabel(level), description: null },
-        ],
-        reasoningLevelCount: 1,
-        reasoningControl: {
-          kind: "levels",
-          transport: "variant",
-          default: level,
-          levels: [{ id: level, label: formatReasoningLabel(level), description: null }],
-        },
-        raw: { ...(model.raw && typeof model.raw === "object" ? model.raw : {}), variantIds: ids },
-      });
-    } else {
-      const orderedLevels = ["low", "medium", "high", "xhigh", "max"].filter((id) =>
-        levels.has(id),
-      );
-      groups.set(familyId, {
-        ...existing,
-        supportedReasoningLevels: orderedLevels.map((id) => ({
-          id,
-          label: formatReasoningLabel(id),
-          description: null,
-        })),
-        reasoningLevelCount: orderedLevels.length,
-        reasoningControl: {
-          kind: "levels",
-          transport: "variant",
-          default: existing.defaultReasoningLevel ?? orderedLevels[0]!,
-          levels: orderedLevels.map((id) => ({
-            id,
-            label: formatReasoningLabel(id),
-            description: null,
-          })),
-        },
-        raw: {
-          ...(existing.raw && typeof existing.raw === "object" ? existing.raw : {}),
-          variantIds: ids,
-        },
-      });
-    }
-  }
-
-  return [...groups.values()].map((model) => {
-    const ids = variantIds.get(model.model);
-    if (!ids) return model;
-    return {
-      ...model,
-      raw: { ...(model.raw && typeof model.raw === "object" ? model.raw : {}), variantIds: ids },
-    };
-  });
-}
-
-function getVariantModelIds(model: CodexModelCapability): readonly string[] {
-  const raw = model.raw;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
-  const metadata = raw as { variantIds?: unknown; raw?: { variantIds?: unknown } | null };
-  const ids = metadata.variantIds ?? metadata.raw?.variantIds;
-  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
-}
-
-function getVariantReasoning(
-  model: CodexModelCapability | undefined,
-  modelId: string,
-): string | null {
-  if (model?.reasoningControl?.kind !== "levels" || model.reasoningControl.transport !== "variant")
-    return null;
-  const variant = getVariantModelIds(model).find((id) => id === modelId);
-  const match = variant?.match(/-(low|medium|high|xhigh|max)$/i);
-  return match?.[1]?.toLowerCase() ?? null;
-}
-
-function resolveVariantModelId(
-  model: CodexModelCapability,
-  reasoning: string,
-  currentModel: string,
-): string {
-  const variantIds = getVariantModelIds(model);
-  if (model.reasoningControl?.kind !== "levels" || model.reasoningControl.transport !== "variant") {
-    return variantIds.includes(currentModel) ? currentModel : model.model;
-  }
-  return variantIds.find((id) => id.endsWith(`-${reasoning.toLowerCase()}`)) ?? model.model;
-}
-
-function getModelSourceMarker(
-  models: readonly CodexModelCapability[],
-  activeProviderLabel: string,
-): string | null {
-  if (activeProviderLabel !== "Claude" || models.length === 0) return null;
-  const raw = models[0]?.raw as { source?: string; discoveryKind?: string } | null | undefined;
-  const source = raw?.source;
-  const sourceLabel =
-    source === "claude-code-package"
-      ? "installed package metadata"
-      : source === "claude-code-command"
-        ? "Claude Code command"
-        : source === "claude-code-cache"
-          ? "Claude Code cache"
-          : source === "claude-code-config" || source === "settings" || source === "config"
-            ? "Claude settings"
-            : "Claude Code";
-  if (
-    source === "claude-code-package" ||
-    source === "claude-code-command" ||
-    source === "claude-code-cache" ||
-    source === "claude-code-config" ||
-    source === "claude-code" ||
-    source === "discovered"
-  ) {
-    return raw?.discoveryKind === "aliases"
-      ? `Claude Code aliases resolved from ${sourceLabel}`
-      : `Claude Code models discovered from ${sourceLabel}`;
-  }
-  if (source === "settings" || source === "config")
-    return "Claude Code models discovered from Claude settings";
-  if (source === "fallback") return "Claude Code discovery failed; using fallback aliases";
-  return null;
-}
-
-function normalizeDraftReasoning(
-  model: CodexModelCapability | undefined,
-  reasoning: string,
-): string {
-  if (!model) return reasoning;
-  if (model.reasoningControl) return reconcileReasoning(model.reasoningControl, reasoning);
-  return normalizeReasoningForModelCapabilities(model.model, reasoning, {
-    status: "ready",
-    source: model.source,
-    models: [model],
-    discoveredAt: Date.now(),
-    executable: null,
-    error: null,
-  });
-}
-
-function getReasoningIndex(
-  levels: readonly ReasoningEffortCapability[],
-  reasoning: string,
-): number {
-  return Math.max(
-    0,
-    levels.findIndex((level) => level.id === reasoning),
-  );
 }
 
 function describeInputKey(
@@ -317,16 +122,14 @@ export function ModelPickerScreen({
   }, [baseModels, isAntigravity]);
 
   const { isFocused } = useFocus({ id: FOCUS_IDS.modelPicker, autoFocus: true });
-  const initialModelIndex = getInitialCursor(models, currentModel);
-  const [draftSelectedModel, setDraftSelectedModel] = useState(initialModelIndex);
-  const selectedIdentityRef = useRef(models[initialModelIndex]?.model);
-  const previousActiveSelection = useRef({ currentModel, currentReasoning });
-  const [draftReasoning, setDraftReasoning] = useState(() =>
-    normalizeDraftReasoning(
-      models[initialModelIndex],
-      getVariantReasoning(models[initialModelIndex], currentModel) ?? currentReasoning,
-    ),
+  const [selection, dispatch] = useReducer(
+    modelPickerSelectionReducer,
+    { models, currentModel, currentReasoning },
+    initModelPickerSelection,
   );
+  const draftSelectedModel = selection.cursor;
+  const draftReasoning = selection.reasoning;
+  const previousActiveSelection = useRef({ currentModel, currentReasoning });
   const [scrollOffset, setScrollOffset] = useState(0);
 
   const selectedModel = models[draftSelectedModel];
@@ -346,77 +149,15 @@ export function ModelPickerScreen({
     };
   }, []);
 
+  // Keep the draft valid while the picker is open: model discovery can refresh or
+  // shrink the list, and another surface can change the active route.
   useEffect(() => {
     const activeChanged =
       previousActiveSelection.current.currentModel !== currentModel ||
       previousActiveSelection.current.currentReasoning !== currentReasoning;
     previousActiveSelection.current = { currentModel, currentReasoning };
-    if (models.length === 0) {
-      setDraftSelectedModel(0);
-      setDraftReasoning(currentReasoning);
-      return;
-    }
-
-    setDraftSelectedModel((current) => {
-      const identityIndex = models.findIndex(
-        (item) =>
-          item.model === selectedIdentityRef.current ||
-          getVariantModelIds(item).includes(selectedIdentityRef.current ?? ""),
-      );
-      const nextCursor =
-        identityIndex >= 0 ? identityIndex : Math.min(Math.max(0, current), models.length - 1);
-      selectedIdentityRef.current = models[nextCursor]?.model;
-      const nextModel = models[nextCursor];
-      setDraftReasoning((reasoning) =>
-        normalizeDraftReasoning(
-          nextModel,
-          activeChanged
-            ? (getVariantReasoning(nextModel, currentModel) ?? currentReasoning)
-            : reasoning,
-        ),
-      );
-      return nextCursor;
-    });
+    dispatch({ type: "sync", models, currentModel, currentReasoning, activeChanged });
   }, [currentModel, currentReasoning, models]);
-
-  const moveModel = (direction: -1 | 1) => {
-    setDraftSelectedModel((current) => {
-      const next = Math.max(0, Math.min(models.length - 1, current + direction));
-      const nextModel = models[next];
-      selectedIdentityRef.current = nextModel?.model;
-      setDraftReasoning((reasoning) =>
-        normalizeDraftReasoning(nextModel, nextModel?.reasoningPreference ?? reasoning),
-      );
-      return next;
-    });
-  };
-
-  const selectModelIndex = (index: number) => {
-    setDraftSelectedModel(() => {
-      const next = Math.max(0, Math.min(models.length - 1, index));
-      selectedIdentityRef.current = models[next]?.model;
-      setDraftReasoning((reasoning) =>
-        normalizeDraftReasoning(models[next], models[next]?.reasoningPreference ?? reasoning),
-      );
-      return next;
-    });
-  };
-
-  const moveReasoning = (direction: -1 | 1) => {
-    const control = models[draftSelectedModel]?.reasoningControl;
-    if (control?.kind === "budget") {
-      setDraftReasoning((current) => stepReasoningBudget(control, current, direction));
-      return;
-    }
-    const levels = getReasoningLevels(models[draftSelectedModel]);
-    if (levels.length <= 1) return;
-
-    setDraftReasoning((current) => {
-      const currentIndex = getReasoningIndex(levels, current);
-      const nextIndex = Math.max(0, Math.min(levels.length - 1, currentIndex + direction));
-      return levels[nextIndex]?.id ?? current;
-    });
-  };
 
   useInput(
     (input, key) => {
@@ -426,11 +167,11 @@ export function ModelPickerScreen({
       }
       const control = selectedModel?.reasoningControl;
       if (control?.kind === "budget" && input === "a" && control.auto) {
-        setDraftReasoning("auto");
+        dispatch({ type: "setReasoning", reasoning: "auto" });
         return;
       }
       if (control?.kind === "budget" && input === "d" && control.canDisable) {
-        setDraftReasoning("budget:0");
+        dispatch({ type: "setReasoning", reasoning: "budget:0" });
         return;
       }
       traceInputDebug("model_picker_panel_input", {
@@ -443,12 +184,7 @@ export function ModelPickerScreen({
         draftReasoning,
       });
 
-      if (key.ctrl && (input === "c" || input === "q")) {
-        onCancel("escape");
-        return;
-      }
-
-      if (key.escape) {
+      if ((key.ctrl && (input === "c" || input === "q")) || key.escape) {
         onCancel("escape");
         return;
       }
@@ -467,85 +203,34 @@ export function ModelPickerScreen({
         return;
       }
 
-      if (key.upArrow || input === "k") {
-        moveModel(-1);
-        return;
-      }
-
-      if (key.downArrow || input === "j") {
-        moveModel(1);
-        return;
-      }
-
-      if (key.home) {
-        selectModelIndex(0);
-        return;
-      }
-
-      if (key.end) {
-        selectModelIndex(models.length - 1);
-        return;
-      }
-
-      if (key.pageUp) {
-        selectModelIndex(draftSelectedModel - Math.max(1, windowResult.capacity));
-        return;
-      }
-
-      if (key.pageDown) {
-        selectModelIndex(draftSelectedModel + Math.max(1, windowResult.capacity));
-        return;
-      }
-
-      if (key.leftArrow || input === "h") {
-        moveReasoning(-1);
-        return;
-      }
-
-      if (key.rightArrow || input === "l") {
-        moveReasoning(1);
-      }
+      const page = Math.max(1, windowResult.capacity);
+      if (key.upArrow || input === "k") dispatch({ type: "move", models, direction: -1 });
+      else if (key.downArrow || input === "j") dispatch({ type: "move", models, direction: 1 });
+      else if (key.home) dispatch({ type: "select", models, index: 0 });
+      else if (key.end) dispatch({ type: "select", models, index: models.length - 1 });
+      else if (key.pageUp) dispatch({ type: "select", models, index: draftSelectedModel - page });
+      else if (key.pageDown) dispatch({ type: "select", models, index: draftSelectedModel + page });
+      else if (key.leftArrow || input === "h")
+        dispatch({ type: "stepReasoning", models, direction: -1 });
+      else if (key.rightArrow || input === "l")
+        dispatch({ type: "stepReasoning", models, direction: 1 });
     },
     { isActive: isFocused },
   );
 
-  const contextLayout = useActivePanelLayout();
-  const activeLayout = (activePanelLayout ?? contextLayout) as ActivePanelLayout | undefined;
-
-  const shellWidth = getShellWidth(layout.cols);
-  const hookPanelLayout = usePanelLayout();
-  const hookAvailableRows = usePanelAvailableRows();
-  const resolvedPanelLayout = useMemo<PanelLayout>(() => {
-    if (panelLayout) return panelLayout;
-    if (hookPanelLayout) return hookPanelLayout;
-
-    const mode = layout.mode;
-    const resolvedRows = activeLayout
-      ? activeLayout.availableRows
-      : getAvailableRowsForPanel(layout, propAvailableRows ?? hookAvailableRows);
-    const resolvedCols = activeLayout ? activeLayout.availableCols : Math.max(20, shellWidth - 4);
-
-    return {
-      mode,
-      availableRows: resolvedRows,
-      availableCols: resolvedCols,
-    };
-  }, [
-    panelLayout,
-    hookPanelLayout,
+  const {
+    panelLayout: resolvedPanelLayout,
+    panelWidth,
+    innerWidth,
+  } = usePickerPanelGeometry({
     layout,
-    activeLayout,
-    propAvailableRows,
-    shellWidth,
-    hookAvailableRows,
-  ]);
-
-  const panelWidth = activeLayout
-    ? activeLayout.width
-    : Math.max(38, Math.min(layout.contentWidth ?? shellWidth, shellWidth - 2));
-
+    panelLayout,
+    activePanelLayout,
+    availableRows: propAvailableRows,
+    minPanelWidth: 38,
+    minAvailableCols: 20,
+  });
   const availableRows = resolvedPanelLayout.availableRows;
-  const innerWidth = Math.max(1, Math.min(resolvedPanelLayout.availableCols, panelWidth - 4));
   const help =
     resolvedPanelLayout.mode === "compact"
       ? "↑↓ model · ←→ effort · R refresh · Enter · Esc"
@@ -556,133 +241,32 @@ export function ModelPickerScreen({
   const sourceMarker = getModelSourceMarker(models, activeProviderLabel);
 
   const appLayoutBudget = useAppLayoutBudget();
-
-  const activeModelIndex = models.findIndex(
-    (model) =>
-      model.model === currentModel ||
-      model.id === currentModel ||
-      getVariantModelIds(model).includes(currentModel),
-  );
+  const activeModelIndex = models.findIndex((model) => isModelIdentifiedBy(model, currentModel));
   const hasSourceMarker = !!sourceMarker;
 
   // ─── Layout & Windowing ───────────────────────────────────────────────────
 
-  const windowResult = useMemo(() => {
-    const allowFull = appLayoutBudget?.showPanelColumnHeaders ?? true;
-
-    // availableRows is already the shell's border-safe panel body. Only rows
-    // rendered inside that body belong in this calculation.
-    const fullChrome = 5 + (hasSourceMarker ? 1 : 0);
-    if (allowFull && models.length + fullChrome <= availableRows) {
-      return {
-        ...calculateResponsivePickerViewport({
-          itemCount: models.length,
-          selectedIndex: draftSelectedModel,
-          availableRows,
-          chromeRows: fullChrome,
-          scrollOffset,
-        }),
-        mode: "full" as const,
-        showCurrentLine: false,
-        showRouteText: true,
-        showReasoningText: true,
-        showSourceMarker: hasSourceMarker,
-      };
-    }
-
-    // Try fitting without source marker
-    if (allowFull && models.length + 5 <= availableRows) {
-      return {
-        ...calculateResponsivePickerViewport({
-          itemCount: models.length,
-          selectedIndex: draftSelectedModel,
-          availableRows,
-          chromeRows: 3,
-          scrollOffset,
-        }),
-        mode: "full" as const,
-        showCurrentLine: false,
-        showRouteText: true,
-        showReasoningText: true,
-        showSourceMarker: false,
-      };
-    }
-
-    // Try compact with the dedicated intelligence control
-    if (models.length + 4 <= availableRows) {
-      return {
-        ...calculateResponsivePickerViewport({
-          itemCount: models.length,
-          selectedIndex: draftSelectedModel,
-          availableRows,
-          chromeRows: 2,
-          scrollOffset,
-        }),
-        mode: "compact" as const,
-        showCurrentLine: false,
-        showRouteText: false,
-        showReasoningText: true,
-        showSourceMarker: false,
-      };
-    }
-
-    // Try minimal compact
-    if (models.length + 2 <= availableRows) {
-      return {
-        ...calculateResponsivePickerViewport({
-          itemCount: models.length,
-          selectedIndex: draftSelectedModel,
-          availableRows,
-          chromeRows: 1,
-          scrollOffset,
-        }),
-        mode: "compact" as const,
-        showCurrentLine: false,
-        showRouteText: false,
-        showReasoningText: false,
-        showSourceMarker: false,
-      };
-    }
-
-    // Windowed mode
-    let window = calculateResponsivePickerViewport({
-      itemCount: models.length,
-      selectedIndex: draftSelectedModel,
-      availableRows,
-      chromeRows: 1,
-      scrollOffset,
-    });
-    let showCurrentLine =
-      activeModelIndex >= 0 && (activeModelIndex < window.start || activeModelIndex >= window.end);
-    if (showCurrentLine) {
-      window = calculateResponsivePickerViewport({
+  const windowResult = useMemo(
+    () =>
+      calculateModelPickerWindow({
         itemCount: models.length,
         selectedIndex: draftSelectedModel,
         availableRows,
-        chromeRows: 2,
         scrollOffset,
-      });
-      showCurrentLine = activeModelIndex < window.start || activeModelIndex >= window.end;
-    }
-
-    return {
-      ...window,
-      mode: "windowed" as const,
-      showCurrentLine,
-      showRouteText: false,
-      showReasoningText: false,
-      showSourceMarker: false,
-    };
-  }, [
-    models.length,
-    draftSelectedModel,
-    availableRows,
-    hasSourceMarker,
-    appLayoutBudget?.showPanelColumnHeaders,
-    scrollOffset,
-    activeModelIndex,
-  ]);
-
+        hasSourceMarker,
+        allowFull: appLayoutBudget?.showPanelColumnHeaders ?? true,
+        activeModelIndex,
+      }),
+    [
+      models.length,
+      draftSelectedModel,
+      availableRows,
+      hasSourceMarker,
+      appLayoutBudget?.showPanelColumnHeaders,
+      scrollOffset,
+      activeModelIndex,
+    ],
+  );
   useEffect(() => {
     setScrollOffset(windowResult.start);
   }, [windowResult.start]);
@@ -833,10 +417,7 @@ function ModelPickerRow({
 }) {
   const theme = useTheme();
 
-  const isCurrent =
-    model.model === currentModel ||
-    model.id === currentModel ||
-    getVariantModelIds(model).includes(currentModel);
+  const isCurrent = isModelIdentifiedBy(model, currentModel);
 
   const markerWidth = 2;
   const checkWidth = 2;
@@ -867,21 +448,6 @@ function ModelPickerRow({
       </Box>
     </Box>
   );
-}
-
-function getCompactModelName(model: CodexModelCapability): string {
-  const raw = model.raw as { mistralExecutionClass?: unknown } | null;
-  const suffix =
-    raw?.mistralExecutionClass === "native-vibe"
-      ? " · Vibe"
-      : raw?.mistralExecutionClass === "custom-vibe"
-        ? " · Custom"
-        : raw?.mistralExecutionClass === "local-vibe"
-          ? " · Local"
-          : raw?.mistralExecutionClass === "unsupported"
-            ? " · Unsupported"
-            : "";
-  return `${model.label || model.model}${suffix}`;
 }
 
 function IntelligenceSlider({

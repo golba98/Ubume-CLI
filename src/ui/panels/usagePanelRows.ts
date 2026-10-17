@@ -1,3 +1,14 @@
+/**
+ * Pure row builders and formatters for `UsagePanel`: turns a `UsageViewState`
+ * (from `core/usage/usageService.ts`) into width-bounded text rows with a
+ * semantic tone, plus the pinned footer.
+ *
+ * Every row is clamped to the given width in terminal cells, so the panel can
+ * render each as a single truncated `<Text>` line and scroll by row index.
+ * Time-dependent output takes `now` (and an optional IANA `timeZone`) as
+ * inputs, keeping the module deterministic for tests. No state, no side
+ * effects.
+ */
 import { clampVisualText, getTextWidth, wrapPlainText } from "../../core/shared/text.js";
 import type {
   ProviderUsageSnapshot,
@@ -7,8 +18,10 @@ import type {
 } from "../../core/usage/types.js";
 import type { UsageViewState } from "../../core/usage/usageService.js";
 
+/** Semantic color for a row; mapped to theme colors by the panel. */
 export type UsageRowTone = "text" | "muted" | "dim" | "accent" | "success" | "warning" | "error";
 
+/** One rendered line. `key` is stable within a single build (sequence-based). */
 export interface UsageRow {
   key: string;
   text: string;
@@ -37,12 +50,14 @@ export function formatPercent(value: number | undefined): string {
   return `${Math.round(value)}%`;
 }
 
+/** Fixed-width bar of filled/empty block cells for a 0–100 percentage (at least 1 cell). */
 export function renderUsageBar(usedPercent: number, width: number): string {
   const cells = Math.max(1, width);
   const filled = Math.min(cells, Math.max(0, Math.round((usedPercent / 100) * cells)));
   return BAR_FILLED.repeat(filled) + BAR_EMPTY.repeat(cells - filled);
 }
 
+/** Compact duration rounded to minutes: `<1m`, `42m`, `3h 5m`, `2d 4h`. Negative input counts as 0. */
 export function formatDurationShort(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000));
   if (minutes < 1) return "<1m";
@@ -53,6 +68,10 @@ export function formatDurationShort(ms: number): string {
   return `${days}d ${hours % 24}h`;
 }
 
+/**
+ * Absolute time label: `HH:MM` for the same calendar day, `Wed HH:MM` within
+ * six days, otherwise `Mar 4 HH:MM`. Same-day is compared in `timeZone`.
+ */
 function formatClock(ms: number, now: number, timeZone?: string): string {
   const date = new Date(ms);
   const sameDay =
@@ -72,6 +91,7 @@ function formatClock(ms: number, now: number, timeZone?: string): string {
   return `${day} ${time}`;
 }
 
+/** "Resets in 3h 5m (14:15)", "Reset due now" once past, or undefined when unknown. */
 export function formatResetTime(
   resetsAt: number | undefined,
   now: number,
@@ -82,6 +102,7 @@ export function formatResetTime(
   return `Resets in ${formatDurationShort(resetsAt - now)} (${formatClock(resetsAt, now, timeZone)})`;
 }
 
+/** Relative freshness: "just now" (< 5 s), "Ns ago", then `formatDurationShort` + " ago". */
 export function formatCheckedAgo(at: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000));
   if (seconds < 5) return "just now";
@@ -109,10 +130,12 @@ const STATUS_LINES: Partial<
 const SINGLE_ROW_MIN_WIDTH = 60;
 const MAX_LABEL_WIDTH = 28;
 
+/** Facts may carry their own tone; default to plain text. */
 function factTone(fact: UsageFact): UsageRowTone {
   return fact.tone === "muted" ? "muted" : (fact.tone ?? "text");
 }
 
+/** Exhausted -> error, at least 90% used -> warning, otherwise accent. */
 function limitTone(limit: UsageLimit): UsageRowTone {
   if (limit.state === "exhausted") return "error";
   if (limit.usedPercent !== undefined && limit.usedPercent >= 90) return "warning";
@@ -140,6 +163,7 @@ function limitSummary(limit: UsageLimit): string {
   return `${formatPercent(limit.usedPercent)} used`;
 }
 
+/** Clamp then right-pad with spaces to exactly `width` cells (for aligned label columns). */
 function padToWidth(text: string, width: number): string {
   const clamped = clampVisualText(text, width);
   return clamped + " ".repeat(Math.max(0, width - getTextWidth(clamped)));
@@ -290,12 +314,14 @@ export function buildUsagePanelRows(view: UsageViewState, options: UsageRowOptio
   return rows;
 }
 
+/** Inputs for `buildUsageFooterRows`. */
 export interface UsageFooterOptions {
   width: number;
   now: number;
   timeZone?: string;
   /** Epoch ms when R contacts the provider again. */
   refreshAvailableAt: number;
+  /** Include the scroll hint; the panel reserves space for the scrollable variant. */
   scrollable: boolean;
 }
 

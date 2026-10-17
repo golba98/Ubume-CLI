@@ -1,3 +1,25 @@
+/**
+ * Input controller for the bottom composer. Returns everything `BottomComposer.tsx`
+ * needs to render (viewport, suggestions, status line, footer) and handles keys
+ * while the composer has focus.
+ *
+ * Responsibilities, in order of a key press:
+ * 1. Raw stdin signals (`rawStdinSignals.ts`) recover shortcuts and mouse reports
+ *    Ink mis-parses, and the raw delete byte (Backspace vs Delete).
+ * 2. `composerKeymap` turns the key into one action.
+ * 3. The handler performs it: global shortcuts and modal states first, then a
+ *    pending Ctrl+X chord, then commands and edits. Text edits are pure functions
+ *    in `composerEditing.ts`, Ctrl+R in `historySearch.ts`, and typed or pasted
+ *    text goes through `PasteAssembler`.
+ *
+ * State ownership: the draft (`value`/`cursor`) belongs to `src/app`. The hook keeps
+ * `valueRef`/`cursorRef` in sync so that several key events arriving in one stdin
+ * chunk build on each other before React re-renders, plus local view state (undo
+ * stack, kill ring, suggestion index, history search, chord, desired column).
+ *
+ * Cleanup: stdin listeners, raw-signal timers, the file-list debounce, the elapsed
+ * timer and any pending paste burst are released on unmount.
+ */
 import { useFocus, useInput, useStdin } from "ink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getStdinDebugState, traceInputDebug } from "../../../core/perf/debugLog.js";
@@ -8,14 +30,10 @@ import { FOCUS_IDS } from "../../input/focus.js";
 import {
   COMPOSER_ROW_CHROME,
   createInputViewport,
-  deleteInputBackward,
-  deleteInputForward,
   getComposerRowLayout,
   InputUndo,
   insertInputText,
   lineBoundary,
-  moveCursorLeft,
-  moveCursorRight,
   normalizeCursorOffset,
   normalizeInputText,
   searchHistory,
@@ -25,22 +43,27 @@ import {
 import {
   createAtomicContentToken,
   createPastedContentToken,
-  deleteAdjacentPastedContent,
   isLargePaste,
-  moveAcrossPastedContent,
 } from "../../input/pastedContent.js";
-import { getSlashCommandSuggestions } from "../../input/slashCommands.js";
+import { isMouseReportSequence, useRawStdinSignals } from "../../input/rawStdinSignals.js";
 import { THEMES, useTheme } from "../../theme.js";
 import {
-  BRACKETED_PASTE_END,
-  BRACKETED_PASTE_START,
+  completeSlashCommand,
+  type DraftState,
+  deleteDraftBackward,
+  deleteDraftForward,
+  insertFileToken,
+  killDraftText,
+  moveDraftLeft,
+  moveDraftRight,
+  resolveSubmit,
+} from "./composerEditing.js";
+import {
   CTRL_ALT_P_ESCAPE_SEQUENCE,
   CTRL_M_ESCAPE_SEQUENCE,
   composerKeymap,
   type DeleteIntent,
   isBacktabSequence,
-  PASTE_CHUNK_CANDIDATE_MIN,
-  PASTE_CHUNK_SETTLE_MS,
   resolveDeleteIntentFromRawInput,
 } from "./composerKeymap.js";
 import {
@@ -53,6 +76,24 @@ import {
   getVisibleComposerStatusLine,
   MAX_VISIBLE_INPUT_ROWS,
 } from "./composerModel.js";
+import { stepHistorySearch } from "./historySearch.js";
+import { PasteAssembler, type PasteAssemblerSink } from "./pasteAssembler.js";
+
+/**
+ * Raw stdin sequences the composer watches, because Ink does not report them reliably
+ * on every terminal (see `rawStdinSignals.ts`):
+ * - `mouse`: swallow the printable fragments of a mouse report.
+ * - `backtab`: Shift+Tab variants → cycle mode.
+ * - `ctrlM`: Ctrl+M sent as CSI-u (`ESC[109;5u`) → model picker. Ctrl+O is the
+ *   portable alternative.
+ * - `ctrlAltP`: Ctrl+Alt+P (`ESC ^P` or CSI-u) → provider picker.
+ */
+const COMPOSER_RAW_SIGNALS = {
+  mouse: { matches: isMouseReportSequence, holdMs: 32 },
+  backtab: { matches: isBacktabSequence, holdMs: 64 },
+  ctrlM: { matches: (raw: string) => CTRL_M_ESCAPE_SEQUENCE.test(raw), holdMs: 64 },
+  ctrlAltP: { matches: (raw: string) => CTRL_ALT_P_ESCAPE_SEQUENCE.test(raw), holdMs: 64 },
+} as const;
 
 export function useComposerInput({
   layout,
@@ -185,78 +226,12 @@ export function useComposerInput({
   const cursorRef = useRef(cursor);
   const lastPropsValueRef = useRef(value);
   const lastPropsCursorRef = useRef(cursor);
-  const pasteBufferRef = useRef<string | null>(null);
-  const pasteChunkBufferRef = useRef<string | null>(null);
-  const pasteChunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Last raw delete byte seen on stdin, consumed by the next delete/backspace action.
   const deleteIntentRef = useRef<DeleteIntent | null>(null);
-  const backtabEventTickRef = useRef(false);
-  const ctrlMEventTickRef = useRef(false);
-  const ctrlAltPEventTickRef = useRef(false);
-  const mouseEventTickRef = useRef(false);
-  const backtabEventTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ctrlMEventTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ctrlAltPEventTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mouseEventTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    const handleRawInput = (chunk: Buffer | string) => {
-      const raw = typeof chunk === "string" ? chunk : chunk.toString();
-      const intent = resolveDeleteIntentFromRawInput(raw);
-      if (intent) {
-        deleteIntentRef.current = intent;
-      }
-
-      if (isBacktabSequence(raw)) {
-        backtabEventTickRef.current = true;
-        if (backtabEventTimeoutRef.current) clearTimeout(backtabEventTimeoutRef.current);
-        backtabEventTimeoutRef.current = setTimeout(() => {
-          backtabEventTickRef.current = false;
-        }, 64);
-      }
-
-      // Ctrl+M is not consistently surfaced as input="m" with key.ctrl.
-      // Terminals using CSI-u style modified key reporting often emit
-      // ESC[109;5u or ESC[13;5u instead. We also support Ctrl+O as a
-      // reliable cross-terminal alternative for opening the model picker.
-      if (CTRL_M_ESCAPE_SEQUENCE.test(raw)) {
-        ctrlMEventTickRef.current = true;
-        if (ctrlMEventTimeoutRef.current) clearTimeout(ctrlMEventTimeoutRef.current);
-        ctrlMEventTimeoutRef.current = setTimeout(() => {
-          ctrlMEventTickRef.current = false;
-        }, 64);
-      }
-
-      // ESC ^P or CSI u style modified key reporting for Ctrl+Alt+P.
-      if (CTRL_ALT_P_ESCAPE_SEQUENCE.test(raw)) {
-        ctrlAltPEventTickRef.current = true;
-        if (ctrlAltPEventTimeoutRef.current) clearTimeout(ctrlAltPEventTimeoutRef.current);
-        ctrlAltPEventTimeoutRef.current = setTimeout(() => {
-          ctrlAltPEventTickRef.current = false;
-        }, 64);
-      }
-
-      // Explicitly detect terminal mouse reporting escape sequences to swallow
-      // the fragments (e.g. "[<0;26;24M") that Ink's readline parser sequentially
-      // emits after stripping the ESC prefix.
-      if (/\u001b\[<(\d+);(\d+);(\d+)([Mm])/.test(raw) || /\u001b\[M/.test(raw)) {
-        mouseEventTickRef.current = true;
-        if (mouseEventTimeoutRef.current) clearTimeout(mouseEventTimeoutRef.current);
-        mouseEventTimeoutRef.current = setTimeout(() => {
-          mouseEventTickRef.current = false;
-        }, 32);
-      }
-    };
-
-    stdin.on("data", handleRawInput);
-    return () => {
-      stdin.off("data", handleRawInput);
-      if (backtabEventTimeoutRef.current) clearTimeout(backtabEventTimeoutRef.current);
-      if (ctrlMEventTimeoutRef.current) clearTimeout(ctrlMEventTimeoutRef.current);
-      if (ctrlAltPEventTimeoutRef.current) clearTimeout(ctrlAltPEventTimeoutRef.current);
-      if (mouseEventTimeoutRef.current) clearTimeout(mouseEventTimeoutRef.current);
-      if (pasteChunkTimerRef.current) clearTimeout(pasteChunkTimerRef.current);
-    };
-  }, [stdin]);
+  const rawSignals = useRawStdinSignals(stdin, COMPOSER_RAW_SIGNALS, (raw) => {
+    const intent = resolveDeleteIntentFromRawInput(raw);
+    if (intent) deleteIntentRef.current = intent;
+  });
 
   // Sync from props only when props actually change from an external source
   // or after a render cycle has confirmed our local change.
@@ -351,69 +326,27 @@ export function useComposerInput({
     insertText(pastedText);
   };
 
-  const flushPasteChunks = () => {
-    const buffered = pasteChunkBufferRef.current;
-    pasteChunkBufferRef.current = null;
-    pasteChunkTimerRef.current = null;
-    if (buffered) insertPaste(buffered);
-  };
+  // The assembler outlives renders, so it reaches the current insert functions
+  // through a ref. A burst flushed by its settle timer therefore uses the latest
+  // props, not the ones from the render that buffered the first chunk.
+  const pasteSinkRef = useRef<PasteAssemblerSink>({ text: insertText, paste: insertPaste });
+  pasteSinkRef.current = { text: insertText, paste: insertPaste };
+  const pasteAssemblerRef = useRef<PasteAssembler | null>(null);
+  pasteAssemblerRef.current ??= new PasteAssembler({
+    text: (text) => pasteSinkRef.current.text(text),
+    paste: (text) => pasteSinkRef.current.paste(text),
+  });
+  useEffect(() => () => pasteAssemblerRef.current?.dispose(), []);
 
-  const bufferPasteChunk = (text: string) => {
-    pasteChunkBufferRef.current = `${pasteChunkBufferRef.current ?? ""}${text}`;
-    if (pasteChunkTimerRef.current) clearTimeout(pasteChunkTimerRef.current);
-    pasteChunkTimerRef.current = setTimeout(flushPasteChunks, PASTE_CHUNK_SETTLE_MS);
-  };
-
-  const handlePastedInput = (chunk: string) => {
-    let remaining = chunk;
-
-    while (remaining.length > 0) {
-      if (pasteBufferRef.current !== null) {
-        const endMatch = BRACKETED_PASTE_END.exec(remaining);
-        if (!endMatch) {
-          pasteBufferRef.current += remaining;
-          return;
-        }
-
-        pasteBufferRef.current += remaining.slice(0, endMatch.index);
-        const pastedText = normalizeInputText(pasteBufferRef.current);
-        pasteBufferRef.current = null;
-        insertPaste(pastedText);
-        remaining = remaining.slice(endMatch.index + endMatch[0].length);
-        continue;
-      }
-
-      const startMatch = BRACKETED_PASTE_START.exec(remaining);
-      if (!startMatch) {
-        // Ink/readline may consume bracketed-paste delimiters and deliver the
-        // payload as one or more input events. Coalesce burst chunks before
-        // applying the large-paste threshold so multi-kilobyte pastes cannot
-        // leak into the composer as several smaller raw fragments.
-        if (pasteChunkBufferRef.current !== null || remaining.length >= PASTE_CHUNK_CANDIDATE_MIN) {
-          bufferPasteChunk(remaining);
-        } else {
-          insertText(normalizeInputText(remaining));
-        }
-        return;
-      }
-
-      const prefix = remaining.slice(0, startMatch.index);
-      if (prefix) {
-        insertText(normalizeInputText(prefix));
-      }
-
-      pasteBufferRef.current = "";
-      remaining = remaining.slice(startMatch.index + startMatch[0].length);
-    }
-  };
+  const commitDraft = (draft: DraftState) => commitInputChange(draft.value, draft.cursor);
 
   useInput(
     (input, key) => {
       const action = composerKeymap(input, key, {
-        mouseEvent: mouseEventTickRef.current,
-        backtabEvent: backtabEventTickRef.current,
-        ctrlMEvent: ctrlMEventTickRef.current,
-        ctrlAltPEvent: ctrlAltPEventTickRef.current,
+        mouseEvent: rawSignals.isActive("mouse"),
+        backtabEvent: rawSignals.isActive("backtab"),
+        ctrlMEvent: rawSignals.isActive("ctrlM"),
+        ctrlAltPEvent: rawSignals.isActive("ctrlAltP"),
         searchQuery,
         fileSuggestionCount: fileSuggestions.length,
         fileQuery,
@@ -422,99 +355,75 @@ export function useComposerInput({
         chord: chord.current,
       });
 
-      if (action === "ignore") {
-        return;
-      }
-
-      if (action === "raw-cycle-mode") {
-        backtabEventTickRef.current = false;
-        if (backtabEventTimeoutRef.current) {
-          clearTimeout(backtabEventTimeoutRef.current);
-          backtabEventTimeoutRef.current = null;
-        }
-        onCycleMode();
-        return;
-      }
-
-      // Ink exposes Shift+Tab directly on terminals whose parser understands the
-      // active keyboard protocol. Keep this path in addition to raw-sequence
-      // detection so the shortcut works in VTE, Kitty, and Windows terminals.
-      if (action === "cycle-mode") {
-        onCycleMode();
-        return;
-      }
-
-      if (action === "raw-model-picker") {
-        ctrlMEventTickRef.current = false;
-        if (ctrlMEventTimeoutRef.current) {
-          clearTimeout(ctrlMEventTimeoutRef.current);
-          ctrlMEventTimeoutRef.current = null;
-        }
-        traceInputDebug("model_picker_shortcut_received", {
-          handler: "BottomComposer.useInput",
-          source: "ctrl-m-csi-u",
-          allowCommands,
-          isFocused,
-          stdin: getStdinDebugState(stdin),
-        });
-        onOpenModelPicker();
-        return;
-      }
-
-      if (action === "raw-provider-picker") {
-        ctrlAltPEventTickRef.current = false;
-        if (ctrlAltPEventTimeoutRef.current) {
-          clearTimeout(ctrlAltPEventTimeoutRef.current);
-          ctrlAltPEventTimeoutRef.current = null;
-        }
-        if (allowCommands) {
-          onOpenProviderPicker();
-        }
-        return;
-      }
-
-      if (action === "quit") {
-        onQuit();
-        return;
-      }
-      if (action === "interrupt") {
-        onInterrupt?.();
-        return;
-      }
-      if (action === "redraw") {
-        onRedraw?.();
-        return;
-      }
-      if (action === "history-search" && searchQuery !== null) {
-        if (key.escape) {
-          commitInputChange(searchOriginal.current.value, searchOriginal.current.cursor);
-          setSearchQuery(null);
+      // ── Phase 1: global shortcuts and modal states. These never consume a pending
+      // Ctrl+X chord.
+      switch (action) {
+        case "ignore":
+          return;
+        case "raw-cycle-mode":
+          rawSignals.consume("backtab");
+          onCycleMode();
+          return;
+        // Ink exposes Shift+Tab directly on terminals whose parser understands the
+        // active keyboard protocol. Keep this path in addition to raw-sequence
+        // detection so the shortcut works in VTE, Kitty, and Windows terminals.
+        case "cycle-mode":
+          onCycleMode();
+          return;
+        case "raw-model-picker":
+          rawSignals.consume("ctrlM");
+          traceInputDebug("model_picker_shortcut_received", {
+            handler: "BottomComposer.useInput",
+            source: "ctrl-m-csi-u",
+            allowCommands,
+            isFocused,
+            stdin: getStdinDebugState(stdin),
+          });
+          onOpenModelPicker();
+          return;
+        case "raw-provider-picker":
+          rawSignals.consume("ctrlAltP");
+          if (allowCommands) onOpenProviderPicker();
+          return;
+        case "quit":
+          onQuit();
+          return;
+        case "interrupt":
+          onInterrupt?.();
+          return;
+        case "redraw":
+          onRedraw?.();
+          return;
+        case "history-search": {
+          if (searchQuery === null) break;
+          const step = stepHistorySearch(
+            { query: searchQuery, offset: searchOffset },
+            input,
+            key,
+            history,
+          );
+          if (step.kind === "cancel") {
+            commitInputChange(searchOriginal.current.value, searchOriginal.current.cursor);
+            setSearchQuery(null);
+          } else if (step.kind === "accept") {
+            setSearchQuery(null);
+          } else if (step.kind === "update") {
+            setSearchQuery(step.state.query);
+            setSearchOffset(step.state.offset);
+            if (step.match !== undefined) commitInputChange(step.match, step.match.length);
+          }
           return;
         }
-        if (key.return) {
-          setSearchQuery(null);
+        case "dismiss-files":
+          setDismissedFile(`${value}:${cursor}`);
           return;
-        }
-        let query = searchQuery;
-        let offset = 0;
-        if (key.ctrl && input === "r") offset = searchOffset + 1;
-        else if (key.backspace) query = Array.from(query).slice(0, -1).join("");
-        else if (!key.ctrl && !key.meta && input) query += input;
-        else return;
-        const match = searchHistory(history, query, offset);
-        setSearchQuery(query);
-        setSearchOffset(offset);
-        if (match !== undefined) commitInputChange(match, match.length);
-        return;
+        case "cancel":
+          onCancel();
+          return;
       }
-      if (action === "dismiss-files") {
-        setDismissedFile(`${value}:${cursor}`);
-        return;
-      }
-      if (action === "cancel") {
-        onCancel();
-        return;
-      }
+
+      // ── Phase 2: Ctrl+X arms a chord that the very next key consumes. Ctrl+X Ctrl+S
+      // sends now; any other key disarms the chord and is then handled normally.
       if (chord.current) {
         chord.current = false;
         if (key.ctrl && input === "s") {
@@ -522,208 +431,165 @@ export function useComposerInput({
           return;
         }
       }
-      if (action === "start-chord") {
-        chord.current = true;
-        return;
-      }
-      if (action === "transcript") {
-        onTranscript?.();
-        return;
-      }
-      if (action === "external-editor") {
-        onExternalEditor?.();
-        return;
-      }
-      if (action === "start-history-search") {
-        searchOriginal.current = { value: valueRef.current, cursor: cursorRef.current };
-        setSearchQuery("");
-        setSearchOffset(0);
-        const match = searchHistory(history, "");
-        if (match !== undefined) commitInputChange(match, match.length);
-        return;
-      }
-      if (action === "model-picker") {
-        onOpenModelPicker();
-        return;
-      }
-      const text = valueRef.current;
-      const position = cursorRef.current;
-      if (action === "line-boundary") {
+
+      const draft: DraftState = { value: valueRef.current, cursor: cursorRef.current };
+      // Vertical movement remembers the column it started from. Explicit
+      // horizontal moves and the edits below forget it, so the next Up/Down
+      // starts from the new cursor column.
+      const forgetColumn = () => {
         desiredColumn.current = undefined;
-        commitInputChange(text, lineBoundary(text, position, key.end));
-        return;
-      }
-      if (action === "line-shortcut") {
-        desiredColumn.current = undefined;
-        commitInputChange(text, lineBoundary(text, position, input === "e"));
-        return;
-      }
-      if (action === "character-shortcut") {
-        desiredColumn.current = undefined;
-        commitInputChange(
-          text,
-          input === "b"
-            ? (moveAcrossPastedContent(text, position, "left") ?? moveCursorLeft(text, position))
-            : (moveAcrossPastedContent(text, position, "right") ?? moveCursorRight(text, position)),
-        );
-        return;
-      }
-      if (action === "word-boundary") {
-        desiredColumn.current = undefined;
-        commitInputChange(text, wordBoundary(text, position, input === "b" ? -1 : 1));
-        return;
-      }
-      if (action === "kill-text") {
-        const edge =
-          input === "w"
-            ? wordBoundary(text, position, -1, true)
-            : lineBoundary(text, position, input === "k");
-        const from = Math.min(edge, position),
-          to = Math.max(edge, position);
-        killText.current = text.slice(from, to);
-        commitInputChange(text.slice(0, from) + text.slice(to), from);
-        return;
-      }
-      if (action === "yank") {
-        insertText(killText.current);
-        return;
-      }
-      if (action === "undo") {
-        const previous = undo.current.undo();
-        if (previous) {
-          valueRef.current = previous.value;
-          cursorRef.current = previous.cursor;
-          onChangeInput(previous.value, previous.cursor);
-        }
-        return;
-      }
-      if (action === "paste-image") {
-        onPasteImage?.();
-        return;
-      }
-      if (action === "send-now") {
-        onSendNow?.();
-        return;
-      }
-      if (action === "newline") {
-        insertText("\n");
-        return;
-      }
-      if (action === "vertical") {
-        const direction = key.upArrow || input === "p" ? -1 : 1;
-        const list = fileSuggestions.length ? fileSuggestions : showSuggestions ? suggestions : [];
-        if (list.length) {
-          setSelectedIndex((index) => Math.max(0, Math.min(list.length - 1, index + direction)));
+      };
+
+      // ── Phase 3: commands and edits.
+      switch (action) {
+        case "start-chord":
+          chord.current = true;
+          return;
+        case "transcript":
+          onTranscript?.();
+          return;
+        case "external-editor":
+          onExternalEditor?.();
+          return;
+        case "start-history-search": {
+          searchOriginal.current = { ...draft };
+          setSearchQuery("");
+          setSearchOffset(0);
+          const match = searchHistory(history, "");
+          if (match !== undefined) commitInputChange(match, match.length);
           return;
         }
-        const next = verticalCursor(text, position, promptWidth, direction, desiredColumn.current);
-        desiredColumn.current = next.column;
-        if (!next.boundary) commitInputChange(text, next.cursor);
-        else if (allowHistory) {
-          direction < 0 ? onHistoryUp() : onHistoryDown();
-          desiredColumn.current = undefined;
-        }
-        return;
-      }
-      desiredColumn.current = undefined;
-      if (action === "accept-file" && fileQuery !== undefined) {
-        const path = fileSuggestions[Math.min(selectedIndex, fileSuggestions.length - 1)]!;
-        const token = createAtomicContentToken(`[File: ${path}]`);
-        onRegisterFile?.(token, path);
-        const start = position - fileQuery.length - 1;
-        commitInputChange(
-          text.slice(0, start) + token + " " + text.slice(position),
-          start + token.length + 1,
-        );
-        return;
-      }
-      if (action === "accept-command") {
-        const selected = suggestions[selectedIndex]?.cmd;
-        if (selected) commitInputChange(`${selected} `, selected.length + 1);
-        return;
-      }
-      if (action === "submit") {
-        if (text.slice(0, position).endsWith("\\")) {
-          commitInputChange(text.slice(0, position - 1) + "\n" + text.slice(position), position);
+        case "model-picker":
+          onOpenModelPicker();
+          return;
+        case "line-boundary":
+          forgetColumn();
+          commitInputChange(draft.value, lineBoundary(draft.value, draft.cursor, key.end));
+          return;
+        case "line-shortcut":
+          forgetColumn();
+          commitInputChange(draft.value, lineBoundary(draft.value, draft.cursor, input === "e"));
+          return;
+        case "character-shortcut":
+          forgetColumn();
+          commitInputChange(
+            draft.value,
+            input === "b"
+              ? moveDraftLeft(draft.value, draft.cursor)
+              : moveDraftRight(draft.value, draft.cursor),
+          );
+          return;
+        case "word-boundary":
+          forgetColumn();
+          commitInputChange(
+            draft.value,
+            wordBoundary(draft.value, draft.cursor, input === "b" ? -1 : 1),
+          );
+          return;
+        case "kill-text": {
+          const next = killDraftText(draft, input);
+          killText.current = next.killed;
+          commitDraft(next);
           return;
         }
-        const exactCommand = getSlashCommandSuggestions(text.trim()).some(
-          (command) =>
-            command.cmd === text.trim().toLowerCase() ||
-            ("aliases" in command &&
-              command.aliases?.some((alias) => alias === text.trim().toLowerCase())),
-        );
-        if (!exactCommand && showSuggestions && suggestions.length > 0) {
-          const selected = suggestions[selectedIndex];
-          if (
-            selected &&
-            text.trim().toLowerCase() !== selected.cmd &&
-            !(
-              "aliases" in selected &&
-              selected.aliases?.some((alias) => alias === text.trim().toLowerCase())
-            )
-          ) {
-            commitInputChange(`${selected.cmd} `, selected.cmd.length + 1);
+        case "yank":
+          insertText(killText.current);
+          return;
+        case "undo": {
+          // Undo bypasses commitInputChange so that it is not itself recorded as an edit.
+          const previous = undo.current.undo();
+          if (previous) {
+            valueRef.current = previous.value;
+            cursorRef.current = previous.cursor;
+            onChangeInput(previous.value, previous.cursor);
+          }
+          return;
+        }
+        case "paste-image":
+          onPasteImage?.();
+          return;
+        case "send-now":
+          onSendNow?.();
+          return;
+        case "newline":
+          insertText("\n");
+          return;
+        case "vertical": {
+          const direction = key.upArrow || input === "p" ? -1 : 1;
+          // An open suggestion list takes Up/Down; otherwise move between lines,
+          // then fall through to history at the first or last line.
+          const list = fileSuggestions.length
+            ? fileSuggestions
+            : showSuggestions
+              ? suggestions
+              : [];
+          if (list.length) {
+            setSelectedIndex((index) => Math.max(0, Math.min(list.length - 1, index + direction)));
             return;
           }
-        }
-        if (text.trim()) onSubmit();
-        return;
-      }
-
-      if (action === "left") {
-        const nextCursor =
-          moveAcrossPastedContent(valueRef.current, cursorRef.current, "left") ??
-          moveCursorLeft(valueRef.current, cursorRef.current);
-        commitInputChange(valueRef.current, nextCursor);
-        return;
-      }
-
-      if (action === "right") {
-        const nextCursor =
-          moveAcrossPastedContent(valueRef.current, cursorRef.current, "right") ??
-          moveCursorRight(valueRef.current, cursorRef.current);
-        commitInputChange(valueRef.current, nextCursor);
-        return;
-      }
-
-      if (action === "backspace") {
-        deleteIntentRef.current = null;
-        const next =
-          deleteAdjacentPastedContent(valueRef.current, cursorRef.current, "backward") ??
-          deleteInputBackward({
-            value: valueRef.current,
-            cursorOffset: cursorRef.current,
-          });
-        commitInputChange(next.value, next.cursorOffset);
-        return;
-      }
-
-      if (action === "delete") {
-        const deleteIntent = deleteIntentRef.current;
-        deleteIntentRef.current = null;
-
-        if (deleteIntent === "backspace") {
-          const next = deleteInputBackward({
-            value: valueRef.current,
-            cursorOffset: cursorRef.current,
-          });
-          commitInputChange(next.value, next.cursorOffset);
+          const next = verticalCursor(
+            draft.value,
+            draft.cursor,
+            promptWidth,
+            direction,
+            desiredColumn.current,
+          );
+          desiredColumn.current = next.column;
+          if (!next.boundary) {
+            commitInputChange(draft.value, next.cursor);
+          } else if (allowHistory) {
+            if (direction < 0) onHistoryUp();
+            else onHistoryDown();
+            forgetColumn();
+          }
           return;
         }
-
-        const next =
-          deleteAdjacentPastedContent(valueRef.current, cursorRef.current, "forward") ??
-          deleteInputForward({
-            value: valueRef.current,
-            cursorOffset: cursorRef.current,
-          });
-        commitInputChange(next.value, next.cursorOffset);
-        return;
       }
 
-      if (action === "text") {
-        handlePastedInput(input);
+      forgetColumn();
+      switch (action) {
+        case "accept-file": {
+          if (fileQuery === undefined) return;
+          const path = fileSuggestions[Math.min(selectedIndex, fileSuggestions.length - 1)];
+          if (path === undefined) return;
+          const token = createAtomicContentToken(`[File: ${path}]`);
+          onRegisterFile?.(token, path);
+          commitDraft(insertFileToken(draft, fileQuery, token));
+          return;
+        }
+        case "accept-command": {
+          const selected = suggestions[selectedIndex]?.cmd;
+          if (selected) commitDraft(completeSlashCommand(selected));
+          return;
+        }
+        case "submit": {
+          const resolution = resolveSubmit({ draft, showSuggestions, suggestions, selectedIndex });
+          if (resolution.kind === "continue-line" || resolution.kind === "complete-command") {
+            commitDraft(resolution.draft);
+          } else if (resolution.kind === "submit") {
+            onSubmit();
+          }
+          return;
+        }
+        case "left":
+          commitInputChange(draft.value, moveDraftLeft(draft.value, draft.cursor));
+          return;
+        case "right":
+          commitInputChange(draft.value, moveDraftRight(draft.value, draft.cursor));
+          return;
+        case "backspace":
+          deleteIntentRef.current = null;
+          commitDraft(deleteDraftBackward(draft));
+          return;
+        case "delete": {
+          const rawIntent = deleteIntentRef.current;
+          deleteIntentRef.current = null;
+          commitDraft(deleteDraftForward(draft, rawIntent));
+          return;
+        }
+        case "text":
+          pasteAssemblerRef.current?.feed(input);
+          return;
       }
     },
     { isActive: isFocused },

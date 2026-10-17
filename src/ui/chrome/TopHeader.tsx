@@ -1,3 +1,25 @@
+/**
+ * Overlay-screen header: the UBUME wordmark plus metadata lines (brand/version,
+ * auth status, workspace, provider) and an optional update notice.
+ *
+ * Rendered by `AppShell` as `MemoizedTopHeader` (the main transcript uses its
+ * own header in `TranscriptShell`). Pure presentation: all data arrives as
+ * props, the only hook is `useTheme`, and there are no timers or listeners.
+ *
+ * Responsive modes (`getHeaderHeroLayout`):
+ * - `compact`: single text line, used when no logo is shown (layout modes
+ *   other than regular/expanded, compact below 72 cols, or
+ *   `UBUME_NO_ASCII_LOGO=1`).
+ * - `narrow`: logo stacked above metadata, below 95 cols.
+ * - `medium` / `wide`: metadata beside the logo (95+ / 130+ cols).
+ *
+ * Constraint: `measureTopHeaderRows` must predict the rendered height exactly,
+ * because `AppShell` subtracts it from the layout budget before the header is
+ * laid out. Change both the measurement and the JSX together.
+ *
+ * Environment: `UBUME_NO_ASCII_LOGO=1` hides the logo, `UBUME_COMPACT_LOGO=1`
+ * selects the compact logo art.
+ */
 import { Box, Text } from "ink";
 import type React from "react";
 import { memo } from "react";
@@ -34,8 +56,10 @@ const UPDATE_CARD_GAP_ROWS = 1;
 // too small to render any logo art.
 const RECOMMENDED_FULL_HEADER_HINT = `Resize to ≥${LOGO_LARGE_MIN_COLS}×${LOGO_LARGE_MIN_ROWS} for the full Ubume header`;
 
+/** Header arrangement; see the module header for the column thresholds. */
 type HeaderHeroMode = "wide" | "medium" | "narrow" | "compact";
 
+/** Row/column plan for one header render; `totalRows` is what the shell budgets. */
 interface HeaderHeroLayout {
   mode: HeaderHeroMode;
   topMarginRows: number;
@@ -52,6 +76,7 @@ interface HeaderHeroLayout {
 
 type HeaderMetadataLine = { key: string; text: string; color: string; bold: boolean };
 
+/** Update notice shown in the header; `updateCommand` defaults to `UBUME_UPDATE_COMMAND`. */
 export interface UpdateAvailableInfo {
   latestVersion: string;
   currentVersion: string;
@@ -67,10 +92,15 @@ interface TopHeaderProps {
   updateAvailable?: UpdateAvailableInfo | null;
 }
 
+/** Usable header width after the shell gutter and the header's own horizontal padding. */
 function getHeaderContentWidth(cols: number): number {
   return Math.max(1, cols - SHELL_GUTTER_COLUMNS - HEADER_PADDING_COLUMNS);
 }
 
+/**
+ * Number of enabled metadata lines. Counts `showProvider` even when no provider
+ * label is available, so the measurement can exceed the rendered lines by one.
+ */
 function getMetadataRowCount(headerConfig: HeaderConfig): number {
   return [
     headerConfig.showBrand,
@@ -80,6 +110,7 @@ function getMetadataRowCount(headerConfig: HeaderConfig): number {
   ].filter(Boolean).length;
 }
 
+/** One top margin row only in decorative layout modes on terminals taller than 24 rows. */
 function getHeaderVerticalMargins(layout: Layout): {
   topMarginRows: number;
   bottomMarginRows: number;
@@ -101,6 +132,11 @@ function getHeaderVerticalMargins(layout: Layout): {
   };
 }
 
+/**
+ * Pick the logo art for `layout`: none when env-disabled or there is no room
+ * (non-regular/expanded modes, or compact below 72 cols), the compact art when
+ * `UBUME_COMPACT_LOGO=1`, otherwise the large wordmark.
+ */
 export function selectHeaderLogo(layout: Layout): readonly string[] {
   if (process.env["UBUME_NO_ASCII_LOGO"] === "1") return [];
   const showNormalLogo =
@@ -113,6 +149,11 @@ export function selectHeaderLogo(layout: Layout): readonly string[] {
   return LOGO_LARGE;
 }
 
+/**
+ * Compute the header's mode and row budget for a layout, header config and
+ * whether an update notice is shown. Pure; the source of truth for
+ * `measureTopHeaderRows`.
+ */
 export function getHeaderHeroLayout(
   layout: Layout,
   headerConfig: HeaderConfig = HEADER_CONFIG_DEFAULTS,
@@ -187,6 +228,7 @@ export function getHeaderHeroLayout(
   };
 }
 
+/** Total rows the header will occupy; used by `AppShell`'s layout budget. */
 export function measureTopHeaderRows(
   layout: Layout,
   headerConfig: HeaderConfig = HEADER_CONFIG_DEFAULTS,
@@ -195,6 +237,7 @@ export function measureTopHeaderRows(
   return getHeaderHeroLayout(layout, headerConfig, hasUpdate).totalRows;
 }
 
+/** Longest suffix of `text` whose terminal cell width fits in `maxWidth`. */
 function takeVisualSuffix(text: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
   let output = "";
@@ -207,6 +250,11 @@ function takeVisualSuffix(text: string, maxWidth: number): string {
   return output;
 }
 
+/**
+ * Fit a workspace path into `maxWidth` cells. Paths that fit are returned
+ * trimmed; otherwise only the tail of the last segment is kept behind an
+ * ellipsis (`…/leaf` or `…\leaf`, using the path's own separator style).
+ */
 export function shortenHeaderWorkspaceLabel(workspaceLabel: string, maxWidth: number): string {
   const trimmed = workspaceLabel.trim();
   if (!trimmed || maxWidth <= 0) return "";
@@ -232,6 +280,7 @@ function clampMetadataText(text: string, maxWidth: number): string {
   return clampVisualText(text, Math.max(1, maxWidth));
 }
 
+/** Header component; prefer `MemoizedTopHeader` inside the shell. */
 export function TopHeader({
   authState,
   workspaceLabel,
@@ -476,7 +525,9 @@ export function TopHeader({
   );
 }
 
-// Memoize to prevent re-renders during streaming when props haven't changed
+// Memoize to prevent re-renders during streaming when props haven't changed.
+// `layout` is compared by cols/rows/mode, not identity, because the viewport
+// object can be recreated without a size change.
 export const MemoizedTopHeader = memo(TopHeader, (prev, next) => {
   return (
     prev.authState === next.authState &&

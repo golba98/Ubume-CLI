@@ -1,7 +1,29 @@
+/**
+ * Classify stage of the render pipeline: markdown text → typed `Segment[]`
+ * (code, header, list, para, table, quote, rule) with inline styling parts.
+ *
+ * A small, forgiving CommonMark-ish parser tuned for CLI answers, not a spec
+ * implementation: source line breaks inside paragraphs are kept, bare diffs
+ * become `diff` code blocks, local link labels are compacted, and on any
+ * internal error the whole input degrades to plain paragraph lines. Input is
+ * sanitized (control/ANSI sequences stripped, tabs preserved) before parsing;
+ * session strings themselves are never modified. Output is consumed by
+ * `timeline/measure/markdownRows.ts`.
+ *
+ * Caching (module-level `MarkdownCache`s, cleared by `resetMarkdownCaches`):
+ * - `inlineCache` — inline parse results keyed by source text;
+ * - `streamCache` — last parse per `cacheKey`. When the new source extends the
+ *   cached source, all but the last segment are reused and parsing restarts
+ *   at that segment, so a streaming delta re-parses only the tail.
+ */
 import { sanitizeTerminalOutput } from "../../core/terminal/terminalSanitize.js";
 import { detachMarkdownText, MarkdownCache } from "./markdownCache.js";
 import { formatLocalPathForTerminal } from "./terminalAnswerFormat.js";
 
+/**
+ * A run of inline text. `kind: "code"` is inline code; link text carries
+ * `target` (and underline), followed by a separate ` (target)` part.
+ */
 export interface InlinePart {
   kind: "text" | "code" | "bold";
   text: string;
@@ -12,6 +34,8 @@ export interface InlinePart {
   /** Displayed as text, never passed through as a model-supplied escape sequence. */
   target?: string;
 }
+// Absolute offsets into the sanitized source; used to restart incremental
+// parsing at the last segment, and `raw` for the measure-stage error fallback.
 interface SourceRange {
   sourceStart?: number;
   sourceEnd?: number;
@@ -44,6 +68,7 @@ export type ParaSegment = SourceRange & {
   hardBreaks?: boolean[];
 };
 export type TableAlignment = "left" | "center" | "right";
+/** `streaming` is set when the table is still the trailing block of a streaming answer. */
 export type TableSegment = SourceRange & {
   type: "table";
   headers: InlinePart[][];
@@ -61,6 +86,11 @@ export type Segment =
   | TableSegment
   | QuoteSegment
   | RuleSegment;
+/**
+ * `streaming`: content is still growing (affects table layout hints).
+ * `cacheKey`: stable id of the growing document (e.g. run + segment id) that
+ * enables incremental re-parsing; omit for one-off parses.
+ */
 export interface MarkdownOptions {
   streaming?: boolean;
   cacheKey?: string;
@@ -87,6 +117,7 @@ const SHELL_LANGUAGES = new Set([
   "bat",
   "batch",
 ]);
+/** True for fence languages that denote shell commands (bash, zsh, pwsh, cmd, …). */
 export function isShellCodeLanguage(language: string): boolean {
   return SHELL_LANGUAGES.has(language.trim().toLowerCase());
 }
@@ -103,6 +134,11 @@ function codeEnd(text: string, start: number, count: number): number {
   return -1;
 }
 
+/**
+ * Split a table row on unescaped `|` outside inline code, dropping the empty
+ * cells produced by leading/trailing pipes. Returns null when the line has no
+ * delimiter at all.
+ */
 export function splitTableCells(line: string): string[] | null {
   const text = line.trim();
   const cells: string[] = [];
@@ -136,6 +172,9 @@ export function splitTableCells(line: string): string[] | null {
   return cells;
 }
 
+// Index of the closing emphasis/strike delimiter for `marker` (`*`, `**`,
+// `***`, `__`, `~~`, …) at or after `start`, or -1. Skips escapes and inline
+// code, and ignores closers preceded by whitespace.
 function delimiterEnd(text: string, marker: string, start: number): number {
   for (let index = start; index < text.length; index += 1) {
     if (text[index] === "\\") {
@@ -174,6 +213,8 @@ function delimiterEnd(text: string, marker: string, start: number): number {
   return -1;
 }
 
+// Recursive inline parser; `style` accumulates nested emphasis. Recursion is
+// capped at MAX_DEPTH so adversarial nesting degrades to plain text.
 function parseInlineInner(
   text: string,
   depth: number,
@@ -188,6 +229,8 @@ function parseInlineInner(
   };
   for (let index = 0; index < text.length; ) {
     const char = text[index]!;
+    // Consume absolute/UNC paths verbatim so characters such as `_` or `\`
+    // inside them are not mistaken for emphasis or escapes.
     const path =
       char === "/" || (char === "\\" && text[index + 1] === "\\") || text[index + 1] === ":"
         ? /^(?:[A-Za-z]:[\\/]|\\\\[A-Za-z0-9_.-]|\/[A-Za-z0-9_.-])[^\s`<>*|]*/.exec(
@@ -298,6 +341,7 @@ function parseInlineInner(
   flush();
   return parts.length ? parts : [{ kind: "text", text: "", ...style }];
 }
+/** Parse inline markdown (code, emphasis, strike, links), cached by source text. */
 export function parseInline(text: string): InlinePart[] {
   const cached = inlineCache.get(text);
   if (cached) return cached;
@@ -305,6 +349,7 @@ export function parseInline(text: string): InlinePart[] {
   return inlineCache.set(owned, parseInlineInner(owned, 0), owned.length * 2);
 }
 
+// A header row followed by a matching `---|:--:|--:` delimiter row, or null.
 function tableHeader(
   lines: string[],
   index: number,
@@ -325,6 +370,11 @@ function tableHeader(
   };
 }
 
+/**
+ * Line-oriented block parser. `base` is the absolute offset of `source` in the
+ * full document (so segment source ranges stay absolute when re-parsing a
+ * tail); `depth` bounds blockquote nesting.
+ */
 function parseBlocks(source: string, streaming: boolean, base = 0, depth = 0): Segment[] {
   const lines = source.split("\n");
   const offsets: number[] = [];
@@ -358,6 +408,8 @@ function parseBlocks(source: string, streaming: boolean, base = 0, depth = 0): S
       continue;
     }
     const start = index;
+    // Unfenced unified diff: treat everything up to the next blank line as a
+    // `diff` code block so it gets diff tones and no markdown interpretation.
     if (
       /^(?:diff --git\s|@@\s+-\d)/.test(line) ||
       (/^--- \S/.test(line) && /^\+\+\+ \S/.test(lines[index + 1] ?? ""))
@@ -499,6 +551,8 @@ function parseBlocks(source: string, streaming: boolean, base = 0, depth = 0): S
       );
       continue;
     }
+    // Paragraph: consecutive non-blank lines until another block starts. A
+    // trailing backslash is a hard break unless the line ends in a Windows path.
     const para: InlinePart[][] = [];
     const hardBreaks: boolean[] = [];
     while (index < lines.length && lines[index]!.trim() && (index === start || !isStart(index))) {
@@ -514,7 +568,14 @@ function parseBlocks(source: string, streaming: boolean, base = 0, depth = 0): S
   return out;
 }
 
-/** Presentation-only parsing: session strings are never mutated or normalized destructively. */
+/**
+ * Presentation-only parsing: session strings are never mutated or normalized destructively.
+ *
+ * Returns the segments for `content`. With `options.cacheKey`, reuses the
+ * previous parse for that key when `content` only appended to it (see module
+ * doc); a non-append change re-parses from scratch. If block parsing throws,
+ * returns the source as plain paragraph lines instead.
+ */
 export function parseMarkdown(content: string, options: MarkdownOptions = {}): Segment[] {
   const source = sanitizeTerminalOutput(content, { preserveTabs: true });
   try {

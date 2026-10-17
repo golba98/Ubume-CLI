@@ -1,3 +1,18 @@
+/**
+ * Fixed-height, app-scrolled transcript view built on measured rows.
+ *
+ * Used by `chrome/AppShell.tsx` (overlay composition); the main chat screen
+ * uses `TranscriptShell` instead, which relies on native terminal scrollback.
+ * Pipeline: events → render items (`timelineItems.ts`) → `TimelineSnapshot`s
+ * (`buildTimelineSnapshot` for static events, `buildStableTimelineSnapshot`
+ * for active ones) → viewport slice (`useTimelineViewport`) →
+ * `TimelineRowsView`. The box height is exactly `viewportRows` (unless
+ * `contentSized`) and the slice never exceeds it, which only holds because each
+ * measured row renders as one terminal line.
+ *
+ * Blank-frame guards: if the snapshot or the visible slice is transiently
+ * empty while events exist, the last non-empty snapshot / slice is reused.
+ */
 import { Box } from "ink";
 import { memo, useMemo, useRef } from "react";
 import type { CodexAuthState } from "../../core/codex/codexAuth.js";
@@ -42,6 +57,11 @@ interface TimelineProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+/**
+ * Render the visible slice of the measured transcript. Memoized with a custom
+ * comparator over the props that affect output (layout compared by
+ * cols/rows/mode, not identity).
+ */
 export const Timeline = memo(
   function Timeline({
     staticEvents,
@@ -192,10 +212,10 @@ export const Timeline = memo(
     );
     // ── Split snapshot building ──────────────────────────────────────────────
     // During streaming, activeEvents change every frame but staticEvents stay
-    // the same.  We further split the active items into "stable" (user prompt,
-    // run header — don't change during streaming) and "streaming" (assistant
-    // content — changes every frame).  This gives us three cached tiers so only
-    // the streaming assistant item is rebuilt each frame.
+    // the same, so the static snapshot memo is reused untouched. Within the
+    // active snapshot, buildStableTimelineSnapshot caches each block (user
+    // prompt, finished actions/responses, …) by content token, so in practice
+    // only the block that is still streaming is rebuilt each frame.
     const snapshotWidth = Math.max(10, getShellWidth(layout.cols) - 1);
     const staticSnapshot = useMemo(
       () =>

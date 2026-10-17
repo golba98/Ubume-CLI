@@ -1,3 +1,18 @@
+/**
+ * The bottom composer: prompt box, command/file suggestion row, transient status
+ * row (thinking timer, interrupt hints) and the runtime footer (mode, provider,
+ * model, reasoning, context meter).
+ *
+ * Rendering only. Input handling, editing and paste assembly live in
+ * `composer/useComposerInput.ts`; row measurement and status text in
+ * `composer/composerModel.ts`. The draft text and cursor are owned by `src/app`
+ * and passed in as `value`/`cursor`; edits are reported through `onChangeInput`.
+ *
+ * `MemoizedBottomComposer` skips re-renders during streaming with a hand-written
+ * comparator (`areBottomComposerPropsEqual`). A new prop that changes what the
+ * composer shows must be added to that comparator, or the composer will keep
+ * showing the old value until something else re-renders it.
+ */
 import { Box, Text } from "ink";
 import { memo } from "react";
 import type { Theme } from "../../config/settings.js";

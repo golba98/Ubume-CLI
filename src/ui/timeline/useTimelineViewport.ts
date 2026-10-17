@@ -1,3 +1,17 @@
+/**
+ * React glue between measured timeline snapshots and the pure viewport state
+ * machine in `timelineViewport.ts`, used by `Timeline`.
+ *
+ * Owns the `TimelineViewportState` (follow-tail vs detached/frozen, anchor row,
+ * unseen counters) and advances it when the snapshot grows, the width changes
+ * (reflow), a run finalizes, or the user submits a new prompt (snap back to
+ * follow-tail). Returns the visible row slice. Correctness depends on
+ * `snapshot.totalRows` being the true rendered height, i.e. on every
+ * measured row rendering as exactly one terminal line.
+ *
+ * Also mirrors running/finalized turn ids into `finalizeTransitionRef`, which
+ * `Timeline` reads on its next render to detect a finalize transition.
+ */
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import * as renderDebug from "../../core/perf/renderDebug.js";
 import type { TimelineEvent, UIState } from "../../session/types.js";
@@ -31,6 +45,11 @@ interface TimelineViewportInput {
   activeEvents: TimelineEvent[];
 }
 
+/**
+ * Track the viewport over `snapshotForViewport` and return `{ visibleRows }`,
+ * the last `viewportRows` rows ending at the anchor row. `liveSnapshot` is
+ * only used for debug tracing (to flag when a fallback snapshot is in use).
+ */
 export function useTimelineViewport({
   snapshotForViewport,
   effectiveSnapshot,
@@ -134,6 +153,9 @@ export function useTimelineViewport({
         return current;
       }
 
+      // A large jump at finalize (more than half a viewport) would otherwise
+      // yank the view straight to the tail; anchor near the start of the final
+      // response instead so the answer's beginning stays visible.
       const useFinalizeContinuity =
         finalizeTransition &&
         !finalizedPlanAtTail &&
@@ -170,6 +192,8 @@ export function useTimelineViewport({
 
   const prevUserPromptCountRef = useRef(userPromptCount);
 
+  // A newly submitted prompt always re-attaches to the tail, even if the user
+  // had scrolled up.
   useEffect(() => {
     if (userPromptCount > prevUserPromptCountRef.current) {
       setViewport(createFollowTailViewport(snapshotForViewport.totalRows));

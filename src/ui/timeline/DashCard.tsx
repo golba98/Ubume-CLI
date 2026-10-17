@@ -1,3 +1,13 @@
+/**
+ * React (Ink) rounded "dash card" frame: `╭── title ─── badge ──╮`, `│ … │`
+ * content, `╰───╯`.
+ *
+ * Used by the React component path (`TurnGroup`, `AgentBlock`), which the app
+ * does not mount in production. The production transcript renders the measured
+ * equivalent, `buildDashCardRows` in `measure/cards.ts`, whose top-border
+ * arithmetic mirrors `buildTopBorder` below. Keep the two in step if the card
+ * shape changes, but note only the measured version drives viewport heights.
+ */
 import { Box, Text } from "ink";
 import type { ReactNode } from "react";
 import { getTextWidth } from "../../core/shared/text.js";
@@ -13,6 +23,11 @@ interface DashCardProps {
   children: ReactNode;
 }
 
+/**
+ * Render `children` inside a rounded card sized from `cols`. Border, title and
+ * badge colors default to theme border/muted/dim. Header and footer rows use
+ * `wrap="truncate"` so they never wrap onto a second line.
+ */
 export function DashCard({
   cols,
   title,
@@ -64,6 +79,7 @@ export function DashCard({
   );
 }
 
+/** Compute the dash fill that stretches the top border to `w` columns (minimum 1 dash). */
 function buildTopBorder(
   w: number,
   title: string,
