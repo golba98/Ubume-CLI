@@ -168,3 +168,113 @@ test("missing option values do not consume following flags", () => {
   }
   assert.equal(parseHeadlessExecArgs(["--prompt=--json"]).ok, true);
 });
+
+test("parse errors keep their exact wording", () => {
+  const cases: [string[], string][] = [
+    [["--prompt"], "Missing value for --prompt. Use --prompt=VALUE for an option-like value."],
+    [
+      ["--prompt", "  "],
+      "Missing value for --prompt. Use --prompt=VALUE for an option-like value.",
+    ],
+    [["--prompt=  "], "Missing value for --prompt."],
+    [["--profile"], "Missing value for --profile. Use --profile=VALUE for an option-like value."],
+    [["--profile=", "hi"], "Missing value for --profile."],
+    [["--model= ", "hi"], "Missing value for --model."],
+    [["--reasoning=", "hi"], "Missing value for --reasoning."],
+    [["-c", "ab", "hi"], "Missing key=value payload for -c."],
+    [["--config", "=b", "hi"], "Missing key=value payload for --config."],
+    [["-c=ab", "hi"], "Missing key=value payload for -c."],
+    [["--config=a=", "hi"], "Missing key=value payload for --config."],
+    [
+      ["--ubume-prompt-policy", "bad", "hi"],
+      "Missing or invalid value for --ubume-prompt-policy. Use raw or wrapped.",
+    ],
+    [
+      ["--ubume-prompt-policy=bad", "hi"],
+      "Invalid value for --ubume-prompt-policy. Use raw or wrapped.",
+    ],
+    [["--resume"], "Missing value for --resume."],
+    [["--resume=", "hi"], "Missing value for --resume."],
+    [["--cwd", "--json"], "Missing value for --cwd."],
+    [["--file"], "Missing value for --file."],
+    [["--provider=  ", "hi"], "Missing value for --provider."],
+    [["--bogus"], "Unknown option for ubume exec: --bogus"],
+    [[], 'Missing prompt. Use ubume exec "prompt" or ubume exec --prompt "prompt".'],
+    [["a", "--prompt", "b"], "Provide a prompt either positionally or with --prompt, not both."],
+    [["--prompt", "p", "--stdin"], "--stdin cannot be combined with another prompt source."],
+    [["--resume", "chat_1", "--no-save", "hi"], "--no-save cannot be combined with --resume."],
+  ];
+  for (const [argv, error] of cases) {
+    assert.deepEqual(parseHeadlessExecArgs(argv), { ok: false, error }, argv.join(" "));
+  }
+});
+
+test("passthrough args keep the spelling the caller used", () => {
+  const separate = parseHeadlessExecArgs([
+    "--profile",
+    "p",
+    "-m",
+    "m",
+    "--reasoning",
+    "high",
+    "hi",
+  ]);
+  const inline = parseHeadlessExecArgs([
+    "--profile=p",
+    "--model=m",
+    "--reasoning=high",
+    "-c=a=b",
+    "hi",
+  ]);
+  assert(separate.ok && inline.ok);
+  assert.deepEqual(separate.value.launchArgs.passthroughArgs, [
+    "--profile",
+    "p",
+    "-m",
+    "m",
+    "--reasoning",
+    "high",
+  ]);
+  assert.deepEqual(inline.value.launchArgs.passthroughArgs, [
+    "--profile=p",
+    "--model=m",
+    "--reasoning=high",
+    "-c=a=b",
+  ]);
+  assert.deepEqual(inline.value.launchArgs.configOverrides, [
+    'model="m"',
+    "model_reasoning_effort=high",
+    "a=b",
+  ]);
+  assert.equal(inline.value.launchArgs.modelOverride, "m");
+  assert.equal(inline.value.launchArgs.initialPrompt, "hi");
+});
+
+test("ordering, terminator, repeated files, help and stdin edge cases", () => {
+  const terminated = parseHeadlessExecArgs(["--json", "--", "--json", " x "]);
+  assert(terminated.ok);
+  assert.equal(terminated.value.json, true);
+  assert.equal(terminated.value.prompt, "--json x");
+
+  const files = parseHeadlessExecArgs(["--file=a", "--file", "b", "hi", "--provider", "local"]);
+  assert(files.ok);
+  assert.deepEqual(files.value.files, ["a", "b"]);
+  assert.equal(files.value.providerId, "local");
+
+  const help = parseHeadlessExecArgs(["--help"]);
+  assert(help.ok);
+  assert.equal(help.value.help, true);
+  assert.equal(help.value.prompt, "");
+  assert.equal(help.value.launchArgs.initialPrompt, null);
+
+  const stdin = parseHeadlessExecArgs(["--stdin", "--no-save"]);
+  assert(stdin.ok);
+  assert.equal(stdin.value.stdin, true);
+  assert.equal(stdin.value.noSave, true);
+  assert.equal(stdin.value.prompt, "");
+
+  // -c reads the next argument even when it looks like an option.
+  const optionLike = parseHeadlessExecArgs(["-c", "--x=y", "hi"]);
+  assert(optionLike.ok);
+  assert.deepEqual(optionLike.value.launchArgs.configOverrides, ["--x=y"]);
+});

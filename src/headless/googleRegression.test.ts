@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createTestEnvironment } from "../test/environment.js";
 
 const launcher = fileURLToPath(new URL("../../bin/ubume.js", import.meta.url));
 const fixtureSource = fileURLToPath(
@@ -30,20 +31,15 @@ function fixture() {
   );
   const log = join(root, "agy.jsonl");
   const pidFile = join(root, "pid");
-  const env = {
-    ...process.env,
-    HOME: root,
-    CODEX_HOME: join(root, "codex"),
+  const env = createTestEnvironment(root, {
     UBUME_DATA_DIR: data,
     CODEXA_DATA_DIR: join(root, "legacy"),
-    UBUME_DEV_MODE: "0",
     AGY_EXECUTABLE: agy,
     GEMINI_EXECUTABLE: gemini,
     UBUME_TEST_AGY_LOG: log,
     UBUME_TEST_PID_FILE: pidFile,
-    UBUME_EXEC_TIMING: "0",
     PATH: `${root}:${process.env.PATH}`,
-  };
+  });
   const run = (args: string[]) =>
     spawnSync("node", [launcher, ...args], {
       cwd: workspace,

@@ -14,9 +14,12 @@ import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createTestEnvironment } from "../test/environment.js";
 import { runTerminalCommand } from "./commands.js";
 import { redact } from "./diagnostics.js";
 import { parseHeadlessExecArgs } from "./execArgs.js";
+import { readStdinPrompt } from "./execCommand.js";
+import { parseInspectionArgs } from "./inspectCommands.js";
 
 const launcher = fileURLToPath(new URL("../../bin/ubume.js", import.meta.url));
 const provider = fileURLToPath(new URL("../test/fixtures/headlessProvider.mjs", import.meta.url));
@@ -29,18 +32,14 @@ function fixture() {
   const dataRoot = join(root, "data/workspaces", key);
   mkdirSync(dataRoot, { recursive: true });
   writeFileSync(join(workspace, "demo.ts"), "export const result = 0;\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = createTestEnvironment(root, {
     UBUME_DATA_DIR: join(root, "data"),
     CODEXA_DATA_DIR: join(root, "legacy"),
-    CODEX_HOME: join(root, "codex"),
-    UBUME_DEV_MODE: "0",
     CODEX_EXECUTABLE: provider,
     AGY_EXECUTABLE: join(root, "absent-agy"),
     UBUME_TEST_PROMPT_LOG: join(root, "prompts.jsonl"),
     UBUME_TEST_PID_FILE: join(root, "pid"),
-    UBUME_EXEC_TIMING: "0",
-  };
+  });
   const run = (args: string[], input?: string) =>
     spawnSync("node", [launcher, ...args], {
       cwd: workspace,
@@ -407,4 +406,190 @@ test("command API interrupts idle custom stdin without waiting for another chunk
   } finally {
     if (timer) clearTimeout(timer);
   }
+});
+
+function captureIo() {
+  let stdout = "";
+  let stderr = "";
+  return {
+    io: {
+      stdout: {
+        write: (text: string) => {
+          stdout += text;
+          return true;
+        },
+      },
+      stderr: {
+        write: (text: string) => {
+          stderr += text;
+          return true;
+        },
+      },
+    },
+    stdout: () => stdout,
+    stderr: () => stderr,
+  };
+}
+async function inProcess(
+  argv: string[],
+  options: Parameters<typeof runTerminalCommand>[2] = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const root = mkdtempSync(join(tmpdir(), "ubume-cli-inproc-"));
+  const previous = process.env.UBUME_DATA_DIR;
+  process.env.UBUME_DATA_DIR = join(root, "data");
+  try {
+    const capture = captureIo();
+    const code = await runTerminalCommand(argv, capture.io, options);
+    return { code, stdout: capture.stdout(), stderr: capture.stderr() };
+  } finally {
+    if (previous === undefined) delete process.env.UBUME_DATA_DIR;
+    else process.env.UBUME_DATA_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+function stdinOf(...chunks: Buffer[]): AsyncIterable<Buffer> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield* chunks;
+    },
+  };
+}
+
+test("usage errors exit 2: JSON envelopes on stdout, human messages on stderr", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "ubume-cli-cwd-"));
+  try {
+    const cases: [string[], string, string][] = [
+      [["bogus"], "bogus", "Unknown command: bogus"],
+      [["status", "--nope"], "status", "Unknown option: --nope"],
+      [["status", "--cwd"], "status", "Missing value for --cwd."],
+      [["status", "--json=1"], "status", "Unexpected value for --json."],
+      [["status", "extra", "--cwd", cwd], "status", "Unexpected arguments for status."],
+      [
+        ["sessions", "--cwd", cwd],
+        "sessions",
+        "Use sessions list, show ID, transcript ID, or diff ID.",
+      ],
+      [
+        ["sessions", "list", "extra", "--cwd", cwd],
+        "sessions",
+        "Use sessions list, show ID, transcript ID, or diff ID.",
+      ],
+      [["sessions", "show", "bad", "--cwd", cwd], "sessions", "Invalid session ID."],
+      [
+        ["sessions", "list", "--turn", "1", "--cwd", cwd],
+        "sessions",
+        "--turn and --file apply only to sessions diff.",
+      ],
+      [["models", "--provider", "nope", "--cwd", cwd], "models", "Unknown provider: nope"],
+      [["exec", "--bogus"], "exec", "Unknown option for ubume exec: --bogus"],
+    ];
+    for (const [argv, command, message] of cases) {
+      const human = await inProcess(argv);
+      assert.equal(human.code, 2, argv.join(" "));
+      assert.equal(human.stdout, "", argv.join(" "));
+      assert.equal(human.stderr, `${message}\n`, argv.join(" "));
+
+      const json = await inProcess([...argv, "--json"]);
+      assert.equal(json.code, 2, argv.join(" "));
+      assert.equal(json.stderr, "", argv.join(" "));
+      assert.deepEqual(JSON.parse(json.stdout), {
+        schemaVersion: 1,
+        command,
+        ok: false,
+        data: null,
+        error: { code: "USAGE", message },
+      });
+      assert.equal(json.stdout.split("\n").length, 2, "one envelope line");
+    }
+    // A well-formed but unknown session is unavailable (3), not a usage error.
+    const missing = await inProcess(["sessions", "show", "chat_missing", "--cwd", cwd, "--json"]);
+    assert.equal(missing.code, 3);
+    assert.deepEqual(JSON.parse(missing.stdout).error, {
+      code: "UNAVAILABLE",
+      message: "Session chat_missing could not be loaded.",
+    });
+    // A leading --json is moved behind the command name.
+    const leading = await inProcess(["--json", "bogus"]);
+    assert.equal(leading.code, 2);
+    assert.equal(JSON.parse(leading.stdout).command, "bogus");
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("help is available in human and JSON form from every entry spelling", async () => {
+  for (const argv of [[], ["help"], ["--help"], ["-h"], ["exec", "--help"], ["status", "-h"]]) {
+    const human = await inProcess(argv);
+    assert.equal(human.code, 0);
+    assert.match(human.stdout, /^Ubume .*\nUsage:/);
+    assert.equal(human.stdout.endsWith("\n\n"), false, "help is trimmed before printing");
+  }
+  const json = await inProcess(["--json"]);
+  assert.equal(json.code, 0);
+  const envelope = JSON.parse(json.stdout);
+  assert.equal(envelope.command, "help");
+  assert.equal(envelope.ok, true);
+  assert.match(envelope.data.help, /ubume exec --stdin/);
+});
+
+test("stdin prompts reject empty, oversized and non-UTF-8 input", async () => {
+  const empty = await inProcess(["exec", "--stdin", "--json"], {
+    stdin: stdinOf(Buffer.from(" \n")),
+  });
+  assert.equal(empty.code, 2);
+  assert.equal(JSON.parse(empty.stdout).error.message, "Stdin prompt is empty.");
+
+  const oversized = await inProcess(["exec", "--stdin", "--json"], {
+    stdin: stdinOf(Buffer.alloc(4 * 1024 * 1024, 97), Buffer.alloc(4 * 1024 * 1024 + 1, 97)),
+  });
+  assert.equal(oversized.code, 2);
+  assert.equal(JSON.parse(oversized.stdout).error.message, "Stdin prompt exceeds 8 MiB.");
+
+  const invalid = await inProcess(["exec", "--stdin", "--json"], {
+    stdin: stdinOf(Buffer.from([0xff, 0xfe])),
+  });
+  assert.equal(invalid.code, 1);
+  assert.equal(JSON.parse(invalid.stdout).error.code, "FAILED");
+});
+
+test("an aborted signal turns an otherwise successful command into an interruption", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const result = await inProcess(["help", "--json"], { signal: controller.signal });
+  assert.equal(result.code, 130);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.ok, false);
+  assert.deepEqual(envelope.error, { code: "INTERRUPTED", message: "Command interrupted." });
+});
+
+test("stdin prompts accept string chunks and keep surrounding whitespace", async () => {
+  const chunks: AsyncIterable<string> = {
+    async *[Symbol.asyncIterator]() {
+      yield "  hello ";
+      yield "world\n";
+    },
+  };
+  assert.equal(await readStdinPrompt(chunks), "  hello world\n");
+});
+
+test("inspection argument parsing separates flags, values and positionals", () => {
+  const parsed = parseInspectionArgs("sessions", [
+    "diff",
+    "chat_1",
+    "--turn=2",
+    "--file",
+    "a.ts",
+    "--json",
+  ]);
+  assert.deepEqual(parsed.positional, ["diff", "chat_1"]);
+  assert.deepEqual(
+    [...parsed.values],
+    [
+      ["--turn", "2"],
+      ["--file", "a.ts"],
+    ],
+  );
+  assert.deepEqual([...parsed.flags], ["--json"]);
+  assert.throws(() => parseInspectionArgs("status", ["--probe"]), /Unknown option: --probe/);
+  assert.throws(() => parseInspectionArgs("models", ["--provider", "--json"]), /Missing value/);
 });
