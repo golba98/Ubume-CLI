@@ -1,3 +1,15 @@
+/**
+ * First stage of timeline rendering: session events → render items.
+ *
+ * Groups `TimelineEvent`s into turns (by `turnId`) and standalone events, then
+ * decorates them as keyed `RenderTimelineItem`s with per-render state (turn
+ * opacity, run phase, pending question). Both `Timeline` and `TranscriptShell`
+ * build their items here before handing them to measurement. Also provides
+ * small `UIState` predicates used for viewport/finalize bookkeeping.
+ *
+ * Item keys (`turn-<turnId>`, `event-<id>`, `ubume-intro`) prefix every row
+ * and cache key downstream, so they must stay stable. Pure; no caching.
+ */
 import { APP_VERSION } from "../../config/settings.js";
 import type { CodexAuthState } from "../../core/codex/codexAuth.js";
 import { getAuthStateLabel } from "../../core/codex/codexAuth.js";
@@ -26,6 +38,7 @@ export function isStandaloneEvent(event: TimelineEvent): event is StandaloneTime
   return event.type === "system" || event.type === "error" || event.type === "shell";
 }
 
+/** The turn the UI state is about (thinking, responding, awaiting action, error…), or null. */
 export function getActiveTurnId(uiState: UIState): number | null {
   return uiState.kind === "THINKING" ||
     uiState.kind === "RESPONDING" ||
@@ -57,6 +70,11 @@ export function getFinalizedTurnIds(events: TimelineEvent[]): number[] {
     .map((event) => event.turnId);
 }
 
+/**
+ * True when the most recent finished run's last stream item is a completed,
+ * non-empty plan. `Timeline` uses it to skip finalize-continuity anchoring, so
+ * a run that ends in a plan keeps following the tail.
+ */
 export function latestFinalizedRunEndsWithPlan(events: TimelineEvent[]): boolean {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
@@ -78,6 +96,10 @@ export function latestFinalizedRunEndsWithPlan(events: TimelineEvent[]): boolean
   return false;
 }
 
+/**
+ * Detect the commit where a run finalizes: the UI went from busy to not busy
+ * and some previously running turn is now among the finalized ones.
+ */
 export function hasFinalizeTransition(params: {
   previousRunningTurnIds: number[];
   nextRunningTurnIds: number[];
@@ -94,6 +116,11 @@ export function hasFinalizeTransition(params: {
 
 // ─── Timeline item builders ───────────────────────────────────────────────────
 
+/**
+ * Group events into turn items (in first-appearance order) and standalone
+ * system/error/shell items. Turns without a user prompt are dropped, so
+ * `turnIndex` numbering counts every turn seen, including dropped ones.
+ */
 export function buildTimelineItems(events: TimelineEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const turns = new Map<number, TurnTimelineItem>();
@@ -156,6 +183,10 @@ export function createTurnOpacityResolver(turnIds: number[]): TurnOpacityResolve
   };
 }
 
+/**
+ * Opacity of one turn: "active" for the active turn, "recent" for the one
+ * before it (or the last turn when nothing is active), "dim" otherwise.
+ */
 export function resolveTurnOpacity(
   turnIds: number[],
   turnId: number,
@@ -164,6 +195,11 @@ export function resolveTurnOpacity(
   return createTurnOpacityResolver(turnIds)(turnId, activeTurnId);
 }
 
+/**
+ * Render items for finalized (static) events. Run phase is resolved against an
+ * IDLE UI state, and items are unpadded. `turnIds` should list all turns
+ * (static + active) so opacity is relative to the whole transcript.
+ */
 export function buildStaticRenderItems(
   items: TimelineItem[],
   turnIds: number[],
@@ -196,6 +232,10 @@ export function buildStaticRenderItems(
   });
 }
 
+/**
+ * Render items for in-flight events, with run phase, opacity and the pending
+ * question derived from the live `uiState`. Standalone events here are padded.
+ */
 export function buildActiveRenderItems(
   items: TimelineItem[],
   turnIds: number[],
@@ -235,6 +275,7 @@ export function formatAuthLabel(authState: CodexAuthState): string {
   return raw.length > 0 ? raw[0]!.toUpperCase() + raw.slice(1) : raw;
 }
 
+/** The startup header item (logo + version/workspace/provider-or-auth lines). */
 export function buildIntroRenderItem(params: {
   authState: CodexAuthState;
   workspaceLabel: string;

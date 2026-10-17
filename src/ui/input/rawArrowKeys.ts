@@ -1,3 +1,12 @@
+/**
+ * Decode arrow keys from raw stdin chunks.
+ *
+ * Used by panels that also listen to the raw stdin `data` stream next to Ink's
+ * `useInput` (`panels/UpdatePromptPanel.tsx`, `panels/PlanActionPicker.tsx`), as
+ * a fallback for arrow presses that Ink's parsed `key.*Arrow` flags miss — e.g.
+ * when Ink has already consumed the leading ESC as a bare Escape (see the
+ * comment in PlanActionPicker). Pure module: no state, no side effects.
+ */
 export type ArrowDirection = "up" | "down" | "left" | "right";
 export type HorizontalArrowDirection = "left" | "right";
 

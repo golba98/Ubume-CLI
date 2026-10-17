@@ -1,3 +1,16 @@
+/**
+ * Generic option-cycling settings form: one row per setting, each showing all
+ * of its options with the active one bracketed. Used for the `/settings`
+ * overlay (`USER_SETTING_DEFINITIONS`) and by `CodexaSettingsPanel`.
+ *
+ * Owns local `selectedIndex` and `draftValues` (a copy of `values` taken on
+ * mount); nothing is applied until Enter calls `onSave` with the whole draft.
+ * Esc discards the draft. Persisting is done by the caller in `src/app`.
+ *
+ * Focus: registers `focusId` with `autoFocus`; input is handled only while
+ * focused. Keys: Up/Down select a setting, Left/Right cycle its option
+ * (wrapping), Enter saves, Esc cancels. All rows are rendered (no scrolling).
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useMemo, useState } from "react";
 import type { SettingDefinition } from "../../config/settings.js";
@@ -7,12 +20,18 @@ import { useTheme } from "../theme.js";
 interface SettingsPanelProps<TKey extends string> {
   focusId: FocusTargetId;
   title?: string;
+  /** Rows in display order; each defines its key, label, optional description and options. */
   settings: readonly SettingDefinition<TKey, string>[];
+  /** Initial values; read once on mount (later prop changes do not reset the draft). */
   values: Record<TKey, string>;
   onSave: (values: Record<TKey, string>) => void;
   onCancel: () => void;
 }
 
+/**
+ * Step to the previous/next option, wrapping around. An unknown current value
+ * is treated as the first option.
+ */
 function cycleOption<TKey extends string>(
   definition: SettingDefinition<TKey, string>,
   currentValue: string,
@@ -24,6 +43,7 @@ function cycleOption<TKey extends string>(
   return definition.options[nextIndex]?.value ?? currentValue;
 }
 
+/** Settings form; see the module header for keys and draft semantics. */
 export function SettingsPanel<TKey extends string>({
   focusId,
   title = "Settings",

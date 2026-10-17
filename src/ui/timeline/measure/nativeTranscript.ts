@@ -1,3 +1,18 @@
+/**
+ * Measurement for the production transcript (`TranscriptShell`), which splits
+ * output into Ink `<Static>` items (printed once into native scrollback) and
+ * live rows (re-rendered each flush).
+ *
+ * Placement rule: a finalized turn emits one static item per block (prompt,
+ * each stream event, gaps); a running turn emits *everything* — prompt,
+ * blocks, question card, gaps — as live rows, and moves to `<Static>` only
+ * once it finalizes. Non-turn items (intro, standalone events) are always
+ * static and are measured via `buildTimelineSnapshot`. Row keys use
+ * `streamSeq`, not array index, so they stay stable as events arrive.
+ *
+ * The finalized-turn half is incrementally cached by `staticTranscriptCache.ts`;
+ * row-level caching comes from the shared `measure/` caches.
+ */
 import * as renderDebug from "../../../core/perf/renderDebug.js";
 import type { RunEvent } from "../../../session/types.js";
 import { buildUserInputRows } from "./cards.js";
@@ -15,6 +30,11 @@ import type {
 
 // ─── Native transcript builders ───────────────────────────────────────────────
 
+/**
+ * Whether `event` is the block currently being produced (and so gets a live
+ * indicator): the running tool, the active response segment, or an active
+ * plan. Always false once the run has finished.
+ */
 function isNativeLiveStreamEvent(event: StreamEvent, run: RunEvent): boolean {
   if (run.status !== "running") return false;
   if (event.kind === "action") return event.tool.status === "running";
@@ -23,6 +43,7 @@ function isNativeLiveStreamEvent(event: StreamEvent, run: RunEvent): boolean {
   return false;
 }
 
+// Native items get no trailing margin row: explicit gap rows are emitted instead.
 function wrapNativeRows(
   rows: TimelineRow[],
   totalWidth: number,
@@ -44,6 +65,7 @@ export function __resetNativeTurnBuildCountForTests(): void {
   _nativeTurnBuildCount = 0;
 }
 
+/** Append one turn's rows to `output`, routing them to `staticItems` or `liveRows` by run status. */
 function appendNativeTurnParts(
   output: NativeTranscriptParts,
   item: TurnRenderItem,
@@ -115,6 +137,9 @@ function appendNativeTurnParts(
     }
   });
 
+  // A pending question is always placed live, even on a finalized turn: it
+  // comes from transient UI state (AWAITING_USER_ACTION), not transcript
+  // content, so it must never be committed to append-only <Static>.
   const questionRows = buildActionRequiredRows(item, innerWidth);
   if (questionRows.length > 0) {
     output.liveRows.push(
@@ -133,6 +158,13 @@ function appendNativeTurnParts(
   }
 }
 
+/**
+ * Measure `items` into `<Static>` items and live rows at `totalWidth`.
+ *
+ * Note: unlike `buildTurnRows`, this path emits per-event rows only (no
+ * run-level footer such as the impact summary or cancel notice) and does not
+ * apply turn opacity.
+ */
 export function buildNativeTranscriptParts(
   items: RenderTimelineItem[],
   options: {

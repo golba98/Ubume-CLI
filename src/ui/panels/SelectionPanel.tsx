@@ -1,3 +1,17 @@
+/**
+ * Generic single-select list overlay: bordered box, title, scrolling items and a
+ * key hint. Backs the mode, theme and reasoning pickers (`SimplePickers.tsx`),
+ * `SettingsPanel`'s sub-pickers, PermissionsPanel and others.
+ *
+ * Owns local `selectedIndex` and `scrollOffset`; items, callbacks and the focus
+ * id come from the caller. Size comes from `usePanelLayout()` (provided by
+ * `AppShell`), with fallbacks for standalone rendering. Below 3 available rows
+ * the border, title and hint are dropped so at least the list remains.
+ *
+ * Focus: registers `focusId` with `autoFocus`; input is only handled while
+ * focused. Keys: Up/Down or k/j move, PageUp/PageDown move by one window,
+ * Home/End jump, Enter selects, Esc cancels.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import { clampVisualText } from "../../core/shared/text.js";
@@ -7,13 +21,19 @@ import { useTheme } from "../theme.js";
 import { calculateResponsivePickerViewport } from "./responsivePickerViewport.js";
 
 interface SelectionPanelProps {
+  /** Ink focus id (one of `FOCUS_IDS`); must match what focus routing targets for the screen. */
   focusId: string;
   title: string;
+  /** Appended to the title only when the panel is at least 70 columns wide. */
   subtitle: string;
+  /** Items keyed by `value`, which must be unique (used as React key). */
   items: Array<{ label: string; value: string }>;
+  /** Accepted for API compatibility but currently unused; the window size comes from the layout. */
   limit?: number;
+  /** Value to preselect on mount; falls back to the first item. */
   initialValue?: string;
   onSelect: (value: string) => void;
+  /** Called on every keyboard move (not on mount), e.g. for live theme preview. */
   onHighlight?: (value: string) => void;
   onCancel: () => void;
 }
@@ -51,10 +71,12 @@ export function SelectionPanel({
     [availableRows, items.length, scrollOffset, selectedIndex],
   );
 
+  // Keep the selection valid if the item list shrinks while open.
   useEffect(() => {
     setSelectedIndex((current) => clampIndex(current, items.length));
   }, [items.length]);
 
+  // Persist the computed window start so the next render scrolls from here.
   useEffect(() => {
     setScrollOffset(viewport.start);
   }, [viewport.start]);

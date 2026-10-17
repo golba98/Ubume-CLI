@@ -1,5 +1,20 @@
+/**
+ * Ink focus-id registry and the screen-to-focus-target mapping.
+ *
+ * Every focusable panel registers with Ink's focus manager via
+ * `useFocus({ id, autoFocus: true })` using one of the ids below, and
+ * `src/app/lifecycle/useFocusRouting.ts` calls `focusManager.focus(...)` with
+ * `getFocusTargetForScreen(screen)` whenever the active screen (or composer
+ * instance) changes. Keeping the ids in one place means a panel and the router
+ * cannot drift apart.
+ *
+ * Pure module: no state, no side effects. A few panels (ResumePicker,
+ * WorkbenchPanel, ExternalSessionViewer) pass the id as a string literal; those
+ * literals must stay equal to the values here.
+ */
 import type { Screen } from "../../session/types.js";
 
+/** Ink focus ids for every focusable surface, keyed by a stable code name. */
 export const FOCUS_IDS = {
   composer: "composer",
   workbench: "workbench-panel",
@@ -27,8 +42,16 @@ export const FOCUS_IDS = {
   usagePanel: "usage-panel",
 } as const;
 
+/** Union of every registered focus id string. */
 export type FocusTargetId = (typeof FOCUS_IDS)[keyof typeof FOCUS_IDS];
 
+/**
+ * Map an app `Screen` to the focus id that should own keyboard input on it.
+ *
+ * The saved and external session viewers share one component and therefore
+ * one id. `main` and any unknown screen fall back to the composer, so focus is
+ * never left on an unmounted panel.
+ */
 export function getFocusTargetForScreen(screen: Screen): FocusTargetId {
   switch (screen) {
     case "workbench-panel":

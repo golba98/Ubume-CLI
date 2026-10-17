@@ -1,3 +1,13 @@
+/**
+ * Tail-windowing for the live (non-`<Static>`) half of `TranscriptShell`.
+ *
+ * The running turn is measured in full by `buildNativeTranscriptParts`, but
+ * only its last N rows may be rendered live: if Ink's live output is ever
+ * taller than the terminal, Ink clears the screen and scrollback. This module
+ * trims the measured rows to fit, using `TimelineRow.frame` metadata (set by
+ * the card builders in `measure/cards.ts` and preserved by `wrapRows`) to avoid
+ * leaving a card without its top border. Pure; no caching.
+ */
 import type { TimelineRow } from "./timelineMeasure.js";
 import { buildFrameElisionRow } from "./timelineMeasure.js";
 

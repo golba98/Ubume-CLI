@@ -1,9 +1,33 @@
+/**
+ * Pure viewport state machine for the `Timeline` row view, driven by
+ * `useTimelineViewport`. (`scrollTimelineViewport` / `isNearBottom` have no
+ * production caller at present; they are exercised by tests.)
+ *
+ * Model: `anchorRow` is the index of the BOTTOM visible row; the window is the
+ * `viewportRows` rows ending there. In follow-tail mode the anchor tracks the
+ * last row of the live snapshot. When the user scrolls up, the viewport
+ * detaches and pins a `frozenSnapshot` so streaming growth below cannot shift
+ * what they are reading; `unseenItems` / `unseenRows` count what has arrived
+ * since. On a width change the frozen snapshot is rebuilt from the reflowed
+ * live items and the anchor is translated via an (item, row-within-item) pair.
+ *
+ * Everything here is row-count arithmetic over measured snapshots, so it is
+ * only correct if each `TimelineRow` renders as exactly one terminal line.
+ * All functions are pure; `syncTimelineViewport` and `scrollTimelineViewport`
+ * return the input object when nothing changed, letting React bail out of
+ * state updates.
+ */
 import type { TimelineRow, TimelineSnapshot } from "./timelineMeasure.js";
 
 // Re-enter follow-tail mode when the user scrolls within this many rows of the
 // tail, preventing a "stuck just above bottom" state after a near-end wheel scroll.
 export const NEAR_BOTTOM_THRESHOLD = 3;
 
+/**
+ * `anchorRow` is the bottom visible row. `frozenSnapshot` is non-null only
+ * while detached (`followTail === false`); the unseen counters compare it with
+ * the latest live snapshot.
+ */
 export interface TimelineViewportState {
   anchorRow: number;
   followTail: boolean;
@@ -17,6 +41,7 @@ export interface FinalizeContinuityOptions {
   viewportRows: number;
 }
 
+/** Clamp to `[0, totalRows - 1]` (0 for an empty snapshot). */
 export function clampAnchorRow(anchorRow: number, totalRows: number): number {
   if (totalRows <= 0) {
     return 0;
@@ -29,6 +54,7 @@ export function isNearBottom(anchorRow: number, totalRows: number): boolean {
   return totalRows <= 0 || anchorRow >= totalRows - 1 - NEAR_BOTTOM_THRESHOLD;
 }
 
+/** Smallest useful anchor: the bottom row of the first full page (scroll-up floor). */
 export function getFirstPageAnchor(totalRows: number, viewportRows: number): number {
   if (totalRows <= 0) {
     return 0;
@@ -59,6 +85,11 @@ export function createAnchoredViewport(
   };
 }
 
+/**
+ * Index of the first final-response row (key contains `-codex-response-`) at
+ * or after one viewport above the pre-finalize tail, or null. Depends on the
+ * row-key naming used by `buildCodexResponseRows`.
+ */
 export function findFinalResponseStartRow(
   snapshot: TimelineSnapshot,
   previousTotalRows: number,
@@ -71,6 +102,11 @@ export function findFinalResponseStartRow(
   return responseIndex >= 0 ? responseIndex : null;
 }
 
+/**
+ * Detached viewport for a large finalize jump: anchor a few rows (1–3, about a
+ * quarter viewport) into the final response, or just past the previous tail
+ * when no response row is found, instead of jumping to the new tail.
+ */
 export function createFinalizeContinuityViewport(
   snapshot: TimelineSnapshot,
   options: FinalizeContinuityOptions,
@@ -103,6 +139,12 @@ export function getFrozenSnapshot(
     : viewport.frozenSnapshot;
 }
 
+/**
+ * Reconcile the viewport with a new live snapshot (same width). Follow-tail
+ * moves to the new tail (or, with `finalizeContinuity`, to the continuity
+ * anchor); a detached viewport keeps its frozen snapshot and anchor and only
+ * refreshes the unseen counters.
+ */
 export function syncTimelineViewport(
   viewport: TimelineViewportState,
   liveSnapshot: TimelineSnapshot,
@@ -253,6 +295,11 @@ export function reflowTimelineViewport(
   };
 }
 
+/**
+ * Apply a scroll of `deltaRows` (negative = up). Scrolling up detaches onto
+ * the current snapshot (floored at the first page); reaching the tail
+ * re-enters follow-tail.
+ */
 export function scrollTimelineViewport(
   viewport: TimelineViewportState,
   liveSnapshot: TimelineSnapshot,
@@ -294,6 +341,10 @@ export function scrollTimelineViewport(
 
 // ─── Row selection & render items ────────────────────────────────────────────
 
+/**
+ * Slice the visible rows: up to `viewportRows` rows ending at the anchor, from
+ * the frozen snapshot when detached, otherwise from the live one.
+ */
 export function selectTimelineRows(
   liveSnapshot: TimelineSnapshot,
   viewport: TimelineViewportState,

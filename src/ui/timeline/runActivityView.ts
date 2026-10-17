@@ -1,8 +1,24 @@
+/**
+ * Pure view-model helpers for run activity, shared by the measured row
+ * builders (`measure/streamRows.ts`, `measure/eventRows.ts`) and the React
+ * `TurnGroup` path so both select, merge and label activity identically.
+ *
+ * Covers: which file activity entries to show, thinking-block coalescing,
+ * shell-wrapper stripping for action commands, and friendly action labels.
+ * `shouldShowRawOutputFallback` / `getVisibleRawOutputLines` are retained
+ * stubs that currently always disable the raw-output fallback.
+ */
 import type { RunEvent, RunProgressBlock } from "../../session/types.js";
 import { formatTerminalAnswerInline } from "../render/terminalAnswerFormat.js";
 
 const MAX_VISIBLE_ACTIVE_ACTIVITY = 6;
 const MAX_VISIBLE_SUMMARY_ACTIVITY = 4;
+/**
+ * Pick the trailing file-activity entries to display: up to 6 of the live
+ * `activity` list while running, otherwise up to 4 of `activitySummary.recent`
+ * (falling back to `activity`). `hiddenCount` is how many older entries were
+ * dropped.
+ */
 export function selectVisibleRunActivity(event: RunEvent) {
   const source =
     event.status === "running" ? event.activity : (event.activitySummary?.recent ?? event.activity);
@@ -25,6 +41,10 @@ export function getVisibleRawOutputLines(event: RunEvent): string[] {
   return [];
 }
 
+/**
+ * One-line "N files touched  +created  ~modified  -deleted" summary, or null
+ * when there is no summary or no touched files.
+ */
 export function formatRunActivityStats(event: RunEvent): string | null {
   const summary = event.activitySummary;
   if (!summary || event.touchedFileCount === 0) return null;
@@ -49,6 +69,11 @@ interface ThinkingLikeEvent {
  * emit every reasoning paragraph as its own progress item, which otherwise
  * stacks one labeled block per sentence. Thoughts separated by a tool call or
  * response segment stay separate — only uninterrupted runs merge.
+ *
+ * The merged event keeps the first member's identity (`streamSeq`, block id),
+ * so row keys derived from it stay stable; its text joins non-empty member
+ * texts with blank lines, `updatedAt` is the latest member's, and `status` is
+ * the last member's.
  */
 export function coalesceConsecutiveThinking<T extends { kind: string; streamSeq: number }>(
   events: T[],
@@ -102,6 +127,7 @@ function decodeEscapedQuotes(s: string): string {
   return s.replace(/\\"/g, '"');
 }
 
+/** Unescape `\"`, trim, and compact local file paths for display. */
 function cleanCommand(command: string): string {
   return formatTerminalAnswerInline(decodeEscapedQuotes(command.trim()));
 }
@@ -140,6 +166,9 @@ export function normalizeCommand(command: string): string {
 /**
  * Maps a normalized command to a short human-readable label.
  * Returns null when no label applies and the command itself should be shown.
+ * The exact "Read file" / "List files" strings are also what
+ * `compactActionBursts` (measure/streamRows.ts) groups on; renaming them
+ * changes burst compaction.
  */
 export function getFriendlyActionLabel(normalizedCommand: string): string | null {
   const cmd = normalizedCommand.trim();

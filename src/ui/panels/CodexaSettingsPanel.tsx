@@ -1,3 +1,18 @@
+/**
+ * Generation-settings overlay for the `codexa-native` provider, built on
+ * `SettingsPanel`. `src/app/overlays/OverlayPanels.tsx` shows it instead of the
+ * regular settings panel when that provider is active.
+ *
+ * Stateless wrapper: it maps the current `CodexaNativeOptions.generation` (via
+ * `validateCodexaGeneration`) to string option rows, each a fixed choice list
+ * plus the current value if it is not already listed. On save, the
+ * `evaluation` / `conversation` presets replace all fields with
+ * `codexaPreset(...)`; `custom` rebuilds and validates the individual fields.
+ * The merged options go to `onSave`; the caller persists them.
+ *
+ * If the stored generation config fails validation, a plain error message is
+ * rendered instead of the form (no focus target is registered then).
+ */
 import { Text } from "ink";
 import type { SettingDefinition } from "../../config/settings.js";
 import {
@@ -8,6 +23,7 @@ import {
 import { FOCUS_IDS } from "../input/focus.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 
+/** Codexa Native generation form; `null` values are shown and edited as `"off"`. */
 export function CodexaSettingsPanel({
   options,
   onSave,

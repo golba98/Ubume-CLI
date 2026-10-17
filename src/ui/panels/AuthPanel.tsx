@@ -1,3 +1,16 @@
+/**
+ * `/auth` overlay (`auth-panel` screen): shows the active backend, the saved
+ * auth preference, the last Codex auth probe result and guidance, and lets the
+ * user switch preference or re-probe.
+ *
+ * Stateless: preference, probe result and busy flag come from `src/app`, and
+ * the callbacks persist/refresh there. Uses `usePanelLayout()` to switch to a
+ * condensed layout in compact mode or below 16 available rows.
+ *
+ * Focus: registers `focusId` with `autoFocus`; input is handled only while
+ * focused. Keys: 1..N select the Nth `AUTH_PREFERENCES` entry, R re-probes,
+ * Esc or Q closes.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { AUTH_PREFERENCES, formatAuthPreferenceLabel } from "../../config/settings.js";
 import type { CodexAuthProbeResult } from "../../core/codex/codexAuth.js";
@@ -9,15 +22,20 @@ import { useTheme } from "../theme.js";
 
 interface AuthPanelProps {
   focusId: string;
+  /** Active backend; supplies the label, auth label and status message. */
   provider: BackendProvider;
+  /** Saved preference id (one of `AUTH_PREFERENCES`). */
   authPreference: string;
+  /** Latest probe result; `checkedAt === 0` means not probed yet. */
   authStatus: CodexAuthProbeResult;
+  /** True while a probe is running; shows a "Checking…" line. */
   authStatusBusy: boolean;
   onSetPreference: (value: string) => void;
   onRefreshAuthStatus: () => void;
   onClose: () => void;
 }
 
+/** Auth overlay; see the module header for keys. */
 export function AuthPanel({
   focusId,
   provider,

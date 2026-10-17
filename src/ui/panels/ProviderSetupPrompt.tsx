@@ -1,11 +1,24 @@
+/**
+ * Overlay shown when a provider's CLI executable cannot be found: explains the
+ * situation and offers "install and sign in" (when an install command is
+ * known) or "I installed it — retry launch", plus Cancel, via `SelectionPanel`.
+ *
+ * Stateless. Both the install and retry choices call `onInstall`; the caller
+ * (`src/app/providers/useProviderRoute.ts` via OverlayPanels) decides what that
+ * means. Uses the `providerSetup` focus id. Note: colors here are literal
+ * (`yellow`/`gray`) rather than theme tokens.
+ */
 import { Box, Text } from "ink";
 import { FOCUS_IDS } from "../input/focus.js";
 import { SelectionPanel } from "./SelectionPanel.js";
 
 interface ProviderSetupPromptProps {
   providerLabel: string;
+  /** Executable name that was not found, shown to the user. */
   executable: string;
+  /** Install command, or null when Ubume cannot install this provider (manual install + retry). */
   installCommand: string | null;
+  /** Sign-in/setup command shown when an install command exists. */
   setupCommand: string;
   onInstall: () => void;
   onCancel: () => void;

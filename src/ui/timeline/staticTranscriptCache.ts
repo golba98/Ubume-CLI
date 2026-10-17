@@ -1,3 +1,14 @@
+/**
+ * Incremental cache for the `<Static>` (finalized) half of `TranscriptShell`.
+ * See the doc on `MAX_RETAINED_STATIC_TURNS` below for the design and
+ * retention rules.
+ *
+ * Ownership: the cache object is created and held in a ref by
+ * `TranscriptShellInner`, which is remounted on `/clear` and width repaints,
+ * so those boundaries start from an empty cache. A generation string
+ * (width | verbose | workspaceRoot) additionally drops all entries when any of
+ * those inputs change.
+ */
 import type {
   AssistantEvent,
   ErrorEvent,
@@ -36,7 +47,9 @@ import {
  */
 export const MAX_RETAINED_STATIC_TURNS = 200;
 
-const EMPTY_ROWS: TimelineRow[] = Object.freeze([]) as unknown as TimelineRow[];
+// Shared by every elided turn, so it is frozen: a stray push would otherwise corrupt
+// all of them. The cast restores the mutable type `NativeTranscriptRowItem.rows` uses.
+const EMPTY_ROWS = Object.freeze<TimelineRow[]>([]) as TimelineRow[];
 
 interface CachedTurnEntry {
   kind: "turn";
@@ -61,6 +74,7 @@ interface StaticTranscriptBuildOptions {
   workspaceRoot: string | null;
 }
 
+/** Mutable cache state; create with `createStaticTranscriptCache` and pass to `buildStaticTranscript`. */
 export interface StaticTranscriptCache {
   generation: string;
   entries: Map<string, CachedEntry>;
@@ -76,6 +90,8 @@ function staticTranscriptGeneration(options: StaticTranscriptBuildOptions): stri
   return `${options.totalWidth}|${options.verboseMode ? 1 : 0}|${options.workspaceRoot ?? ""}`;
 }
 
+// Identity comparison relies on finalized events being immutable (see above):
+// same event objects + same opacity means the rows cannot have changed.
 function isCacheHit(cached: CachedEntry, item: RenderTimelineItem): boolean {
   if (item.type === "event") return cached.kind === "event" && cached.event === item.event;
   if (item.type !== "turn" || cached.kind !== "turn") return false;
@@ -87,6 +103,8 @@ function isCacheHit(cached: CachedEntry, item: RenderTimelineItem): boolean {
   );
 }
 
+// Only fully static output is cached: a running turn, a pending question, or
+// any live rows mean the next commit may render differently.
 function isCacheable(item: RenderTimelineItem, liveRowCount: number): boolean {
   if (item.type === "event") return true;
   if (item.type !== "turn") return false;
@@ -100,6 +118,10 @@ function isCacheable(item: RenderTimelineItem, liveRowCount: number): boolean {
  * every item whose inputs are unchanged. Output is identical to a single
  * batched buildNativeTranscriptParts call over the same items, except that
  * turns outside the retention window carry empty rows.
+ *
+ * Mutates `cache` (generation reset, new entries, placeholders, and pruning of
+ * entries whose items no longer appear). Intro items are rebuilt on every
+ * call, uncached here (row-level caches still apply).
  */
 export function buildStaticTranscript(
   cache: StaticTranscriptCache,

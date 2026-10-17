@@ -470,15 +470,28 @@ test("provider setup failures are titled with the provider being set up", () => 
 });
 
 test("Composer clears every raw-key timeout when its stdin listener is removed", () => {
-  const cleanup = composerSource.match(/stdin\.off\("data", handleRawInput\);([\s\S]*?)\n {4}\};/);
-  assert.ok(cleanup, "raw-input effect cleanup should exist");
-  const timeoutRefs = [...composerSource.matchAll(/const (\w+EventTimeoutRef) = useRef/g)].map(
-    (match) => match[1],
+  // The composer's raw-key windows live in the shared rawStdinSignals hook, which
+  // removes its listener and clears every hold timer in the same effect cleanup.
+  const rawSignalsSource = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "ui", "input", "rawStdinSignals.ts"),
+    "utf8",
   );
-  assert.ok(timeoutRefs.length > 0);
-  for (const ref of timeoutRefs) {
-    assert.match(cleanup[1] ?? "", new RegExp(`clearTimeout\\(${ref}\\.current\\)`), ref);
-  }
+  const cleanup = rawSignalsSource.match(
+    /stdin\.off\("data", handleRawInput\);([\s\S]*?)\n {4}\};/,
+  );
+  assert.ok(cleanup, "raw-input effect cleanup should exist");
+  assert.match(cleanup[1] ?? "", /for \(const slot of slots\.values\(\)\)/);
+  assert.match(cleanup[1] ?? "", /clearTimeout\(slot\.timer\)/);
+
+  // Every raw-key window of the composer must go through the hook, not ad-hoc timers.
+  assert.match(composerSource, /useRawStdinSignals\(stdin, COMPOSER_RAW_SIGNALS/);
+  assert.doesNotMatch(composerSource, /EventTimeoutRef/);
+  assert.doesNotMatch(composerSource, /stdin\.on\("data"/);
+  // The paste burst timer is released on unmount as well.
+  assert.match(
+    composerSource,
+    /useEffect\(\(\) => \(\) => pasteAssemblerRef\.current\?\.dispose\(\), \[\]\)/,
+  );
 });
 
 test("startPromptRun re-creates when the workspace provider config or auth timestamp change", () => {

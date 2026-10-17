@@ -1,3 +1,16 @@
+/**
+ * Bordered-card and turn-chrome row builders: dash cards, panels, the
+ * live-window elision row, the user prompt card, and the impact summary.
+ *
+ * Card rows carry `frame` metadata (`id` = keyPrefix, role top/content/bottom)
+ * so `windowLiveRows` can tell when a slice would cut a card open. Content is
+ * fitted (clamped + padded) to the inner width so borders always land on the
+ * declared width, keeping each row exactly one terminal line.
+ *
+ * `buildDashCardRows` mirrors the React `DashCard` top-border layout and
+ * `buildPanelRows` mirrors `Panel` (render/Markdown.tsx); the measured rows,
+ * not the components, are what the transcript renders.
+ */
 import { formatDuration, getTextWidth, wrapPlainText } from "../../../core/shared/text.js";
 import {
   sanitizeTerminalLines,
@@ -9,6 +22,8 @@ import type { TimelineRow, TimelineRowSpan, TimelineTone, TurnRenderItem } from 
 
 const MAX_SHELL_FAILURE_EXCERPT_LINES = 3;
 
+// `╭── title ─…─ badge ──╮` (or `╭── title ─…──╮`); the fill absorbs the slack.
+// Tones here are placeholders that buildDashCardRows remaps to the card's tones.
 function buildTopBorder(width: number, title: string, rightBadge?: string): TimelineRowSpan[] {
   const safeWidth = Math.max(4, width);
   const prefixWidth = 4;
@@ -40,6 +55,11 @@ function buildTopBorder(width: number, title: string, rightBadge?: string): Time
   return spans;
 }
 
+/**
+ * Rounded card: top border with title/badge, one `│ … │` row per content line
+ * (each fitted to `width - 4`), and a bottom border. Row keys are
+ * `${keyPrefix}-top|-content-N|-bottom`.
+ */
 export function buildDashCardRows(params: {
   keyPrefix: string;
   width: number;
@@ -134,6 +154,7 @@ export function buildFrameElisionRow(frameTopRow: TimelineRow, hiddenRows: numbe
   );
 }
 
+/** `╭─ TITLE ─── RIGHT ╮` panel with active-border tones (minimum width 10). */
 export function buildPanelRows(params: {
   keyPrefix: string;
   width: number;
@@ -191,6 +212,7 @@ export function buildPanelRows(params: {
 
 // ─── Turn content builders ────────────────────────────────────────────────────
 
+/** The "PROMPT" card for a turn's user prompt (`❯` marker, dimmed when the turn is dim). */
 export function buildUserInputRows(item: TurnRenderItem, width: number): TimelineRow[] {
   const dim = item.renderState.opacity === "dim";
   const contentWidth = Math.max(1, width - 4);
@@ -211,6 +233,10 @@ export function buildUserInputRows(item: TurnRenderItem, width: number): Timelin
   });
 }
 
+/**
+ * Up to three non-empty lines of a failed shell command's output (stderr
+ * preferred), skipping a first line that merely repeats the summary.
+ */
 export function getShellFailureExcerpt(event: ShellEvent): string[] {
   const source = event.stderrLines.length > 0 ? event.stderrLines : event.lines;
   const summary = sanitizeTerminalOutput(event.summary ?? "")
@@ -225,7 +251,9 @@ export function getShellFailureExcerpt(event: ShellEvent): string[] {
 
 /**
  * Compact impact summary for completed runs (default mode).
- * Shows file changes and a summary footer.
+ * Shows file changes and a summary footer. The action count only includes
+ * tools that never appeared in the stream (already-streamed actions have
+ * their own rows). Returns `[]` when there is nothing to report.
  */
 export function buildImpactSummaryRows(item: TurnRenderItem, width: number): TimelineRow[] {
   const run = item.item.run!;

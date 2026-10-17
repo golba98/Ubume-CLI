@@ -1,3 +1,23 @@
+/**
+ * Snapshot builders for the `Timeline` row view: render items → `TimelineSnapshot`.
+ *
+ * - `buildTimelineSnapshot` — static/finalized items. Intro, events and
+ *   completed turns are cached in `_staticRowCache` (via `getStaticRows`);
+ *   turns still streaming/thinking are rebuilt each call.
+ * - `buildStableTimelineSnapshot` — active items. Builds each turn block by
+ *   block and caches every non-live block (prompt card, finished thinking /
+ *   action / response, plan) in the frozen row-group cache keyed by content
+ *   tokens, so a streaming flush only rebuilds the block that is changing.
+ *
+ * Height stability: while a run is `running`, its measured height must only
+ * grow and its block order must be append-only, otherwise the bottom-anchored
+ * viewport re-reveals scrolled-off content. That is enforced by the stream
+ * helpers this file uses (`collectStreamEvents` defers reasoning while running;
+ * `compactActionBursts` only compacts finalized runs) and pinned by
+ * `streamingHeightStability.test.ts` and `liveTurnOrderStability.test.ts`.
+ * Gap rows are keyed by `streamSeq`, not array index, so row keys stay stable
+ * (no remounts) as events arrive.
+ */
 import * as renderDebug from "../../../core/perf/renderDebug.js";
 import type { RunEvent } from "../../../session/types.js";
 import { getResponseSegmentText } from "../../../session/types.js";
@@ -61,6 +81,8 @@ function buildStableIntroRows(
   return getCachedFrozenRows(cacheKey, () => buildIntroRows(item, innerWidth));
 }
 
+// Cache-key fragment covering the plan's identity/content and the stream item
+// order, so a plan edit or reordering invalidates otherwise-static turn rows.
 function buildPlanCacheSignature(run: RunEvent | null | undefined): string {
   if (!run) return "";
   const plan = run.plan;
@@ -75,6 +97,8 @@ function buildPlanCacheSignature(run: RunEvent | null | undefined): string {
   ]);
 }
 
+// Whole-turn rows (via buildTurnRows) for a turn that is not streaming/thinking,
+// keyed by every content input that can still change on an active turn.
 function buildStableFrozenTurnRows(
   item: TurnRenderItem,
   innerWidth: number,
@@ -122,6 +146,8 @@ function buildStableFrozenTurnRows(
   return getCachedFrozenRows(cacheKey, () => buildTurnRows(item, innerWidth, options));
 }
 
+// Live blocks are rebuilt every call (never cached): the active response
+// segment and running tools of a running run.
 function isLiveStreamEvent(event: StreamEvent, run: RunEvent): boolean {
   if (run.status !== "running") return false;
   if (event.kind === "response") return event.segment.status === "active";
@@ -130,6 +156,13 @@ function isLiveStreamEvent(event: StreamEvent, run: RunEvent): boolean {
   return false;
 }
 
+/**
+ * Block-by-block rows for an active turn. Streaming/thinking turns are
+ * assembled from per-block cached rows (mirroring `buildTurnRows`' prompt,
+ * stream events, question and gaps — but without its finalized-run footer);
+ * other turns fall back to cached whole-turn rows. All rows are returned as
+ * `frozenRows`; `liveRows` is always empty.
+ */
 function buildStableActiveTurnGroups(
   item: TurnRenderItem,
   innerWidth: number,
@@ -313,6 +346,10 @@ function buildStableActiveTurnGroups(
 
 // ─── Public snapshot builders ─────────────────────────────────────────────────
 
+/**
+ * Measure active render items into a snapshot (see module doc). Each item's
+ * rows are wrapped to `totalWidth` with a trailing margin row.
+ */
 export function buildStableTimelineSnapshot(
   items: RenderTimelineItem[],
   options: TimelineBuildOptions,
@@ -378,6 +415,10 @@ export function buildStableTimelineSnapshot(
   };
 }
 
+/**
+ * Measure static render items into a snapshot (see module doc). Also used by
+ * `buildNativeTranscriptParts` for intro and standalone-event items.
+ */
 export function buildTimelineSnapshot(
   items: RenderTimelineItem[],
   options: TimelineBuildOptions,

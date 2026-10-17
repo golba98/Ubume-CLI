@@ -12,6 +12,9 @@ import { useEffect } from "react";
  * make Node/Bun streams switch stdin to flowing mode, after which 'readable'
  * never fires and Ink stops receiving input entirely (no keys, no Ctrl+C).
  * Keeping the count above zero at the root prevents the listener churn.
+ *
+ * Called once from `src/app/App.tsx`. The lease is released on unmount; it is a
+ * no-op when stdin does not support raw mode (e.g. piped input).
  */
 export function useStdinRawModeLease(): void {
   const { isRawModeSupported, setRawMode } = useStdin();
