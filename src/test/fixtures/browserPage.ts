@@ -1,3 +1,9 @@
+/**
+ * Loopback-only HTML fixture for browser tools and Harness integration tests.
+ * Each server owns an ephemeral port; consumers must await `close()` in `finally`.
+ * The page deliberately includes private input values and ambiguous controls for
+ * redaction and accessible-target regression scenarios.
+ */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 
@@ -14,7 +20,8 @@ export const fixtureHtml = `<!doctype html><html><head><title>Ubume browser fixt
 <p id="result">Ready</p><div style="display:none">Hidden secret</div><div style="height:1800px"></div><p>Bottom content</p>
 </body></html>`;
 
-export async function fixtureServer() {
+/** Starts an independent fixture site. Rejects if the HTTP listener cannot start. */
+export async function fixtureServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer((request, response) => {
     if (request.url === "/redirect") {
       response.writeHead(302, { Location: "/" });
@@ -33,14 +40,26 @@ export async function fixtureServer() {
         : fixtureHtml,
     );
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
   const address = server.address();
   assert(address && typeof address !== "string");
+  let closing: Promise<void> | undefined;
   return {
     url: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+    close: () => {
+      // Cache the promise so simultaneous cleanup paths await the same shutdown.
+      closing ??= new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+      return closing;
     },
   };
 }

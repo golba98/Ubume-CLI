@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+/**
+ * Credential-free executable implementing the Claude print and Codex JSON event
+ * shapes consumed by headless tests. stdin is the Codex prompt; command-line -p
+ * selects Claude output. Prompt markers simulate a file edit or a cancellable run.
+ * The parent owns the deliberately long-lived interruption process.
+ */
 import { appendFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -11,6 +17,9 @@ if (args[0] === "login" || args[0] === "auth") {
   process.exit(0);
 }
 if (args.includes("-p")) {
+  if (args.indexOf("-p") === args.length - 1) {
+    throw new Error("Headless provider fixture requires a prompt after -p");
+  }
   if (process.env.UBUME_TEST_PROMPT_LOG)
     appendFileSync(process.env.UBUME_TEST_PROMPT_LOG, JSON.stringify(args.at(-1)) + "\n");
   console.log(

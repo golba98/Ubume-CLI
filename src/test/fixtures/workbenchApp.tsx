@@ -1,31 +1,41 @@
+/**
+ * Process-isolated workbench scenarios against the real App and a controllable provider.
+ * The save scenario intentionally exits during an active run to test crash-style restoration;
+ * normal scenarios dispose the terminal/store. Parent tests own temporary workspace removal.
+ */
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
-import { PassThrough } from "node:stream";
-import { render } from "ink";
 import { App } from "../../app/App.js";
 import { parseLaunchArgs } from "../../config/launchArgs.js";
+import { loadSettings, saveSettings } from "../../config/persistence.js";
 import type { BackendProvider, BackendRunHandlers } from "../../core/providers/types.js";
 import { resolveUbumeConversationDir } from "../../core/workspace/appData.js";
 import { ConversationStore } from "../../core/workspace/conversationStore.js";
 import { inspectOwnership } from "../../core/workspace/ownership.js";
+import { waitFor } from "../async.js";
+import { createTestTerminal } from "../terminal.js";
 
-class Input extends PassThrough {
-  isTTY = true;
-  setRawMode() {
-    return this;
-  }
-  ref() {
-    return this;
-  }
-  unref() {
-    return this;
-  }
-}
-class Output extends PassThrough {
-  isTTY = true;
-  columns = 100;
-  rows = 32;
-}
+const scenario = process.argv[2];
+assert(
+  scenario &&
+    [
+      "save",
+      "resume",
+      "flow",
+      "draft-only",
+      "quit",
+      "cancel-start",
+      "plan-actions",
+      "usage-during-run",
+    ].includes(scenario),
+  `Unknown workbench scenario: ${scenario}`,
+);
+// App startup must never check a real update service or use inherited provider credentials.
+globalThis.fetch = () => {
+  throw new Error("Network access is forbidden in workbench tests");
+};
+const settings = loadSettings();
+saveSettings({ ...settings, updateCheck: { ...settings.updateCheck!, enabled: false } });
 let cleanupPending = false;
 let cancelCount = 0;
 const runs: {
@@ -77,41 +87,10 @@ const provider: BackendProvider = {
 const parsed = parseLaunchArgs(["--model", "gpt-5.4", "--no-clear"]);
 assert(parsed.ok);
 const delay = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
-async function until(check: () => boolean, label: string) {
-  const deadline = Date.now() + 5000;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error(`Timed out: ${label}`);
-    await delay(25);
-  }
-}
-function mount() {
-  const stdin = new Input();
-  const stdout = new Output();
-  let output = "";
-  let lastFrame = "";
-  stdout.on("data", (chunk) => {
-    lastFrame = chunk.toString();
-    output += lastFrame;
-  });
-  const instance = render(
-    <App launchArgs={parsed.ok ? parsed.value : never()} providerOverride={provider} />,
-    {
-      stdin: stdin as never,
-      stdout: stdout as never,
-      stderr: stdout as never,
-      exitOnCtrlC: false,
-      patchConsole: false,
-      debug: true,
-    },
-  );
-  // Debug-mode Ink writes each frame whole, so the last chunk is the current screen.
-  return { stdin, instance, output: () => output, lastFrame: () => lastFrame };
-}
-function never(): never {
-  throw new Error("arguments");
+function until(check: () => boolean, label: string) {
+  return waitFor(check, { label, diagnostics: () => terminal.lastFrame() });
 }
 const store = new ConversationStore(process.cwd());
-const scenario = process.argv[2];
 if (scenario === "cancel-start")
   for (let i = 0; i < 800; i++) writeFileSync(`file-${i}.txt`, "checkpoint fixture");
 if (scenario === "usage-during-run") {
@@ -121,9 +100,8 @@ if (scenario === "usage-during-run") {
   });
   process.env.CODEX_EXECUTABLE = `${process.cwd()}/codex-usage-fixture`;
 }
-const terminal = mount();
-await delay(350);
-if (scenario === "plan-actions") {
+const terminal = createTestTerminal(<App launchArgs={parsed.value} providerOverride={provider} />);
+async function runPlanActions(): Promise<void> {
   terminal.stdin.write("/plan on");
   await delay();
   terminal.stdin.write("\r");
@@ -157,10 +135,11 @@ if (scenario === "plan-actions") {
   terminal.stdin.write("\x03");
   await delay(200);
   assert.equal(runs.length, 3, "double action must not start twice");
-  terminal.instance.unmount();
-  await delay();
-  process.exit(0);
-} else if (scenario === "save") {
+  await terminal.dispose();
+  return;
+}
+
+async function saveInterruptedConversation(): Promise<void> {
   terminal.stdin.write("first instruction");
   await delay();
   terminal.stdin.write("\r");
@@ -188,7 +167,9 @@ if (scenario === "plan-actions") {
   );
   // Abrupt exit exercises resume of a snapshot captured during a live run.
   process.exit(0);
-} else if (scenario === "draft-only") {
+}
+
+async function verifyDraftOnly(): Promise<void> {
   // A fresh start that never sends a prompt must not leave a /resume entry.
   terminal.stdin.write("/model");
   await delay();
@@ -198,13 +179,14 @@ if (scenario === "plan-actions") {
   await delay();
   terminal.stdin.write("unsent draft only");
   await delay(1100);
-  terminal.instance.unmount();
-  await delay(350);
+  await terminal.dispose();
   const conversationDir = resolveUbumeConversationDir(process.cwd());
   assert.deepEqual(existsSync(conversationDir) ? readdirSync(conversationDir) : [], []);
   assert.equal(store.list().length, 0);
-  process.exit(0);
-} else if (scenario === "quit") {
+  return;
+}
+
+async function verifyQuitWindow(): Promise<void> {
   // The exit hint is visible exactly while a second Ctrl+C would quit.
   const hint = "Press Ctrl+C again to exit";
   let exited = false;
@@ -220,8 +202,10 @@ if (scenario === "plan-actions") {
   assert.equal(exited, false, "a press after the window must re-arm, not quit");
   terminal.stdin.write("\x03");
   await until(() => exited, "second press quits");
-  process.exit(0);
-} else if (scenario === "usage-during-run") {
+  return;
+}
+
+async function verifyUsageDuringRun(): Promise<void> {
   terminal.stdin.write("first instruction");
   await delay();
   terminal.stdin.write("\r");
@@ -250,10 +234,11 @@ if (scenario === "plan-actions") {
   const loaded = store.load(entry.id);
   assert(loaded);
   assert.ok(!JSON.stringify(loaded.messages).includes("/usage"), "/usage must stay out of history");
-  terminal.instance.unmount();
-  await delay();
-  process.exit(0);
-} else if (scenario === "cancel-start") {
+  await terminal.dispose();
+  return;
+}
+
+async function cancelDuringPreparation(): Promise<void> {
   terminal.stdin.write("cancel during preparation");
   await delay();
   terminal.stdin.write("\r");
@@ -265,10 +250,11 @@ if (scenario === "plan-actions") {
     "preparation lock released",
   );
   assert.equal(runs.length, 0, "canceled preparation must not launch the provider");
-  terminal.instance.unmount();
-  await delay();
-  process.exit(0);
-} else if (scenario === "flow") {
+  await terminal.dispose();
+  return;
+}
+
+async function runQueueFlow(): Promise<void> {
   const send = async (value: string) => {
     terminal.stdin.write(value);
     await delay();
@@ -332,10 +318,11 @@ if (scenario === "plan-actions") {
     ),
   );
   assert(!record.messages.some((message) => message.content === "stale answer"));
-  terminal.instance.unmount();
-  await delay();
-  process.exit(0);
-} else {
+  await terminal.dispose();
+  return;
+}
+
+async function resumeConversation(): Promise<void> {
   const original = store.list()[0];
   assert(original);
   terminal.stdin.write(`/resume ${original.id}`);
@@ -365,7 +352,29 @@ if (scenario === "plan-actions") {
     () => store.load(original.id)?.session?.queue.length === 0,
     "queue persisted removal",
   );
-  terminal.instance.unmount();
-  await delay();
-  process.exit(0);
+  await terminal.dispose();
+  return;
+}
+const runScenario = {
+  "plan-actions": runPlanActions,
+  save: saveInterruptedConversation,
+  "draft-only": verifyDraftOnly,
+  quit: verifyQuitWindow,
+  "usage-during-run": verifyUsageDuringRun,
+  "cancel-start": cancelDuringPreparation,
+  flow: runQueueFlow,
+  resume: resumeConversation,
+};
+
+try {
+  await until(() => terminal.lastFrame().includes("gpt-5.4"), "initial App frame");
+  const run = runScenario[scenario as keyof typeof runScenario];
+  assert(run, `Unknown workbench scenario: ${scenario}`);
+  await run();
+} finally {
+  try {
+    await terminal.dispose();
+  } finally {
+    store.release();
+  }
 }
