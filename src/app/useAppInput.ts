@@ -23,12 +23,14 @@ import {
 import type { CodexModelCapabilities } from "../core/models/codexModelCapabilities.js";
 import * as perf from "../core/perf/profiler.js";
 import type { ProviderConfig } from "../core/providerLauncher/types.js";
+import { unloadCodexaNative } from "../core/providerRuntime/codexaNative.js";
 import type { ProviderImageAttachment } from "../core/providerRuntime/types.js";
 import { sanitizeTerminalInput } from "../core/terminal/terminalSanitize.js";
 import type { GlobalPackageManager } from "../core/version/packageManager.js";
 import type { UpdateCheckResult } from "../core/version/updateCheck.js";
 import { resolveUbumeAttachmentDir } from "../core/workspace/appData.js";
 import { isImageFile } from "../core/workspace/attachments.js";
+import type { ConversationRecord } from "../core/workspace/conversationStore.js";
 import type { WorkspaceCommandContext } from "../core/workspace/launchContext.js";
 import type { ProjectInstructionsLoadResult } from "../core/workspace/projectInstructions.js";
 import { expandFileAttachments } from "../core/workspace/workspaceFiles.js";
@@ -59,6 +61,7 @@ import { dispatchCommand } from "./commandDispatch.js";
 import type { PromptRunLifecycle } from "./promptRunPrep.js";
 
 interface UseAppInputContext {
+  activeConversationRef: React.RefObject<ConversationRecord | null>;
   submissionRef: React.RefObject<boolean>;
   recoveryRef: React.RefObject<boolean>;
   getSessionState: () => SessionState;
@@ -279,6 +282,56 @@ export function useAppInput(context: UseAppInputContext) {
     if (!value) return;
 
     // Special perf debug command (not routed through handleCommand)
+    if (value === "/codexa" || value.startsWith("/codexa ")) {
+      resetComposer();
+      if (activeRouteProvider?.id !== "codexa-native") {
+        appendEvent("error", "Codexa", "Select Codexa Native first using /providers and /model.");
+        return;
+      }
+      if (busy) {
+        appendEvent("system", "Codexa", "Cancel or finish the current response first.");
+        return;
+      }
+      const action = value.slice(7).trim();
+      if (action === "settings") {
+        openSettingsPanel();
+        return;
+      }
+      if (action === "unload") {
+        await unloadCodexaNative();
+        appendEvent(
+          "system",
+          "Codexa",
+          "Model unloaded; the next message reloads the selected checkpoint.",
+        );
+        return;
+      }
+      if (action === "replay") {
+        const messages = context.activeConversationRef.current?.messages ?? [];
+        const index = messages.findLastIndex((message) => message.role === "user");
+        if (index < 0) {
+          appendEvent("error", "Codexa", "There is no previous user prompt to replay.");
+          return;
+        }
+        const prompt = messages[index]!.submittedContent ?? messages[index]!.content;
+        startPromptRun(prompt, prompt, {
+          submitTiming,
+          commitPrompt: true,
+          parseActionRequired: false,
+          historyOverride: messages.slice(0, index).map((message) => ({
+            ...message,
+            content: message.generationMetadata?.rawOutput ?? message.content,
+          })),
+        });
+        return;
+      }
+      appendEvent(
+        "system",
+        "Codexa",
+        "/codexa settings · /codexa unload · /codexa replay. Experimental native model; no tools. Interactive exploration is not the frozen benchmark.",
+      );
+      return;
+    }
     if (value === "/perf") {
       const session = perf.getSession();
       const summary = session
@@ -463,6 +516,16 @@ export function useAppInput(context: UseAppInputContext) {
       return;
     }
 
+    if (activeRouteProvider?.id === "codexa-native") {
+      startPromptRun(value, providerValue, {
+        submitTiming,
+        commitPrompt: true,
+        parseActionRequired: false,
+        imageAttachments,
+      });
+      return;
+    }
+
     // Validate workspace access for normal prompts
     const { violations: outsideViolations, skippedExternalPaths } = findOutsideWorkspacePaths(
       providerValue,
@@ -521,6 +584,7 @@ export function useAppInput(context: UseAppInputContext) {
     }
     startPromptRun(value, providerValue, { submitTiming, commitPrompt: true, imageAttachments });
   }, [
+    context.activeConversationRef,
     allowedWritableRoots,
     appendEvent,
     appendEvent,

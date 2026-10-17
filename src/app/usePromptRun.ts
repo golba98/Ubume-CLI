@@ -27,6 +27,7 @@ import { isNoiseLine } from "../core/providers/codexTranscript.js";
 import type {
   BackendProgressUpdate,
   BackendProvider,
+  GenerationMetadata,
   ProviderRunControl,
   ToolApprovalDecision,
   ToolApprovalRequest,
@@ -115,6 +116,7 @@ interface UsePromptRunContext {
     text: string;
     tools: Map<string, string>;
     files: Map<string, PersistedFileActivity>;
+    generationMetadata?: GenerationMetadata;
   } | null>;
   rolloverResponseCharsRef: React.RefObject<number>;
   activeTurnIdRef: React.RefObject<number | null>;
@@ -277,7 +279,7 @@ export function usePromptRun(context: UsePromptRunContext) {
         workspaceRoot,
         allowedWritableRoots,
       );
-      if (guardMessage) {
+      if (guardMessage && activeProviderRoute.providerId !== "codexa-native") {
         appendEvent("error", "Workspace boundary", guardMessage);
         return false;
       }
@@ -354,11 +356,13 @@ export function usePromptRun(context: UsePromptRunContext) {
       const turnId = createTurnId();
       // Local Harness session reuse hashes the history, so local requests get the
       // exact saved reply text; other providers also see what earlier runs did.
-      const conversationHistory = selectProviderHistory(
-        activeConversationRef.current,
-        activeProviderRoute,
-        activeContextMetadata,
-      );
+      const conversationHistory =
+        lifecycle.historyOverride ??
+        selectProviderHistory(
+          activeConversationRef.current,
+          activeProviderRoute,
+          activeContextMetadata,
+        );
       const userEvent: UserPromptEvent = {
         id: createEventId(),
         type: "user",
@@ -387,7 +391,10 @@ export function usePromptRun(context: UsePromptRunContext) {
       perf.setMeta("reasoning", runtimeForTurn.reasoningLevel);
       activeRunIdRef.current = runId;
       activeTurnIdRef.current = turnId;
-      activeRunLifecycleRef.current = lifecycle;
+      activeRunLifecycleRef.current =
+        activeProviderRoute.providerId === "codexa-native"
+          ? { ...lifecycle, parseActionRequired: false }
+          : lifecycle;
       activeRunTimingRef.current = { ...submitTiming, runId, turnId };
       if (externalCliStatusRef.current === "idle") {
         dispatchSession({ type: "SET_EXTERNAL_CLI_STATUS", status: "starting" });
@@ -601,6 +608,20 @@ export function usePromptRun(context: UsePromptRunContext) {
             imageAttachments,
           },
           {
+            onGenerationMetadata: (metadata) => {
+              if (
+                isCurrentRun(activeRunIdRef.current, runId) &&
+                activeRunCaptureRef.current?.runId === runId
+              ) {
+                activeRunCaptureRef.current.generationMetadata = metadata;
+                if (activeProviderRoute.providerId === "codexa-native")
+                  appendEvent(
+                    "system",
+                    "Codexa response",
+                    `${metadata.modelId} · ${metadata.finishReason} · ${metadata.generatedTokens} tokens · ${metadata.preset}`,
+                  );
+              }
+            },
             onAssistantDelta: (chunk) => {
               if (!chunk || !isCurrentRun(activeRunIdRef.current, runId)) {
                 return;
@@ -729,7 +750,10 @@ export function usePromptRun(context: UsePromptRunContext) {
                 // Validate response quality for write-intent/destructive prompts:
                 // If the backend returned filler like "Hello." instead of execution
                 // feedback, inject a warning so the user isn't silently misled.
-                if (effectiveMode !== "suggest") {
+                if (
+                  effectiveMode !== "suggest" &&
+                  activeProviderRoute.providerId !== "codexa-native"
+                ) {
                   const hollow = detectHollowResponse(safeProviderPrompt, safeResponse);
                   if (hollow.isHollow) {
                     const formatted = formatHollowResponse(hollow, safeResponse);

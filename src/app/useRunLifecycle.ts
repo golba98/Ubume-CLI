@@ -2,6 +2,7 @@ import type { useFocusManager } from "ink";
 import { useCallback } from "react";
 import * as perf from "../core/perf/profiler.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
+import { unloadCodexaNative } from "../core/providerRuntime/codexaNative.js";
 import type { ProviderRoute } from "../core/providerRuntime/types.js";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "../core/providers/types.js";
 import { sanitizeTerminalOutput } from "../core/terminal/terminalSanitize.js";
@@ -369,7 +370,7 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
       pipelineGenerationRef.current++;
       promptQueue.paused = true;
       cancelActiveRun(true);
-      void stoppingRef.current.then(() => {
+      void Promise.all([stoppingRef.current, unloadCodexaNative("Ubume exiting.")]).then(() => {
         saveWorkbenchRef.current?.();
         conversationStore.release();
         exit();

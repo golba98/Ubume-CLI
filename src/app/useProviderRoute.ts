@@ -22,6 +22,7 @@ import {
   setProviderWorkspaceDefault,
 } from "../core/providerLauncher/workspaceConfig.js";
 import { validateAntigravityRoute } from "../core/providerRuntime/antigravity.js";
+import { unloadCodexaNative } from "../core/providerRuntime/codexaNative.js";
 import { runLocalDiagnostics, validateLocalProvider } from "../core/providerRuntime/local.js";
 import {
   detectVibeActiveModel,
@@ -237,6 +238,13 @@ export function useProviderRoute(context: UseProviderRouteContext) {
     },
     [providerWorkspaceConfig.providers],
   );
+
+  useEffect(() => {
+    void unloadCodexaNative("Active provider or checkpoint changed.");
+    return () => {
+      void unloadCodexaNative("Ubume closed or checkpoint changed.");
+    };
+  }, [activeProviderRoute.providerId, activeProviderRoute.modelId]);
 
   const probeLocalBackends = useCallback(() => {
     void Promise.allSettled([probeLocalBackend("lm-studio"), probeLocalBackend("unsloth")]);

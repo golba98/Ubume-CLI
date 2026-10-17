@@ -12,7 +12,6 @@ import {
   readExternalTranscript,
 } from "../core/externalSessions/index.js";
 import { traceInputDebug } from "../core/perf/debugLog.js";
-
 import { launchCliCommand } from "../core/providerLauncher/launcher.js";
 import { resolveProviderIdentity } from "../core/providerLauncher/providerIdentity.js";
 import { findProvider, isKnownProviderId } from "../core/providerLauncher/registry.js";
@@ -23,6 +22,7 @@ import { discoverProviderModels } from "../core/providerRuntime/registry.js";
 import type { ProviderRoute } from "../core/providerRuntime/types.js";
 import type {
   BackendProvider,
+  GenerationMetadata,
   ProviderRunControl,
   ToolApprovalDecision,
   ToolApprovalRequest,
@@ -121,6 +121,7 @@ interface UseConversationContext {
     text: string;
     tools: Map<string, string>;
     files: Map<string, PersistedFileActivity>;
+    generationMetadata?: GenerationMetadata;
   } | null>;
   setResumeConversations: React.Dispatch<React.SetStateAction<ConversationListEntry[]>>;
   catalogListsRef: React.RefObject<Map<ExternalListScope, Promise<SessionCatalogResult>>>;
@@ -387,7 +388,19 @@ export function useConversation(context: UseConversationContext) {
         toolCommands: capture ? [...capture.tools.values()] : [],
         fileActivity: capture ? [...capture.files.values()] : [],
       });
-      if (message) appendConversationMessage(message);
+      if (message)
+        appendConversationMessage({
+          ...message,
+          ...(capture?.generationMetadata
+            ? { generationMetadata: capture.generationMetadata }
+            : {}),
+        });
+      else if (capture?.generationMetadata?.providerId === "codexa-native")
+        appendConversationMessage({
+          role: "assistant",
+          content: capture.generationMetadata.rawOutput,
+          generationMetadata: capture.generationMetadata,
+        });
     },
     [appendConversationMessage],
   );

@@ -32,6 +32,7 @@ import type {
   ProviderPickerAction,
   ProviderWorkspaceConfig,
 } from "../core/providerLauncher/types.js";
+import { saveProviderWorkspaceConfig } from "../core/providerLauncher/workspaceConfig.js";
 import { getProviderSetupPlan } from "../core/providerRuntime/registry.js";
 import type { ProviderRoute } from "../core/providerRuntime/types.js";
 import type {
@@ -59,6 +60,7 @@ import {
   type PendingImportFile,
 } from "../ui/panels/AttachmentImportPanel.js";
 import { AuthPanel } from "../ui/panels/AuthPanel.js";
+import { CodexaSettingsPanel } from "../ui/panels/CodexaSettingsPanel.js";
 import { ExternalSessionViewer, SavedSessionViewer } from "../ui/panels/ExternalSessionViewer.js";
 import { ModelPickerScreen } from "../ui/panels/ModelPickerScreen.js";
 import { PermissionsPanel, type PermissionsPanelAction } from "../ui/panels/PermissionsPanel.js";
@@ -152,6 +154,7 @@ interface OverlayPanelsProps {
     selectedLocalBackend?: LocalBackendId,
   ) => void;
   providerWorkspaceConfig: ProviderWorkspaceConfig;
+  setProviderWorkspaceConfig?: React.Dispatch<React.SetStateAction<ProviderWorkspaceConfig>>;
   localBackendStatuses: Record<LocalBackendId, LocalBackendStatus>;
   probeLocalBackends: () => void;
   modelPickerOpenRef: React.RefObject<boolean>;
@@ -653,7 +656,37 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         />
       )}
 
-      {screen === "settings-panel" && (
+      {screen === "settings-panel" && activeProviderRoute.providerId === "codexa-native" && (
+        <CodexaSettingsPanel
+          options={providerWorkspaceConfig.providers?.["codexa-native"]?.codexaNative}
+          onCancel={() => setScreen("main")}
+          onSave={(options) => {
+            const next = {
+              ...providerWorkspaceConfig,
+              providers: {
+                ...providerWorkspaceConfig.providers,
+                "codexa-native": {
+                  ...providerWorkspaceConfig.providers?.["codexa-native"],
+                  codexaNative: options,
+                },
+              },
+            };
+            try {
+              saveProviderWorkspaceConfig(workspaceRoot, next);
+              props.setProviderWorkspaceConfig?.(next);
+              appendEvent(
+                "system",
+                "Codexa settings",
+                `Saved ${options.generation?.preset} preset; applies to the next message.`,
+              );
+              setScreen("main");
+            } catch (error) {
+              appendEvent("error", "Codexa settings", String(error));
+            }
+          }}
+        />
+      )}
+      {screen === "settings-panel" && activeProviderRoute.providerId !== "codexa-native" && (
         <SettingsPanel
           focusId={FOCUS_IDS.settingsPanel}
           settings={USER_SETTING_DEFINITIONS}

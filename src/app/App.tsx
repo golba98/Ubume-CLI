@@ -1440,6 +1440,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               terminalLayout={terminalLayout}
               handleProviderAction={handleProviderAction}
               providerWorkspaceConfig={providerWorkspaceConfig}
+              setProviderWorkspaceConfig={appState.setProviderWorkspaceConfig}
               localBackendStatuses={localBackendStatuses}
               probeLocalBackends={probeLocalBackends}
               modelPickerOpenRef={modelPickerOpenRef}
