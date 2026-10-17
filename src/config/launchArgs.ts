@@ -1,3 +1,11 @@
+/**
+ * @fileoverview CLI Launch Arguments Parser
+ *
+ * Parses interactive CLI arguments passed to `ubume`, including profile selection,
+ * config key-value overrides, model overrides, session resume/import targets,
+ * help/version flags, and initial startup prompts.
+ */
+
 import {
   EXTERNAL_SESSION_SOURCES,
   type ExternalSessionSource,
@@ -29,7 +37,7 @@ export interface LaunchArgs {
   importSession?: { source: ExternalSessionSource; sessionId: string };
 }
 
-type LaunchArgsParseResult = { ok: true; value: LaunchArgs } | { ok: false; error: string };
+export type LaunchArgsParseResult = { ok: true; value: LaunchArgs } | { ok: false; error: string };
 
 function normalizeProfileValue(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -55,6 +63,71 @@ function quoteTomlString(value: string): string {
   return JSON.stringify(value);
 }
 
+interface FlagExtraction {
+  name: string;
+  value: string | undefined;
+  consumedNext: boolean;
+}
+
+function extractFlagValue(
+  arg: string,
+  prefix: string,
+  nextArg: string | undefined,
+): FlagExtraction | null {
+  if (arg === prefix) {
+    return { name: prefix, value: nextArg, consumedNext: true };
+  }
+  if (arg.startsWith(`${prefix}=`)) {
+    return { name: prefix, value: arg.slice(prefix.length + 1), consumedNext: false };
+  }
+  return null;
+}
+
+function validateResumeTarget(
+  value: string | undefined,
+): { ok: true; resumeId: string } | { ok: false; error: string } {
+  if (!value || value.startsWith("--")) {
+    return { ok: false, error: "Missing value for --resume." };
+  }
+  if (!/^chat_[A-Za-z0-9-]+$/.test(value)) {
+    return { ok: false, error: "Invalid conversation ID for --resume." };
+  }
+  return { ok: true, resumeId: value };
+}
+
+function validateImportSessionTarget(
+  value: string | undefined,
+):
+  | { ok: true; importSession: { source: ExternalSessionSource; sessionId: string } }
+  | { ok: false; error: string } {
+  if (!value || value.startsWith("--")) {
+    return { ok: false, error: "Missing value for --import-session." };
+  }
+  const separator = value.indexOf(":");
+  let source = value.slice(0, separator) as ExternalSessionSource;
+  const sessionId = value.slice(separator + 1);
+  if (source === "antigravity") {
+    source = "google";
+  }
+  if (
+    separator < 0 ||
+    !EXTERNAL_SESSION_SOURCES.includes(source) ||
+    !/^[A-Za-z0-9_-]+$/.test(sessionId)
+  ) {
+    return {
+      ok: false,
+      error: "Use --import-session source:session-id (claude, codex, google, vibe).",
+    };
+  }
+  return { ok: true, importSession: { source, sessionId } };
+}
+
+/**
+ * Parses command-line arguments for interactive Ubume startup.
+ *
+ * @param argv - Argument tokens (excluding node and script paths).
+ * @returns Parse result with strongly typed LaunchArgs or an error message.
+ */
 export function parseLaunchArgs(argv: readonly string[]): LaunchArgsParseResult {
   const passthroughArgs: string[] = [];
   const configOverrides: string[] = [];
@@ -67,55 +140,59 @@ export function parseLaunchArgs(argv: readonly string[]): LaunchArgsParseResult 
   let resumeId: string | undefined;
   let importSession: LaunchArgs["importSession"];
 
-  for (let index = 0; index < argv.length; index += 1) {
+  let index = 0;
+  while (index < argv.length) {
     const arg = argv[index];
     if (!arg) {
+      index += 1;
       continue;
     }
 
-    if (arg === "--provider" || arg.startsWith("--provider="))
+    if (arg === "--provider" || arg.startsWith("--provider=")) {
       return {
         ok: false,
         error:
           "--provider is supported by ubume exec. For interactive startup, select the provider in /model or resume a saved conversation.",
       };
+    }
 
-    if (
-      arg === "--resume" ||
-      arg.startsWith("--resume=") ||
-      arg === "--import-session" ||
-      arg.startsWith("--import-session=")
-    ) {
-      const name = arg.split("=")[0]!;
-      const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++index];
-      if (!value || value.startsWith("--"))
-        return { ok: false, error: `Missing value for ${name}.` };
-      if (resumeId || importSession)
+    // Handle --resume
+    const resumeFlag = extractFlagValue(arg, "--resume", argv[index + 1]);
+    if (resumeFlag) {
+      if (resumeId || importSession) {
         return { ok: false, error: "Choose only one --resume or --import-session target." };
-      if (name === "--resume") {
-        if (!/^chat_[A-Za-z0-9-]+$/.test(value))
-          return { ok: false, error: "Invalid conversation ID for --resume." };
-        resumeId = value;
-      } else {
-        const separator = value.indexOf(":");
-        let source = value.slice(0, separator) as ExternalSessionSource;
-        const sessionId = value.slice(separator + 1);
-        if (source === "antigravity") {
-          source = "google";
-        }
-        if (
-          separator < 0 ||
-          !EXTERNAL_SESSION_SOURCES.includes(source) ||
-          !/^[A-Za-z0-9_-]+$/.test(sessionId)
-        )
-          return {
-            ok: false,
-            error: "Use --import-session source:session-id (claude, codex, google, vibe).",
-          };
-        importSession = { source, sessionId };
       }
+      const validated = validateResumeTarget(resumeFlag.value);
+      if (!validated.ok) {
+        return validated;
+      }
+      resumeId = validated.resumeId;
+      if (resumeFlag.consumedNext) {
+        index += 1;
+      }
+      index += 1;
       continue;
     }
+
+    // Handle --import-session
+    const importFlag = extractFlagValue(arg, "--import-session", argv[index + 1]);
+    if (importFlag) {
+      if (resumeId || importSession) {
+        return { ok: false, error: "Choose only one --resume or --import-session target." };
+      }
+      const validated = validateImportSessionTarget(importFlag.value);
+      if (!validated.ok) {
+        return validated;
+      }
+      importSession = validated.importSession;
+      if (importFlag.consumedNext) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    // End-of-flags delimiter: all subsequent arguments belong to the initial prompt
     if (arg === "--") {
       promptArgs.push(...argv.slice(index + 1));
       break;
@@ -123,105 +200,91 @@ export function parseLaunchArgs(argv: readonly string[]): LaunchArgsParseResult 
 
     if (arg === FLAG_HELP || arg === FLAG_HELP_SHORT) {
       help = true;
+      index += 1;
       continue;
     }
 
     if (arg === FLAG_VERSION || arg === FLAG_VERSION_SHORT) {
       version = true;
+      index += 1;
       continue;
     }
 
     if (arg === FLAG_NO_CLEAR) {
       noClear = true;
-      continue;
-    }
-
-    // --profile <value> and --profile=<value> both supported.
-    if (arg === FLAG_PROFILE) {
-      const value = normalizeProfileValue(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: `Missing value for ${FLAG_PROFILE}.` };
-      }
-      profile = value;
-      passthroughArgs.push(arg, value);
       index += 1;
       continue;
     }
 
-    if (arg.startsWith(`${FLAG_PROFILE}=`)) {
-      const value = normalizeProfileValue(arg.slice(`${FLAG_PROFILE}=`.length));
+    // --profile <value> and --profile=<value>
+    const profileFlag = extractFlagValue(arg, FLAG_PROFILE, argv[index + 1]);
+    if (profileFlag) {
+      const value = normalizeProfileValue(profileFlag.value);
       if (!value) {
         return { ok: false, error: `Missing value for ${FLAG_PROFILE}.` };
       }
       profile = value;
-      passthroughArgs.push(`${FLAG_PROFILE}=${value}`);
-      continue;
-    }
-
-    // --config / -c accept key=value pairs; both space-separated and inline = forms supported.
-    if (arg === FLAG_CONFIG_SHORT || arg === FLAG_CONFIG) {
-      const value = parseConfigFlagValue(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: `Missing key=value payload for ${arg}.` };
+      if (profileFlag.consumedNext) {
+        passthroughArgs.push(arg, value);
+        index += 1;
+      } else {
+        passthroughArgs.push(`${FLAG_PROFILE}=${value}`);
       }
-      configOverrides.push(value);
-      passthroughArgs.push(arg, value);
       index += 1;
       continue;
     }
 
-    if (arg.startsWith(`${FLAG_CONFIG}=`)) {
-      const value = parseConfigFlagValue(arg.slice(`${FLAG_CONFIG}=`.length));
+    // --config <value>, --config=<value>, -c <value>, -c=<value>
+    const configLongFlag = extractFlagValue(arg, FLAG_CONFIG, argv[index + 1]);
+    const configShortFlag = extractFlagValue(arg, FLAG_CONFIG_SHORT, argv[index + 1]);
+    const configFlag = configLongFlag ?? configShortFlag;
+    if (configFlag) {
+      const value = parseConfigFlagValue(configFlag.value);
       if (!value) {
-        return { ok: false, error: `Missing key=value payload for ${FLAG_CONFIG}.` };
+        const flagName = configFlag.consumedNext ? arg : configFlag.name;
+        return { ok: false, error: `Missing key=value payload for ${flagName}.` };
       }
       configOverrides.push(value);
-      passthroughArgs.push(`${FLAG_CONFIG}=${value}`);
+      if (configFlag.consumedNext) {
+        passthroughArgs.push(arg, value);
+        index += 1;
+      } else {
+        passthroughArgs.push(`${configFlag.name}=${value}`);
+      }
+      index += 1;
       continue;
     }
 
-    if (arg.startsWith(`${FLAG_CONFIG_SHORT}=`)) {
-      const value = parseConfigFlagValue(arg.slice(`${FLAG_CONFIG_SHORT}=`.length));
+    // --model <value>, --model=<value>, -m <value>, -m=<value>
+    const modelLongFlag = extractFlagValue(arg, FLAG_MODEL, argv[index + 1]);
+    const modelShortFlag = extractFlagValue(arg, FLAG_MODEL_SHORT, argv[index + 1]);
+    const modelFlag = modelLongFlag ?? modelShortFlag;
+    if (modelFlag) {
+      const value = normalizeProfileValue(modelFlag.value);
       if (!value) {
-        return { ok: false, error: `Missing key=value payload for ${FLAG_CONFIG_SHORT}.` };
-      }
-      configOverrides.push(value);
-      passthroughArgs.push(`${FLAG_CONFIG_SHORT}=${value}`);
-      continue;
-    }
-
-    // --model / -m set the model via a config override, quoted for TOML.
-    // Also captured in modelOverride so callers can distinguish "was --model given?"
-    // from "what does layered config resolve to?" (which always has a default value).
-    if (arg === FLAG_MODEL || arg === FLAG_MODEL_SHORT) {
-      const value = normalizeProfileValue(argv[index + 1]);
-      if (!value) {
-        return { ok: false, error: `Missing value for ${arg}.` };
+        const flagName = modelFlag.consumedNext ? arg : modelFlag.name;
+        return { ok: false, error: `Missing value for ${flagName}.` };
       }
       configOverrides.push(`model=${quoteTomlString(value)}`);
-      passthroughArgs.push(arg, value);
+      if (modelFlag.consumedNext) {
+        passthroughArgs.push(arg, value);
+        index += 1;
+      } else {
+        passthroughArgs.push(`${modelFlag.name}=${value}`);
+      }
       modelOverride = value;
       index += 1;
       continue;
     }
 
-    if (arg.startsWith(`${FLAG_MODEL}=`)) {
-      const value = normalizeProfileValue(arg.slice(`${FLAG_MODEL}=`.length));
-      if (!value) {
-        return { ok: false, error: `Missing value for ${FLAG_MODEL}.` };
-      }
-      configOverrides.push(`model=${quoteTomlString(value)}`);
-      passthroughArgs.push(`${FLAG_MODEL}=${value}`);
-      modelOverride = value;
-      continue;
-    }
-
+    // Non-flag arguments are positional and interpreted as the start of an initial prompt
     if (!arg.startsWith("-")) {
       promptArgs.push(arg, ...argv.slice(index + 1));
       break;
     }
 
     passthroughArgs.push(arg);
+    index += 1;
   }
 
   const initialPrompt =
@@ -231,11 +294,13 @@ export function parseLaunchArgs(argv: readonly string[]): LaunchArgsParseResult 
       .join(" ")
       .trim() || null;
 
-  if ((resumeId || importSession) && initialPrompt)
+  if ((resumeId || importSession) && initialPrompt) {
     return {
       ok: false,
       error: "Resume/import opens a conversation without running a startup prompt.",
     };
+  }
+
   return {
     ok: true,
     value: {

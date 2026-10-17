@@ -181,3 +181,35 @@ test("runtime mode persistence failures do not escape into the TUI", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("normalizes update check settings and header options robustly", () => {
+  const parsed = parseSettingsData({
+    update_check: {
+      enabled: false,
+      interval_hours: -1,
+      skipped_update_version: "v1.2.3",
+    },
+    header: {
+      show_brand: false,
+      show_model: true,
+      show_context: true,
+    },
+  });
+
+  assert.equal(parsed.updateCheck.enabled, false);
+  // Interval fell back to default since -1 is not > 0
+  assert.equal(parsed.updateCheck.intervalHours, 6);
+  assert.equal(parsed.updateCheck.skippedUpdateVersion, "v1.2.3");
+
+  assert.equal(parsed.header.showBrand, false);
+  assert.equal(parsed.header.showModel, true);
+  assert.equal(parsed.header.showContext, true);
+  // Unspecified header fields keep their defaults
+  assert.equal(parsed.header.showWorkspace, true);
+});
+
+test("loadSettings recovers safely from corrupt JSON", () => {
+  const defaults = getDefaultSettings();
+  const parsed = parseSettingsData("INVALID_JSON_STRING");
+  assert.deepEqual(parsed, defaults);
+});

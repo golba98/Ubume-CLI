@@ -1,3 +1,8 @@
+/**
+ * Coordinates atomic transcript clearing across session state, Ink caches, terminal output, and
+ * repaint boundaries.
+ */
+
 import { createHash } from "node:crypto";
 import * as renderDebug from "../perf/renderDebug.js";
 import { type InkRenderInstance, resetInkOutputForFreshFrame } from "./inkRenderReset.js";
@@ -150,6 +155,9 @@ const WIDTH_REPAINT_MAX_SUPPRESSED_FRAMES = 8;
 let frameHashCount = 0;
 let markerScanCount = 0;
 
+/**
+ * Returns trace-work counters so tests can verify disabled diagnostics avoid frame scans.
+ */
 export function __getClearFrameBoundaryTraceStatsForTests(): {
   frameHashCount: number;
   markerScanCount: number;
@@ -157,6 +165,9 @@ export function __getClearFrameBoundaryTraceStatsForTests(): {
   return { frameHashCount, markerScanCount };
 }
 
+/**
+ * Clears trace-work counters without changing terminal/render state.
+ */
 export function __resetClearFrameBoundaryTraceStatsForTests(): void {
   frameHashCount = 0;
   markerScanCount = 0;
@@ -327,6 +338,10 @@ function wrapInkLogForTrace(
   };
 }
 
+/**
+ * Installs the atomic clear/resize/overlay boundary on an Ink instance. Callers mirror committed
+ * render generations and must dispose the controller when detaching it.
+ */
 export function createClearFrameBoundaryController({
   instance,
   terminalControl,

@@ -1,3 +1,7 @@
+/**
+ * Describes installed/dev launch context and builds guarded workspace relaunch commands.
+ */
+
 import { statSync } from "fs";
 import { basename, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -98,6 +102,10 @@ function buildDevRelaunchArgs(packageRoot: string, forwardArgs: readonly string[
   return args;
 }
 
+/**
+ * Describes the installed/dev launcher and active workspace using supplied or process launch
+ * metadata.
+ */
 export function resolveLaunchContext(options: ResolveLaunchContextOptions = {}): LaunchContext {
   const env = options.env ?? process.env;
   const workspaceRoot = normalizeWorkspaceRoot(
@@ -143,6 +151,7 @@ export function resolveLaunchContext(options: ResolveLaunchContextOptions = {}):
   };
 }
 
+/** Builds command context for display/relaunch without changing the active process directory. */
 export function buildWorkspaceCommandContext(
   launchContext: LaunchContext,
 ): WorkspaceCommandContext {
@@ -152,6 +161,7 @@ export function buildWorkspaceCommandContext(
   };
 }
 
+/** Formats launch/workspace identity for the status command. */
 export function buildWorkspaceStatusMessage(launchContext: LaunchContext): string {
   const lines = [
     "Active workspace:",
@@ -183,6 +193,7 @@ export function buildWorkspaceStatusMessage(launchContext: LaunchContext): strin
   return lines.join("\n");
 }
 
+/** Refuses relaunch while work is busy so process/workspace ownership cannot be abandoned. */
 export function guardWorkspaceRelaunch(busy: boolean): { allowed: boolean; message?: string } {
   if (!busy) {
     return { allowed: true };
@@ -213,6 +224,7 @@ function buildRelaunchEnv(
   };
 }
 
+/** Builds the platform-aware launch command for another workspace without executing it. */
 export function createWorkspaceRelaunchPlan(
   targetInput: string,
   launchContext: LaunchContext,

@@ -1,3 +1,7 @@
+/**
+ * Resolves the Codex executable and verifies usable command candidates.
+ */
+
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { runCommand } from "../process/commandRunner.js";
@@ -19,10 +23,17 @@ interface CapturedProcessOutput {
   stderr: string;
 }
 
+/**
+ * Clears the default executable cache for tests without canceling an in-flight resolution.
+ */
 export function resetCodexExecutableCacheForTests(): void {
   cachedExecutable = null;
 }
 
+/**
+ * Resolves explicit overrides independently; default resolution shares an in-flight request and
+ * caches the resulting command.
+ */
 export async function resolveCodexExecutable(options?: {
   runCommandImpl?: CommandRunner;
   cwd?: string;
@@ -72,6 +83,7 @@ async function doResolveCodexExecutable(options?: {
   });
 }
 
+/** Adds installation or permission recovery guidance to a Codex spawn error. */
 export function formatCodexLaunchError(err: NodeJS.ErrnoException): string {
   const detail = err.message ? `\n\nDetails: ${err.message}` : "";
 
@@ -98,6 +110,10 @@ export function formatCodexLaunchError(err: NodeJS.ErrnoException): string {
   return err.message;
 }
 
+/**
+ * Spawns Codex without shell expansion, wrapping Windows batch commands through the shared
+ * validated spawn specification.
+ */
 export function spawnCodexProcess(
   executable: string,
   args: string[],
@@ -108,6 +124,10 @@ export function spawnCodexProcess(
   return spawn(spec.executable, spec.args, { ...options, shell: false });
 }
 
+/**
+ * Captures both streams until close. Spawn errors and timeout reject; timeout requests child
+ * termination, while nonzero exits remain ordinary results.
+ */
 export function captureCodexProcessOutput(
   executable: string,
   args: string[],

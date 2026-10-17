@@ -1,3 +1,9 @@
+/**
+ * Per-scope usage retrieval with request coalescing, cooldowns and last-good fallback. The
+ * creator owns this in-memory cache; adapters own transport cleanup and receive the initiating
+ * request signal.
+ */
+
 import { errorMessage } from "../shared/values.js";
 import type { ProviderUsageSnapshot, UsageAdapter, UsageRequestContext } from "./types.js";
 
@@ -49,6 +55,10 @@ function isFailure(snapshot: ProviderUsageSnapshot): boolean {
   return snapshot.status === "temporarily_unavailable";
 }
 
+/**
+ * Creates an independent per-scope cache. Concurrent requests share the initiating adapter call
+ * and signal; adapters own cancellation cleanup, and failures can retain the last good snapshot.
+ */
 export function createUsageService(options: UsageServiceOptions = {}) {
   const now = options.now ?? Date.now;
   const cooldownMs = options.cooldownMs ?? resolveUsageCooldownMs();

@@ -1,3 +1,8 @@
+/**
+ * Provides the single controller for terminal writes, mouse, paste, cursor, alternate-screen,
+ * and reset sequences.
+ */
+
 import { APP_NAME } from "../../config/settings.js";
 import * as renderDebug from "../perf/renderDebug.js";
 import {
@@ -26,10 +31,12 @@ type TerminalChannel = "stdout" | "stderr";
 // Tracks whether the terminal is currently in a live resize debounce.
 let terminalResizing = false;
 
+/** Updates the shared resize diagnostic flag; does not trigger a repaint itself. */
 export function setTerminalResizing(resizing: boolean): void {
   terminalResizing = resizing;
 }
 
+/** Reads the current resize diagnostic flag. */
 export function isTerminalResizing(): boolean {
   return terminalResizing;
 }
@@ -37,6 +44,7 @@ export function isTerminalResizing(): boolean {
 // Tracks current UI state kind for diagnostic assertions.
 let currentUIStateKind: string = "IDLE";
 
+/** Updates lifecycle diagnostics used by terminal write guards without writing a frame. */
 export function setTerminalControlUIState(kind: string): void {
   if (currentUIStateKind !== kind) {
     renderDebug.traceEvent("terminal", "uiStateTransition", {
@@ -48,6 +56,10 @@ export function setTerminalControlUIState(kind: string): void {
   }
 }
 
+/**
+ * Writes through terminal guards; disallowed post-startup clear/reset sequences are consumed
+ * without reaching the terminal.
+ */
 export function writeTerminalControl(
   write: TerminalWrite,
   channel: TerminalChannel,
@@ -121,6 +133,7 @@ export function writeTerminalControl(
   });
 }
 
+/** Records an explicit clear through the opt-in render diagnostic channel. */
 export function traceTerminalClear(source: string, fields: Record<string, unknown>): void {
   renderDebug.traceTerminalClear(source, fields);
 }
@@ -135,6 +148,10 @@ interface TerminalModeController {
   resetModes(): void;
 }
 
+/**
+ * Creates deduplicated mouse/paste/alternate-screen controls. resetModes forgets cached mode
+ * state; callers still own physical terminal restoration.
+ */
 export function createTerminalModeController(write: TerminalWrite): TerminalModeController {
   let mouseReporting: boolean | null = null;
   let bracketedPaste: boolean | null = null;

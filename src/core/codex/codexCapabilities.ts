@@ -1,3 +1,8 @@
+/**
+ * Detects Codex exec flags from help output, independently of model capabilities. Successful
+ * probes are cached by executable; failed probes are evicted so later calls can retry.
+ */
+
 import { captureCodexProcessOutput } from "../executables/codexExecutable.js";
 import { stripAnsi, stripNonPrintableControls } from "../providers/codexTranscript.js";
 import { normalizeLineBreaks } from "../shared/text.js";
@@ -32,6 +37,7 @@ function hasCliToken(helpText: string, token: string): boolean {
   return pattern.test(helpText);
 }
 
+/** Reads exec-help flags only; top-level help is retained in the signature for compatibility. */
 export function parseCodexCliCapabilities(
   execHelpText: string,
   _topLevelHelpText: string,
@@ -47,6 +53,10 @@ export function parseCodexCliCapabilities(
   };
 }
 
+/**
+ * Coalesces help probes per executable. Failed probes are evicted and reject; successful results
+ * remain cached for this process.
+ */
 export async function getCodexCliCapabilities(executable: string): Promise<CodexCliCapabilities> {
   const cached = capabilityCache.get(executable);
   if (cached) {

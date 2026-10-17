@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createTestEnvironment } from "../test/environment.js";
 
 function scenarios(steps: string[]) {
   const root = mkdtempSync(join(tmpdir(), "ubume-app-resume-"));
@@ -26,13 +27,11 @@ function scenarios(steps: string[]) {
           [launcher, "exec", "--resume", id, "headless continuation", "--json"],
           {
             cwd: workspace,
-            env: {
-              ...process.env,
+            env: createTestEnvironment(root, {
               UBUME_DATA_DIR: join(root, "data"),
               CODEXA_DATA_DIR: join(root, "data"),
               CODEX_EXECUTABLE: provider,
-              UBUME_DEV_MODE: "0",
-            },
+            }),
             encoding: "utf8",
             timeout: 15000,
           },
@@ -43,12 +42,10 @@ function scenarios(steps: string[]) {
       }
       const result = spawnSync(process.execPath, [script, scenario], {
         cwd: workspace,
-        env: {
-          ...process.env,
+        env: createTestEnvironment(root, {
           UBUME_DATA_DIR: join(root, "data"),
           CODEXA_DATA_DIR: join(root, "data"),
-          UBUME_DEV_MODE: "0",
-        },
+        }),
         encoding: "utf8",
         timeout: 15000,
       });

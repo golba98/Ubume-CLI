@@ -28,17 +28,22 @@ import type { InterruptHint } from "../../ui/chrome/composer/composerModel.js";
 export const EXIT_CONFIRM_WINDOW_MS = 2000;
 
 interface UseInterruptKeysContext {
-  promptQueue: PromptQueue;
+  // Actions
   handleQuit: () => void;
   handleCancel: () => void;
   handleRedraw: () => void;
+  resetComposer: () => void;
+
+  // Run and submission state
   activeRunIdRef: React.RefObject<number | null>;
   stoppingRef: React.RefObject<Promise<void>>;
-  isMountedRef: React.RefObject<boolean>;
   submissionRef: React.RefObject<boolean>;
   pipelineGenerationRef: React.RefObject<number>;
+  isMountedRef: React.RefObject<boolean>;
+
+  // Session and UI
+  promptQueue: PromptQueue;
   getSessionState: () => SessionState;
-  resetComposer: () => void;
   setInterruptHint: React.Dispatch<React.SetStateAction<InterruptHint | null>>;
   screen: Screen;
   planFlow: PlanFlowState;

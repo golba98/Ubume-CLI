@@ -1,3 +1,19 @@
+/**
+ * Live-render scheduling: batching for streaming updates.
+ *
+ * Provider streams can emit hundreds of updates per second; rendering each one
+ * would thrash Ink. `createLiveRenderScheduler` coalesces them into flushes:
+ * consecutive assistant/plan deltas merge into one pending chunk, and
+ * same-id progress/tool/activity updates replace their pending predecessor,
+ * so a flush applies the latest state without losing ordering. Assistant
+ * text flushes faster than progress-only batches to keep typing responsive.
+ *
+ * `schedulePromptRunStartAfterVisibleCommit` is the complementary start-side
+ * guard: it waits until the "run started" frame is visibly committed before
+ * launching the provider process, so the first frame never shows a busy state
+ * with nothing on screen.
+ */
+
 import * as renderDebug from "../core/perf/renderDebug.js";
 import type { BackendProgressUpdate } from "../core/providers/types.js";
 import type { RunFileActivity } from "../core/workspace/workspaceActivity.js";

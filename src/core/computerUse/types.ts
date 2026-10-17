@@ -1,3 +1,9 @@
+/**
+ * Browser worker contracts shared with the Local Harness. Requests carry session/call ownership
+ * and policy separately; browser state and element references are ephemeral, not conversation
+ * persistence.
+ */
+
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
 import type { BrowserToolName } from "../../../bin/ubume-local-browser-tools.js";
 

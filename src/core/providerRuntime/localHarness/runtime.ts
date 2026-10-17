@@ -1,3 +1,10 @@
+/**
+ * Persistent Local Harness process and active-run owner. Coordinates profile startup, session
+ * resume/flush, tool approvals, browser calls, output-window continuation and shutdown.
+ * Notifications and policy stay in their extracted modules; stale child/run generations must not
+ * affect a replacement.
+ */
+
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -75,6 +82,7 @@ function readLinuxProcessRssBytes(pid: number): number | null {
   }
 }
 
+/** Builds prompt blocks and imports image bytes into Harness-owned storage before submission. */
 export async function buildLocalHarnessPromptContentBlocks(
   dshHome: string,
   prompt: string,
@@ -114,16 +122,32 @@ export async function buildLocalHarnessPromptContentBlocks(
 }
 
 export interface LocalHarnessRunner {
+  /**
+   * Runs one app-serialized request, reusing only compatible persisted state. Success waits
+   * for durable session flush; cancellation/failure invalidates session metadata.
+   */
   run(
     request: ProviderChatRequest,
     handlers: BackendRunHandlers,
     signal: AbortSignal,
   ): Promise<string>;
+  /**
+   * Stops polling/browser work, requests graceful shutdown and waits through child termination
+   * before process reuse.
+   */
   shutdown(): Promise<void>;
+  /**
+   * Requests immediate transport/browser teardown with delayed kill escalation; does not await
+   * process exit.
+   */
   terminate(): void;
   closeSession?(sessionId: string): Promise<void>;
 }
 
+/**
+ * Owns one reusable Harness child and one app-serialized active run. Child identity and session
+ * checks reject stale callbacks; the caller must await cleanup/shutdown before reusing ownership.
+ */
 export class LocalHarnessProcess implements LocalHarnessRunner {
   private browser = new BrowserManager();
   private browserGrants = new Map<
@@ -152,6 +176,10 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
     this.terminate();
   }
 
+  /**
+   * Runs one app-serialized request, reusing only compatible persisted state. Success waits
+   * for durable session flush; cancellation/failure invalidates session metadata.
+   */
   async run(
     request: ProviderChatRequest,
     handlers: BackendRunHandlers,
@@ -907,6 +935,10 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
     state.reject(error);
   }
 
+  /**
+   * Stops polling/browser work, requests graceful shutdown and waits through child termination
+   * before process reuse.
+   */
   async shutdown(): Promise<void> {
     this.stopMemoryPoll();
     for (const controller of this.browserCalls.values()) controller.abort();
@@ -952,10 +984,16 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
     }
   }
 
+  /**
+   * Waits for failed-session/browser cleanup before the app releases or reuses run ownership.
+   */
   async waitForCleanup(): Promise<void> {
     await this.failedSessionCleanup;
   }
 
+  /**
+   * Returns stderr with active connection secrets redacted.
+   */
   failureDetails(): string {
     return redactStderr(this.stderr, this.redactions);
   }
@@ -986,6 +1024,10 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
     }
   }
 
+  /**
+   * Closes ephemeral browser/Harness session state; a failed RPC shuts down the process and
+   * rejects.
+   */
   async closeSession(sessionId: string): Promise<void> {
     await this.browser.closeSession(sessionId);
     for (const [callId, grant] of this.browserGrants)
@@ -999,6 +1041,10 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
     }
   }
 
+  /**
+   * Requests immediate transport/browser teardown with delayed kill escalation; does not await
+   * process exit.
+   */
   terminate(): void {
     this.stopMemoryPoll();
     for (const controller of this.browserCalls.values()) controller.abort();
@@ -1022,6 +1068,9 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
 
 let sharedProcess: LocalHarnessRunner = new LocalHarnessProcess();
 
+/**
+ * Terminates the previous shared runner and installs the supplied test runner.
+ */
 export function resetLocalHarnessProcessForTests(
   processOverride: LocalHarnessRunner = new LocalHarnessProcess(),
 ): void {
@@ -1029,6 +1078,10 @@ export function resetLocalHarnessProcessForTests(
   sharedProcess = processOverride;
 }
 
+/**
+ * Runs through the shared Harness owner, waits for failed-session cleanup, and shuts down on
+ * cancellation. A disconnected failed turn is not replayed automatically.
+ */
 export async function runLocalHarness(
   request: ProviderChatRequest,
   handlers: BackendRunHandlers,
@@ -1058,10 +1111,12 @@ export async function runLocalHarness(
   }
 }
 
+/** Requests graceful shutdown of the shared Harness and waits for its cleanup. */
 export function shutdownLocalHarness(): Promise<void> {
   return sharedProcess.shutdown();
 }
 
+/** Closes saved ephemeral session/browser state when supported; an absent session is a no-op. */
 export function closeLocalHarnessSession(sessionId: string | undefined): Promise<void> {
   if (!sessionId || !sharedProcess.closeSession) return Promise.resolve();
   return sharedProcess.closeSession(sessionId);

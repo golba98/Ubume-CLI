@@ -1,3 +1,9 @@
+/**
+ * Read-only native-store primitives: SQLite fallback, bounded JSONL reads, protobuf text
+ * extraction and concurrent mapping. Database handles belong to callers; file/line readers close
+ * their own resources.
+ */
+
 import { createReadStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { createInterface } from "node:readline";
@@ -46,6 +52,10 @@ export function openReadonlyDatabase(path: string): ReadonlyDatabase | null {
   }
 }
 
+/**
+ * Reads SQLite column names; unsupported schemas/query failures yield an empty set. The caller
+ * still owns the database handle.
+ */
 export function tableColumns(database: ReadonlyDatabase, table: string): Set<string> {
   try {
     const rows = database.query(`PRAGMA table_info(${table})`).all() as { name?: unknown }[];
@@ -143,15 +153,18 @@ export function extractProtobufStrings(bytes: Uint8Array, maxDepth = 6): string[
 
 export type JsonRecord = Record<string, unknown>;
 
+/** Returns a nonblank string field without coercing or trimming its stored value. */
 export function stringField(record: JsonRecord, key: string): string | null {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+/** Uses the explicit native-session home override before the injected environment's home. */
 export function resolveHome(options: ExternalSessionOptions = {}): string {
   return options.home ?? getHomeDir(options.env);
 }
 
+/** Reads a trimmed, nonempty environment override from the supplied session context. */
 export function envValue(options: ExternalSessionOptions, key: string): string | undefined {
   const value = (options.env ?? process.env)[key]?.trim();
   return value || undefined;
@@ -191,6 +204,10 @@ export async function readTailJsonLines(
   return parseJsonLines(text, { dropFirst: start > 0 });
 }
 
+/**
+ * Parses object-valued JSONL records, skipping malformed lines and optionally dropping partial
+ * boundary lines.
+ */
 export function parseJsonLines(
   text: string,
   options: { dropFirst?: boolean; dropLast?: boolean } = {},

@@ -37,81 +37,115 @@ import {
 } from "./runFinalize.js";
 
 interface UseRunLifecycleContext {
+  // Session dispatch and UI setters
   dispatchSession: (action: SessionAction) => void;
   setConversationChars: React.Dispatch<React.SetStateAction<number>>;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  bumpWorkbench: React.Dispatch<React.SetStateAction<number>>;
+  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+
+  // Focus and navigation
   intendedFocusTargetRef: React.RefObject<string>;
   focusManager: ReturnType<typeof useFocusManager>;
+  screenRef: React.RefObject<Screen>;
+
+  // Active-run identity and lifecycle
   activeRunIdRef: React.RefObject<number | null>;
+  activeTurnIdRef: React.RefObject<number | null>;
   activeRunLifecycleRef: React.RefObject<PromptRunLifecycle | null>;
   activeRunTimingRef: React.RefObject<(PromptRunTiming & { runId: number; turnId: number }) | null>;
   finalFlushRef: React.RefObject<{ runId: number; flush: () => void } | null>;
   cleanupRef: React.RefObject<(() => void) | null>;
-  activeTurnIdRef: React.RefObject<number | null>;
+  captureFinalRef: React.RefObject<((runId: number) => void) | null>;
+  stoppingRef: React.RefObject<Promise<void>>;
+
+  // Run persistence
   persistRunConversationMessage: (
     runId: number,
     status: PersistedRunStatus,
     response?: { renderedResponse?: string; completeResponse?: string; errorMessage?: string },
   ) => void;
-  promptQueue: PromptQueue;
-  captureFinalRef: React.RefObject<((runId: number) => void) | null>;
   saveWorkbenchRef: React.RefObject<(() => void) | null>;
-  bumpWorkbench: React.Dispatch<React.SetStateAction<number>>;
+  conversationStore: ConversationStore;
+
+  // Tool approval
   toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
-  screenRef: React.RefObject<Screen>;
-  activeEvents: TimelineEvent[];
-  uiState: UIState;
+
+  // Prompt queue and submission guards
+  promptQueue: PromptQueue;
   submissionRef: React.RefObject<boolean>;
   pipelineGenerationRef: React.RefObject<number>;
-  busy: boolean;
-  planFlow: PlanFlowState;
-  setPlanFlow: React.Dispatch<React.SetStateAction<PlanFlowState>>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  stoppingRef: React.RefObject<Promise<void>>;
-  conversationStore: ConversationStore;
-  exit: (errorOrResult?: Error | unknown) => void;
   recoveryRef: React.RefObject<boolean>;
-  pendingQuitRef: React.RefObject<(() => void) | null>;
+  busy: boolean;
+
+  // Timeline and plan state
+  activeEvents: TimelineEvent[];
   staticEvents: TimelineEvent[];
+  uiState: UIState;
+  planFlow: PlanFlowState;
+
+  // Quit
+  exit: (errorOrResult?: Error | unknown) => void;
+  pendingQuitRef: React.RefObject<(() => void) | null>;
+
+  // Workspace
   workspaceRoot: string;
 }
 
 export function useRunLifecycle(context: UseRunLifecycleContext) {
   const {
+    // Session dispatch and UI setters
     dispatchSession,
     setConversationChars,
     setScreen,
+    bumpWorkbench,
+    setPlanFlow,
+    appendEvent,
+
+    // Focus and navigation
     intendedFocusTargetRef,
     focusManager,
+    screenRef,
+
+    // Active-run identity and lifecycle
     activeRunIdRef,
+    activeTurnIdRef,
     activeRunLifecycleRef,
     activeRunTimingRef,
     finalFlushRef,
     cleanupRef,
-    activeTurnIdRef,
-    persistRunConversationMessage,
-    promptQueue,
     captureFinalRef,
+    stoppingRef,
+
+    // Run persistence
+    persistRunConversationMessage,
     saveWorkbenchRef,
-    bumpWorkbench,
+    conversationStore,
+
+    // Tool approval
     toolApprovalResolverRef,
     setToolApproval,
-    screenRef,
-    activeEvents,
-    uiState,
+
+    // Prompt queue and submission guards
+    promptQueue,
     submissionRef,
     pipelineGenerationRef,
-    busy,
-    planFlow,
-    setPlanFlow,
-    appendEvent,
-    stoppingRef,
-    conversationStore,
-    exit,
     recoveryRef,
-    pendingQuitRef,
+    busy,
+
+    // Timeline and plan state
+    activeEvents,
     staticEvents,
+    uiState,
+    planFlow,
+
+    // Quit
+    exit,
+    pendingQuitRef,
+
+    // Workspace
     workspaceRoot,
   } = context;
 
@@ -225,11 +259,13 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
         sanitizeResponseText(response),
         lifecycle?.parseActionRequired ?? true,
       );
+
       persistRunConversationMessage(runId, status, {
         renderedResponse: parsed.content,
         completeResponse: sanitizeResponseText(persistedResponse),
         errorMessage: safeMessage,
       });
+
       dispatchSession({
         type: "FINALIZE_RUN",
         runId,
@@ -249,12 +285,15 @@ export function useRunLifecycle(context: UseRunLifecycleContext) {
           turnId,
         }),
       });
+
       if (shouldPauseQueueAfterRun(status, parsed.question, lifecycle)) {
         promptQueue.paused = true;
       }
+
       captureFinalRef.current?.(runId);
       saveWorkbenchRef.current?.();
       bumpWorkbench((value) => value + 1);
+
       perf.mark("finalize_done");
       perf.setMeta("content_length", parsed.content?.length ?? 0);
       perf.setMeta("status", status);

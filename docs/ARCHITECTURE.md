@@ -154,9 +154,11 @@ flowchart LR
   CLI[ubume exec] --> Launcher[bin/ubume.js]
   Launcher --> Entry[src/cli.ts]
   Entry --> Commands[headless/commands.ts]
-  Commands --> Parse[headless/execArgs.ts]
-  Parse --> Resolve[Layered config + workspace]
-  Resolve --> Runner[headless/execRunner.ts]
+  Commands --> Exec[headless/execCommand.ts]
+  Exec --> Parse[headless/execArgs.ts]
+  Exec --> Saved[headless/savedExec.ts]
+  Saved --> Resolve[headless/context.ts<br/>layered config + route]
+  Saved --> Runner[headless/execRunner.ts]
   Runner --> Backend[core/providers backend]
   Backend --> Child[Provider process]
   Child -->|assistant content| Stdout[stdout]
@@ -164,7 +166,7 @@ flowchart LR
   Child --> Exit[Stable exit code]
 ```
 
-Headless mode deliberately bypasses Ink, panels, and session rendering. It shares launch arguments, layered configuration, project-instruction loading, terminal sanitization, provider contracts, and Codex subprocess parsing with the interactive application.
+Headless mode deliberately bypasses Ink, panels, and session rendering (see the [headless subsystem guide](../src/headless/README.md)). It shares launch arguments, layered configuration, project-instruction loading, terminal sanitization, provider contracts, and Codex subprocess parsing with the interactive application.
 
 ## Provider architecture
 

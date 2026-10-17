@@ -1,26 +1,5 @@
 import { normalizeLineBreaks } from "../shared/text.js";
 
-// ─── terminalSanitize ─────────────────────────────────────────────────────────
-// Strips unsafe ANSI/control sequences from subprocess and user input.
-//
-// Two levels of sanitization are provided:
-//
-//  1. sanitizeTerminalOutput / sanitizeTerminalLines / sanitizeTerminalInput
-//     — Full strip: removes ALL escape sequences (OSC, CSI, DCS, etc.) plus
-//       non-printable control bytes.  Used for arbitrary subprocess output,
-//       user-typed text, and assistant deltas where we cannot trust the source.
-//
-//  2. sanitizeDiffOutput
-//     — Safe-passthrough mode for diff content that has already been classified
-//       as a code/diff segment by the markdown parser.  Strips dangerous
-//       sequences (cursor movement, screen clear, bracketed-paste toggle, OSC
-//       hyperlinks, etc.) but INTENTIONALLY preserves SGR colour-only sequences
-//       (e.g. \x1b[32m … \x1b[0m) so that raw diff colour codes from tools like
-//       `git diff --color=always` survive into the Ink layer.
-//       NOTE: The recommended rendering path still uses React/Ink theme-based
-//       colouring (no raw ANSI needed), so this helper is available for future
-//       use but diff colour is primarily applied via getDiffTone() tones.
-
 interface SanitizeTerminalOptions {
   preserveTabs?: boolean;
   tabSize?: number;
@@ -63,6 +42,10 @@ function stripUnsafeControls(text: string): string {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Removes escape/control sequences, normalizes line endings and expands tabs unless preservation
+ * is requested.
+ */
 export function sanitizeTerminalOutput(raw: string, options: SanitizeTerminalOptions = {}): string {
   if (!raw) return "";
   const preserveTabs = options.preserveTabs ?? false;
@@ -74,10 +57,12 @@ export function sanitizeTerminalOutput(raw: string, options: SanitizeTerminalOpt
   return normalizeTabs(withoutUnsafeControls, preserveTabs, tabSize);
 }
 
+/** Sanitizes untrusted input with the default two-space tab expansion. */
 export function sanitizeTerminalInput(raw: string): string {
   return sanitizeTerminalOutput(raw, { preserveTabs: false, tabSize: DEFAULT_TAB_SIZE });
 }
 
+/** Sanitizes and right-trims lines, discarding those that become empty. */
 export function sanitizeTerminalLines(lines: string[]): string[] {
   return lines
     .map((line) => sanitizeTerminalOutput(line))

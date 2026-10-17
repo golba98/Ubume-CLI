@@ -1,3 +1,26 @@
+/**
+ * `/resume` overlay (`resume-picker` screen): a tabbed, searchable list of Ubume
+ * conversations and external CLI sessions, filterable by provider tab, scope
+ * (this folder / all projects) and, on the Local tab, backend and model.
+ *
+ * Data: `conversations` (from `src/app`) are shown immediately; when
+ * `loadSessions` is provided, the full session catalog for the current scope is
+ * loaded asynchronously (once per scope, cached in local `lists`) and replaces
+ * them. Late results after unmount are dropped via the `mounted` ref.
+ *
+ * State: tab/scope/filters/query/selection are local but seeded from
+ * `position`, and every change is reported through `onPositionChange` so the
+ * app can restore them on the next open. `position.selectedId` is applied once
+ * the matching row appears (it may arrive with the async load).
+ *
+ * Focus: registers the `resume-picker` id (`FOCUS_IDS.resumePicker`) with
+ * `autoFocus`; input is handled only while focused. Keys (list mode): Up/k,
+ * Down/j, Home/End, PageUp/PageDown move; Left/Right or 1–9 switch tab; `a`
+ * toggles scope; `/` starts search; `b` / `m` cycle backend / model (Local tab);
+ * Enter resumes or views; `o` resumes an external session natively; `c`
+ * continues it in Ubume; Esc closes. Search mode: type to filter,
+ * Backspace/Delete erase, Enter keeps the query, Esc clears it.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ExternalSessionSummary } from "../../core/externalSessions/types.js";
@@ -27,25 +50,40 @@ import {
 } from "./resumePickerRows.js";
 
 interface ResumePickerProps {
+  /** Ubume conversations shown until (or unless) the catalog loads. */
   conversations: readonly ConversationListEntry[];
+  /** Enter on an Ubume conversation when `onSelectSession` is not provided. */
   onSelect: (id: string) => void;
+  /** When provided, Enter on any row calls this instead of `onSelect` / `onOpenExternal`. */
   onSelectSession?: (session: SessionSummary) => void;
   onCancel: () => void;
+  /** Loads the session catalog for a scope; called at most once per scope per mount. */
   loadSessions?: (scope: ExternalListScope) => Promise<SessionCatalogResult>;
+  /** Enter on an external session (read-only view) when `onSelectSession` is absent. */
   onOpenExternal?: (summary: ExternalSessionSummary) => void;
+  /** `o`: resume the external session in its own CLI. */
   onResumeExternalNative?: (summary: ExternalSessionSummary) => void;
+  /** `c`: continue the external session inside Ubume. */
   onContinueExternal?: (summary: ExternalSessionSummary) => void;
+  /** Initial picker state (restored from the previous open). */
   position?: ResumePickerPosition;
+  /** Reports picker state changes so the app can persist them. */
   onPositionChange?: (position: ResumePickerPosition) => void;
 }
 
+/** Async load state of the catalog for one scope. */
 type ListState =
   | { status: "loading" }
   | { status: "ready"; result: SessionCatalogResult }
   | { status: "error"; message: string };
 const BACKENDS: readonly (LocalBackendId | "all")[] = ["all", "lm-studio", "unsloth"];
 
-/** Keep the active provider visible even when the complete section bar cannot fit. */
+/**
+ * Keep the active provider visible even when the complete section bar cannot fit.
+ *
+ * Grows a window around the active tab, first leftwards then rightwards, while
+ * the labels (separated by two spaces) fit in `width` cells.
+ */
 export function visibleResumeTabs(
   tabs: readonly ResumePickerTab[],
   active: ResumePickerTab,
@@ -64,6 +102,7 @@ export function visibleResumeTabs(
   return tabs.slice(start, end);
 }
 
+/** Resume picker; see the module header for data flow and keys. */
 export function ResumePicker({
   conversations,
   onSelect,
@@ -97,6 +136,9 @@ export function ResumePicker({
       mounted.current = false;
     };
   }, []);
+  // Load the catalog for the current scope once. `pendingLoads` guards against
+  // a second request while the first is in flight (the effect re-runs whenever
+  // `lists` changes).
   useEffect(() => {
     if (!loadSessions || lists[scope] || pendingLoads.current.has(scope)) return;
     pendingLoads.current.add(scope);
@@ -135,6 +177,7 @@ export function ResumePicker({
           ),
     [conversations, state],
   );
+  // Codexa tabs appear only on the local dev channel or when sessions exist for them.
   const tabs = useMemo(() => {
     const result = [...RESUME_PICKER_TABS];
     for (const provider of ["codexa-native", "codexa-cupy"] as const) {
@@ -166,6 +209,7 @@ export function ResumePicker({
   );
   const rows = Math.max(1, layout?.availableRows ?? 12);
   const width = Math.max(1, (layout?.availableCols ?? 80) - 4);
+  // Chrome: title + status + hint at 4+ rows, title + hint at 3, none below.
   const chromeRows = rows >= 4 ? 3 : rows >= 3 ? 2 : 0;
   const viewport = useMemo(
     () =>
@@ -178,6 +222,8 @@ export function ResumePicker({
       }),
     [items.length, selectedIndex, rows, chromeRows, scrollOffset],
   );
+  // Restore the remembered selection once its row exists; otherwise just keep
+  // the index in range when the list changes.
   useEffect(() => {
     if (pendingSelection.current && items.length) {
       const index = items.findIndex((item) => item.key === pendingSelection.current);

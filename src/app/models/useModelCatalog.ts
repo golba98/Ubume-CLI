@@ -60,39 +60,50 @@ import { selectedLocalModel } from "../providers/providerActions.js";
 import { openAiCapabilitiesFromDiscovery } from "./catalogLogic.js";
 
 interface UseModelCatalogContext {
+  // Selection and active route
   selectionCoordinator: SelectionCoordinator;
-  providerOverride: BackendProvider | undefined;
-  setModelCapabilities: React.Dispatch<React.SetStateAction<CodexModelCapabilities | null>>;
-  modelDiscoveryInFlightRef: React.RefObject<Promise<CodexModelCapabilities> | null>;
-  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
-  modelDiscoveryAnnounceRef: React.RefObject<boolean>;
-  setModelCapabilitiesBusy: React.Dispatch<React.SetStateAction<boolean>>;
-  appendEvent: (type: "system" | "error", title: string, content: string) => void;
-  providerModelsLoadedRef: React.RefObject<Set<ProviderId>>;
-  providerModelRefreshesRef: React.RefObject<Map<ProviderId, Promise<unknown>>>;
-  setProviderModelLoading: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-  setProviderModelErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  workspaceRoot: string;
-  providerWorkspaceConfig: ProviderWorkspaceConfig;
-  setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
-  setAuthStatus: React.Dispatch<React.SetStateAction<CodexAuthProbeResult>>;
-  setAuthStatusBusy: React.Dispatch<React.SetStateAction<boolean>>;
-  providerDiagnosticsRef: React.RefObject<
-    Record<string, Record<string, string | number | boolean | null>>
-  >;
-  providerRouteErrorsRef: React.RefObject<Record<string, string>>;
   activeProviderRoute: ProviderRoute;
   markProviderAvailability: (
     providerId: ProviderId,
     availability: RuntimeAvailability,
     reason: string,
   ) => void;
+  providerRouteErrorsRef: React.RefObject<Record<string, string>>;
+  providerDiagnosticsRef: React.RefObject<
+    Record<string, Record<string, string | number | boolean | null>>
+  >;
   reasoningLevel: string;
+
+  // Codex model discovery
+  providerOverride: BackendProvider | undefined;
+  setModelCapabilities: React.Dispatch<React.SetStateAction<CodexModelCapabilities | null>>;
+  setModelCapabilitiesBusy: React.Dispatch<React.SetStateAction<boolean>>;
+  modelDiscoveryInFlightRef: React.RefObject<Promise<CodexModelCapabilities> | null>;
+  modelDiscoveryAnnounceRef: React.RefObject<boolean>;
+
+  // Provider catalog state
+  providerModelsLoadedRef: React.RefObject<Set<ProviderId>>;
+  providerModelRefreshesRef: React.RefObject<Map<ProviderId, Promise<unknown>>>;
+  setProviderModelLoading: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  setProviderModelErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setRegistryNonce: React.Dispatch<React.SetStateAction<number>>;
+
+  // Auth probing
+  setAuthStatus: React.Dispatch<React.SetStateAction<CodexAuthProbeResult>>;
+  setAuthStatusBusy: React.Dispatch<React.SetStateAction<boolean>>;
+
+  // Provider config and runtime
+  providerWorkspaceConfig: ProviderWorkspaceConfig;
   /** Saves a transform of the latest provider config; see useRuntimeSettings. */
   updateProviderWorkspaceConfig: (
     transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig,
   ) => ProviderWorkspaceConfig;
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
+
+  // App plumbing
+  workspaceRoot: string;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
+  getInputDebugSnapshot: (extra?: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export function useModelCatalog(context: UseModelCatalogContext) {
@@ -220,6 +231,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
             discovery,
             activeProviderRoute.modelId,
           );
+
           // A newer discovery or connection owns the snapshot now.
           const stale =
             discoveryLifetime.current.signal.aborted ||
@@ -228,6 +240,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
           if (stale) {
             return capabilities;
           }
+
           setModelCapabilities(capabilities);
           traceInputDebug(
             "model_loading_success",
@@ -237,6 +250,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
               modelCount: getSelectableModelCapabilities(capabilities).length,
             }),
           );
+
           if (capabilities.status === "fallback") {
             traceInputDebug(
               "model_loading_failure",
@@ -246,6 +260,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
               }),
             );
           }
+
           if (modelDiscoveryAnnounceRef.current) {
             const modelCount = getSelectableModelCapabilities(capabilities).length;
             const source =
@@ -255,9 +270,11 @@ export function useModelCatalog(context: UseModelCatalogContext) {
           return capabilities;
         } catch (error) {
           const fallback = createFallbackModelCapabilities(error);
+
           if (discoveryLifetime.current.signal.aborted || currentConnection() !== connection) {
             return fallback;
           }
+
           setModelCapabilities(fallback);
           traceInputDebug(
             "model_loading_failure",
@@ -265,6 +282,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
               error: errorMessage(error),
             }),
           );
+
           if (modelDiscoveryAnnounceRef.current) {
             appendEvent(
               "error",
@@ -343,14 +361,18 @@ export function useModelCatalog(context: UseModelCatalogContext) {
             }
           : {}),
       })
+
         .then((discovery) => {
           providerModelsLoadedRef.current.add(providerId);
+
+          // A newer refresh (or an abort) owns the catalog now; leave it alone.
           if (
             discoveryLifetime.current.signal.aborted ||
             providerCatalog.get(providerId) !== discovery
           ) {
             return discovery;
           }
+
           if (
             discovery.status !== "ready" ||
             discovery.freshness === "unverified" ||
@@ -361,6 +383,8 @@ export function useModelCatalog(context: UseModelCatalogContext) {
               [providerId]: discovery.message ?? `Unable to load ${runtime.label} models.`,
             }));
           }
+
+          // Reject the active selection when its model left the catalog.
           const activeModelStillSelected =
             providerId === latest.current.activeProviderRoute.providerId &&
             latest.current.activeProviderRoute.modelId === activeProviderRoute.modelId;
@@ -382,16 +406,20 @@ export function useModelCatalog(context: UseModelCatalogContext) {
               appendEvent("error", "Selected model unavailable", message);
             }
           }
+
           setRegistryNonce((current) => current + 1);
           return discovery;
         })
+
         .catch((error) => {
           const message = errorMessage(error);
           setProviderModelErrors((current) => ({ ...current, [providerId]: message }));
           setRegistryNonce((current) => current + 1);
           return null;
         })
+
         .finally(() => {
+          // A newer refresh owns the in-flight marker; leave it registered.
           if (
             discoveryLifetime.current.signal.aborted ||
             providerModelRefreshesRef.current.get(providerId) !== promise

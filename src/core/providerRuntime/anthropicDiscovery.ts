@@ -1,7 +1,14 @@
+/**
+ * Direct Anthropic API inventory discovery, distinct from Claude Code discovery. Fetches
+ * paginated models with configured credentials and returns unverified diagnostics on
+ * transport/auth failures.
+ */
+
 import type { ProviderWorkspaceOverride } from "../providerLauncher/types.js";
 import { isRecord } from "../shared/values.js";
 import type { ProviderModel, ProviderModelDiscoveryResult } from "./types.js";
 
+/** Resolves the configured/environment API base and appends /v1 when missing. */
 export function anthropicApiBase(config?: ProviderWorkspaceOverride): string {
   const base = (
     config?.baseUrl ||
@@ -11,6 +18,10 @@ export function anthropicApiBase(config?: ProviderWorkspaceOverride): string {
   return base.endsWith("/v1") ? base : `${base}/v1`;
 }
 
+/**
+ * Normalizes non-retired API models and advertised capabilities; malformed inventory shapes
+ * throw.
+ */
 export function parseAnthropicModels(body: unknown): ProviderModel[] {
   if (!isRecord(body) || !Array.isArray(body.data))
     throw new Error("Malformed Claude model inventory.");
@@ -76,6 +87,10 @@ export function parseAnthropicModels(body: unknown): ProviderModel[] {
   return [...models.values()];
 }
 
+/**
+ * Fetches a bounded, paginated API inventory with abort support; missing credentials and
+ * failures return unverified results.
+ */
 export async function fetchAnthropicModels(options: {
   providerConfig?: ProviderWorkspaceOverride;
   signal?: AbortSignal;

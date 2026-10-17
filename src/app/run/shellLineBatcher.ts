@@ -12,15 +12,18 @@ import { LIVE_UPDATE_FLUSH_MS } from "./promptRunPrep.js";
  * without emitting.
  */
 export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]) => void) {
+  // Buffered lines per stream, plus the flush timer.
   let pendingStdout: string[] = [];
   let pendingStderr: string[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
+
   const cancel = () => {
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
   };
+
   const flush = () => {
     cancel();
     const stdout = pendingStdout;
@@ -30,6 +33,7 @@ export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]
     if (stdout.length === 0 && stderr.length === 0) return;
     emit(stdout, stderr);
   };
+
   const enqueue = (stream: "stdout" | "stderr", lines: string[]) => {
     (stream === "stdout" ? pendingStdout : pendingStderr).push(...lines);
     if (timer) return;
@@ -38,5 +42,6 @@ export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]
       flush();
     }, LIVE_UPDATE_FLUSH_MS);
   };
+
   return { enqueue, flush, cancel };
 }

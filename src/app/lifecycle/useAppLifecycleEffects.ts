@@ -24,9 +24,12 @@ import type { ThemeSelectionState } from "../../ui/theme.js";
 import { buildSettingsPayload } from "../settings/useSettings.js";
 
 interface UseAppLifecycleEffectsContext {
+  // Runtime config base
   baseRuntimeConfigRef: React.RefObject<RuntimeConfig>;
   baseLayeredConfig: LayeredConfigResult;
   providerOverride: BackendProvider | undefined;
+
+  // Persisted UI preferences
   initialSettings: React.RefObject<ReturnType<typeof loadSettings>>;
   themeSelection: ThemeSelectionState;
   workspaceDisplayMode: "dir" | "name" | "simple";
@@ -35,6 +38,8 @@ interface UseAppLifecycleEffectsContext {
   customTheme: Partial<Theme> | undefined;
   authPreference: "chatgpt-login-goal" | "api-key-first" | "runner-managed";
   headerConfig: HeaderConfig;
+
+  // Unmount cleanup
   isMountedRef: React.RefObject<boolean>;
   cleanupRef: React.RefObject<(() => void) | null>;
   themePreviewTimerRef: React.RefObject<NodeJS.Timeout | null>;

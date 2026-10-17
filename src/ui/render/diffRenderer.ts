@@ -1,3 +1,13 @@
+/**
+ * Unified-diff detection and per-line classification.
+ *
+ * Its production consumer is `timeline/measure/markdownRows.ts`, which only
+ * asks `maybeRenderDiff(...) !== null` to decide whether a fenced code block
+ * gets diff tones (it applies its own per-line tone mapping). Input is
+ * sanitized (ANSI stripped, tabs → two spaces) and CRLF-normalized first, so
+ * colors always come from theme tones, never from upstream escape codes. Pure;
+ * no caching.
+ */
 import { normalizeLineBreaks } from "../../core/shared/text.js";
 import { sanitizeTerminalOutput } from "../../core/terminal/terminalSanitize.js";
 
@@ -62,6 +72,13 @@ function hasRealChangeLine(lines: readonly string[]): boolean {
   return lines.some((line) => ADD_LINE_PATTERN.test(line) || REMOVE_LINE_PATTERN.test(line));
 }
 
+/**
+ * Decide whether `lines` should be treated as a diff. Normally requires both a
+ * strong header signal (`diff --git`, `@@` hunk, `index`, or paired `---`/`+++`)
+ * AND at least one real `+`/`-` change line, so ordinary text with leading
+ * dashes is not misclassified. `force` (e.g. a ```diff fence) relaxes this to
+ * either signal.
+ */
 function shouldRenderUnifiedDiff(
   lines: readonly string[],
   options: DiffRenderOptions = {},
@@ -101,10 +118,15 @@ function classifyDiffLine(line: string): DiffRenderLineType {
   return "context";
 }
 
+/** True when `text` (blank edge lines ignored) qualifies as a unified diff. */
 export function isUnifiedDiff(text: string, options: DiffRenderOptions = {}): boolean {
   return shouldRenderUnifiedDiff(trimBlankEdges(getDiffLines(text)), options);
 }
 
+/**
+ * Classify each line of `text` as file/hunk/add/remove/context/meta. Returns
+ * `[]` when the text does not qualify as a diff.
+ */
 export function renderUnifiedDiff(text: string, options: DiffRenderOptions = {}): DiffRenderLine[] {
   const lines = trimBlankEdges(getDiffLines(text));
   if (lines.length === 0) {
@@ -121,6 +143,7 @@ export function renderUnifiedDiff(text: string, options: DiffRenderOptions = {})
   }));
 }
 
+/** Like `renderUnifiedDiff`, but returns `null` instead of `[]` for non-diff text. */
 export function maybeRenderDiff(
   text: string,
   options: DiffRenderOptions = {},

@@ -27,25 +27,35 @@ import type { WorkbenchSnapshot } from "../../session/workbench.js";
 import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
 
 export function useRunRefs() {
-  const stoppingRef = useRef<Promise<void>>(Promise.resolve());
+  // Guards that serialize submissions, conversation switches and cancellation.
   const submissionRef = useRef(false);
   const recoveryRef = useRef(false);
   const pendingQuitRef = useRef<(() => void) | null>(null);
-  const snapshotRef = useRef<(() => WorkbenchSnapshot) | null>(null);
-  const lastSaveErrorRef = useRef<string | null>(null);
-  const saveWorkbenchRef = useRef<(() => void) | null>(null);
-  const captureFinalRef = useRef<((runId: number) => void) | null>(null);
+  const pipelineGenerationRef = useRef(0);
+
+  // Promises that settle when the last provider or shell process has stopped.
+  const stoppingRef = useRef<Promise<void>>(Promise.resolve());
+  const processStoppedRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Which run/turn is current, with its lifecycle options and timing.
+  const activeRunIdRef = useRef<number | null>(null);
+  const activeTurnIdRef = useRef<number | null>(null);
+  const activeRunLifecycleRef = useRef<PromptRunLifecycle | null>(null);
+  const activeRunTimingRef = useRef<(PromptRunTiming & { runId: number; turnId: number }) | null>(
+    null,
+  );
+  const runControlRef = useRef<ProviderRunControl | null>(null);
+  const clearEpochRef = useRef<number>(0);
+  const isMountedRef = useRef(true);
+
+  // Checkpoint and capture refs used to save a finished run.
   const activeCheckpointRef = useRef<{
     runId: number;
     checkpoint: FileCheckpoint;
     store: CheckpointStore;
   } | null>(null);
   const pendingCaptureRef = useRef<Promise<void>>(Promise.resolve());
-  const deferredRouteCloseRef = useRef<string | undefined>(undefined);
-  const runControlRef = useRef<ProviderRunControl | null>(null);
-  const processStoppedRef = useRef<Promise<void>>(Promise.resolve());
-  const pipelineGenerationRef = useRef(0);
-  const finalFlushRef = useRef<{ runId: number; flush: () => void } | null>(null);
+  const captureFinalRef = useRef<((runId: number) => void) | null>(null);
   const activeRunCaptureRef = useRef<{
     runId: number;
     text: string;
@@ -53,15 +63,15 @@ export function useRunRefs() {
     files: Map<string, PersistedFileActivity>;
     generationMetadata?: GenerationMetadata;
   } | null>(null);
+  const finalFlushRef = useRef<{ runId: number; flush: () => void } | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const activeRunLifecycleRef = useRef<PromptRunLifecycle | null>(null);
-  const activeRunTimingRef = useRef<(PromptRunTiming & { runId: number; turnId: number }) | null>(
-    null,
-  );
-  const isMountedRef = useRef(true);
-  const activeRunIdRef = useRef<number | null>(null);
-  const activeTurnIdRef = useRef<number | null>(null);
-  const clearEpochRef = useRef<number>(0);
+
+  // Workbench snapshot and save bookkeeping.
+  const snapshotRef = useRef<(() => WorkbenchSnapshot) | null>(null);
+  const saveWorkbenchRef = useRef<(() => void) | null>(null);
+  const lastSaveErrorRef = useRef<string | null>(null);
+  const deferredRouteCloseRef = useRef<string | undefined>(undefined);
+
   return useMemo(
     () => ({
       stoppingRef,

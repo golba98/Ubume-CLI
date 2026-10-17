@@ -161,6 +161,7 @@ export function useAppState(context: UseAppStateContext) {
 
   // ─── State & Refs ────────────────────────────────────────────────────────────
 
+  // Layered config and the session override patch on top of it.
   const [baseLayeredConfig, setBaseLayeredConfig] = useState<LayeredConfigResult>(
     initialLayeredConfig.current,
   );
@@ -178,6 +179,7 @@ export function useAppState(context: UseAppStateContext) {
       ...(initialRoute.reasoning ? { reasoningLevel: initialRoute.reasoning } : {}),
     };
   });
+  // UI preferences (persisted by useAppLifecycleEffects).
   const [authPreference, setAuthPreference] = useState<AuthPreference>(
     initialSettings.current.auth.preference,
   );
@@ -188,6 +190,8 @@ export function useAppState(context: UseAppStateContext) {
     initialSettings.current.ui.terminalTitleMode,
   );
   const [showBusyLoader, setShowBusyLoader] = useState(initialSettings.current.ui.showBusyLoader);
+
+  // Provider routing state.
   const [providerWorkspaceConfig, setProviderWorkspaceConfig] = useState<ProviderWorkspaceConfig>(
     initialProviderWorkspaceConfig.current,
   );
@@ -208,6 +212,8 @@ export function useAppState(context: UseAppStateContext) {
       ) => void)
     | null
   >(null);
+
+  // Theme state.
   const [themeSelection, setThemeSelection] = useState<ThemeSelectionState>({
     committedTheme: initialSettings.current.ui.theme,
     previewTheme: null,
@@ -215,6 +221,8 @@ export function useAppState(context: UseAppStateContext) {
   const [themeNotice, setThemeNotice] = useState<string | null>(null);
   const [customTheme, setCustomTheme] = useState(initialSettings.current.ui.customTheme);
   const [headerConfig] = useState(initialSettings.current.header);
+
+  // Screen and pending outside-workspace import.
   // Hold the first interactive frame behind the update check. A cached update
   // opens immediately; an uncached launch shows a short checking panel instead
   // of allowing input and interrupting the user a moment later.
@@ -238,17 +246,24 @@ export function useAppState(context: UseAppStateContext) {
     files: PendingImportFile[];
     attachmentsDir: string;
   } | null>(null);
+
+  // Attachment registries and tool approval.
   const pastedContentRegistryRef = useRef<PastedContentRegistry>(new Map());
   const imageAttachmentRegistryRef = useRef<ImageAttachmentRegistry>(new Map());
   const [toolApproval, setToolApproval] = useState<ToolApprovalRequest | null>(null);
   const toolApprovalResolverRef = useRef<((decision: ToolApprovalDecision) => void) | null>(null);
   const [registryNonce, setRegistryNonce] = useState(0);
+
+  // Render-time mirrors: assigned during render so frame-time code and async
+  // callbacks see the committing values.
   const screenRef = useRef<Screen>("main");
   screenRef.current = screen;
   const [composerInstanceKey, setComposerInstanceKey] = useState(0);
   // Bumped purely to force one extra React commit when the /clear boundary needs
   // the authoritative post-clear frame flushed (see the syncRenderState effect).
   const [, bumpPostClearRepaint] = useState(0);
+
+  // Session reducer and conversation persistence.
   const {
     state: sessionState,
     dispatch: dispatchSession,
@@ -273,6 +288,8 @@ export function useAppState(context: UseAppStateContext) {
   const checkpointsRef = useRef<FileCheckpoint[]>([]);
   const restoredFileBoundaryRef = useRef<FileBoundary | undefined>(undefined);
   const workspaceLeaseRef = useRef<OwnershipLease | undefined>(undefined);
+
+  // Run refs (see useRunRefs for what each group guards).
   const runRefs = useRunRefs();
   const {
     stoppingRef,
@@ -300,6 +317,7 @@ export function useAppState(context: UseAppStateContext) {
     clearEpochRef,
   } = runRefs;
 
+  // Resume and conversation-switch state.
   const [interruptHint, setInterruptHint] = useState<InterruptHint | null>(null);
   const [conversationRouteOverride, setConversationRouteOverride] = useState<ProviderRoute | null>(
     null,
@@ -317,6 +335,8 @@ export function useAppState(context: UseAppStateContext) {
   const [externalViewerSession, setExternalViewerSession] = useState<ExternalSessionSummary | null>(
     null,
   );
+
+  // Auth probe, usage totals and model discovery state.
   const [authStatus, setAuthStatus] = useState<CodexAuthProbeResult>(createInitialAuthStatus());
   const [authStatusBusy, setAuthStatusBusy] = useState(false);
   // Running character total across the conversation — used to estimate token usage
@@ -338,6 +358,7 @@ export function useAppState(context: UseAppStateContext) {
     null,
   );
   return {
+    // Startup & workspace
     selectionCoordinator,
     workspaceRoot,
     projectInstructionsLoad,
@@ -348,15 +369,21 @@ export function useAppState(context: UseAppStateContext) {
     initialProviderWorkspaceConfig,
     launchContext,
     workspaceCommandContext,
+
+    // Terminal layout & repaint
     terminalLayout,
     terminalLayoutColsRef,
     staticRepaintGeneration,
     bumpStaticRepaintGeneration,
     staticRepaintGenerationRef,
+
+    // Layered config & runtime override
     baseLayeredConfig,
     setBaseLayeredConfig,
     sessionRuntimeOverride,
     setSessionRuntimeOverride,
+
+    // UI preferences
     authPreference,
     setAuthPreference,
     workspaceDisplayMode,
@@ -365,6 +392,8 @@ export function useAppState(context: UseAppStateContext) {
     setTerminalTitleMode,
     showBusyLoader,
     setShowBusyLoader,
+
+    // Provider routing
     providerWorkspaceConfig,
     setProviderWorkspaceConfig,
     localBackendStatuses,
@@ -375,6 +404,8 @@ export function useAppState(context: UseAppStateContext) {
     setProviderSetup,
     providerLaunchBypassRef,
     providerActionRef,
+
+    // Theme
     themeSelection,
     setThemeSelection,
     themeNotice,
@@ -382,11 +413,15 @@ export function useAppState(context: UseAppStateContext) {
     customTheme,
     setCustomTheme,
     headerConfig,
+
+    // Screen & pending import
     screen,
     setScreen,
     shouldMountTranscript,
     pendingImport,
     setPendingImport,
+
+    // Attachments, tool approval & registry
     pastedContentRegistryRef,
     imageAttachmentRegistryRef,
     toolApproval,
@@ -394,16 +429,22 @@ export function useAppState(context: UseAppStateContext) {
     toolApprovalResolverRef,
     registryNonce,
     setRegistryNonce,
+
+    // Render-time mirrors
     screenRef,
     composerInstanceKey,
     setComposerInstanceKey,
     bumpPostClearRepaint,
+
+    // Session & conversation
     sessionState,
     dispatchSession,
     getSessionState,
     conversationStore,
     activeConversationRef,
     promptQueue,
+
+    // Workbench & workspace registries
     workbenchVersion,
     bumpWorkbench,
     workbenchView,
@@ -412,6 +453,8 @@ export function useAppState(context: UseAppStateContext) {
     checkpointsRef,
     restoredFileBoundaryRef,
     workspaceLeaseRef,
+
+    // Run refs
     stoppingRef,
     submissionRef,
     recoveryRef,
@@ -435,6 +478,8 @@ export function useAppState(context: UseAppStateContext) {
     activeRunIdRef,
     activeTurnIdRef,
     clearEpochRef,
+
+    // Resume & conversation-switch state
     interruptHint,
     setInterruptHint,
     conversationRouteOverride,
@@ -450,6 +495,8 @@ export function useAppState(context: UseAppStateContext) {
     resumePickerPositionRef,
     externalViewerSession,
     setExternalViewerSession,
+
+    // Auth, usage & model discovery
     authStatus,
     setAuthStatus,
     authStatusBusy,

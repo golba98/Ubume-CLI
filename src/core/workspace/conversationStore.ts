@@ -1,3 +1,9 @@
+/**
+ * Conversation metadata, canonical messages and workbench snapshots in app data. Atomic snapshot
+ * writes and optional ownership leases are separate responsibilities; callers acquire/release
+ * leases around mutations.
+ */
+
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -323,6 +329,7 @@ function isSafeConversationId(id: string): boolean {
   return /^chat_[A-Za-z0-9-]+$/.test(id);
 }
 
+/** Workspace-scoped canonical dialogue storage with optional caller-released ownership leases. */
 export class ConversationStore {
   private readonly rootDir: string;
   private readonly legacyRootDirs: readonly string[];
@@ -359,6 +366,10 @@ export class ConversationStore {
     this.onDiagnostic = options.onDiagnostic ?? (() => undefined);
   }
 
+  /**
+   * Acquires the conversation lease when ownership is enabled, retaining it until release or
+   * another conversation is acquired.
+   */
   acquire(id: string): void {
     if (!this.ownership || this.lease?.id === id) return;
     this.conversationDir(id);
@@ -366,6 +377,10 @@ export class ConversationStore {
     this.release();
     this.lease = { id, value };
   }
+  /**
+   * Releases this store's current token-checked conversation lease; repeated calls are
+   * harmless.
+   */
   release(): void {
     this.lease?.value.release();
     this.lease = undefined;
@@ -385,6 +400,10 @@ export class ConversationStore {
       });
   }
 
+  /**
+   * Creates an unsaved record and ensures its app-data root; no conversation snapshot is
+   * written until save.
+   */
   createConversation(route: {
     providerId: ProviderId | string | null;
     modelId: string;
@@ -412,6 +431,10 @@ export class ConversationStore {
     return { metadata, messages: [] };
   }
 
+  /**
+   * Acquires optional ownership and atomically writes the canonical snapshot. Canonical I/O
+   * failures throw; summary-cache failures only report diagnostics.
+   */
   save(record: ConversationRecord): void {
     this.acquire(record.metadata.id);
     this.ensureRoot();
@@ -453,6 +476,10 @@ export class ConversationStore {
     }
   }
 
+  /**
+   * Reads current or legacy dialogue without migration writes; invalid/unreadable records
+   * report diagnostics and return null.
+   */
   load(id: string): ConversationRecord | null {
     try {
       const dir = this.readDirectory(id);
@@ -519,6 +546,10 @@ export class ConversationStore {
     return join(dir, existsSync(join(dir, "snapshot.json")) ? "snapshot.json" : "messages.json");
   }
 
+  /**
+   * Lists nonempty current/legacy conversations newest-first, using valid summary caches and
+   * skipping malformed records.
+   */
   list(): ConversationListEntry[] {
     const ids = new Set<string>();
     for (const root of [this.rootDir, ...this.legacyRootDirs]) {

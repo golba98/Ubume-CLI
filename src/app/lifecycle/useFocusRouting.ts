@@ -19,22 +19,33 @@ import { FOCUS_IDS, getFocusTargetForScreen } from "../../ui/input/focus.js";
 import { shouldBumpComposerInstance } from "../../ui/theme.js";
 
 interface UseFocusRoutingContext {
+  // Screen tracking
+  screen: Screen;
   screenRef: React.RefObject<Screen>;
+  previousScreenRef: React.RefObject<Screen>;
+  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+
+  // Focus targets and intent
+  intendedInputModeRef: React.RefObject<"model-picker" | "chat/input">;
+  intendedFocusTargetRef: React.RefObject<string>;
+  modelPickerOpenRef: React.RefObject<boolean>;
+  focusManager: ReturnType<typeof useFocusManager>;
+
+  // Busy and selection guards
   busyRef: React.RefObject<boolean>;
   modelCapabilitiesBusyRef: React.RefObject<boolean>;
-  intendedInputModeRef: React.RefObject<"model-picker" | "chat/input">;
   modelSelectionInFlightRef: React.RefObject<boolean>;
-  intendedFocusTargetRef: React.RefObject<string>;
+
+  // Composer instance
+  composerInstanceKey: number;
+  setComposerInstanceKey: React.Dispatch<React.SetStateAction<number>>;
+
+  // Plan flow
+  planFlow: PlanFlowState;
+
+  // Input and theme
   stdin: NodeJS.ReadStream;
   themePreviewTimerRef: React.RefObject<NodeJS.Timeout | null>;
-  screen: Screen;
-  previousScreenRef: React.RefObject<Screen>;
-  setComposerInstanceKey: React.Dispatch<React.SetStateAction<number>>;
-  focusManager: ReturnType<typeof useFocusManager>;
-  composerInstanceKey: number;
-  planFlow: PlanFlowState;
-  modelPickerOpenRef: React.RefObject<boolean>;
-  setScreen: React.Dispatch<React.SetStateAction<Screen>>;
 }
 
 export function useFocusRouting(context: UseFocusRoutingContext) {
@@ -145,6 +156,7 @@ export function useFocusRouting(context: UseFocusRoutingContext) {
       if (modelPickerOpenRef.current) {
         intendedInputModeRef.current = "model-picker";
         intendedFocusTargetRef.current = FOCUS_IDS.modelPicker;
+
         traceInputDebug(
           "model_picker_async_completion_preserved",
           getInputDebugSnapshot({
@@ -157,8 +169,10 @@ export function useFocusRouting(context: UseFocusRoutingContext) {
         focusManager.focus(FOCUS_IDS.modelPicker);
         return;
       }
+
       intendedInputModeRef.current = "chat/input";
       intendedFocusTargetRef.current = FOCUS_IDS.composer;
+
       traceInputDebug(
         "model_picker_close",
         getInputDebugSnapshot({

@@ -1,3 +1,17 @@
+/**
+ * Pure text-editing model behind the composer: sanitizing input, cursor
+ * movement, insert/delete, wrapping into a scrollable viewport, horizontal row
+ * windowing, word/line/vertical navigation, coalescing undo, and history search.
+ *
+ * Cursor offsets are UTF-16 indices into the string. Every operation keeps the
+ * cursor off the middle of a surrogate pair, and the word/vertical helpers snap
+ * out of the middle of atomic chips (see `pastedContent.ts`). Widths come from
+ * `core/shared/text.ts` (terminal cell widths, not string lengths).
+ *
+ * Consumers: the composer (`chrome/composer/*`, `chrome/BottomComposer.tsx`)
+ * and `panels/TextEntryPanel.tsx`. Owns no React state; the only stateful piece is the
+ * `InputUndo` class, instantiated and held by the caller.
+ */
 import type { WrappedTextRow } from "../../core/shared/text.js";
 import {
   getTextUnits,
@@ -10,6 +24,7 @@ import { findPastedContentSpan } from "./pastedContent.js";
 
 type WrappedInputRow = WrappedTextRow;
 
+/** Result of `createInputViewport`: all wrapped rows plus the visible window. */
 interface InputViewport {
   rows: WrappedInputRow[];
   visibleRows: WrappedInputRow[];
@@ -26,8 +41,14 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
+/** SGR mouse report (`ESC [ < b ; x ; y M|m`), with or without its ESC byte. */
 const LEAKED_SGR_MOUSE_PATTERN = /(?:\x1b)?\[<\d+;\d+;\d+[Mm]/g;
 
+/**
+ * Canonicalize text entering the buffer: drop leaked mouse reports, strip
+ * terminal control sequences (`sanitizeTerminalInput`) and normalize line
+ * breaks. Applied to both the existing value and inserted text on every edit.
+ */
 export function normalizeInputText(text: string): string {
   if (!text) return "";
   // Strip out leaked SGR mouse coordinates that might have been emitted by
@@ -36,10 +57,15 @@ export function normalizeInputText(text: string): string {
   return normalizeLineBreaks(sanitizeTerminalInput(withoutMouse));
 }
 
+/** Remove leaked SGR mouse reports only, without any other sanitizing. */
 export function stripMouseEscapes(input: string): string {
   return input.replace(LEAKED_SGR_MOUSE_PATTERN, "");
 }
 
+/**
+ * Clamp `cursorOffset` into `[0, text.length]` and move it back one unit if it
+ * would split a surrogate pair.
+ */
 export function normalizeCursorOffset(text: string, cursorOffset: number): number {
   const safeCursor = Math.max(0, Math.min(cursorOffset, text.length));
 
@@ -57,6 +83,7 @@ export function normalizeCursorOffset(text: string, cursorOffset: number): numbe
 
 // ─── Cursor movement ─────────────────────────────────────────────────────────
 
+/** Move one code point left (two UTF-16 units across a surrogate pair). */
 export function moveCursorLeft(text: string, cursorOffset: number): number {
   const safeCursor = normalizeCursorOffset(text, cursorOffset);
   if (safeCursor <= 0) return 0;
@@ -73,6 +100,7 @@ export function moveCursorLeft(text: string, cursorOffset: number): number {
   return nextCursor;
 }
 
+/** Move one code point right (two UTF-16 units across a surrogate pair). */
 export function moveCursorRight(text: string, cursorOffset: number): number {
   const safeCursor = normalizeCursorOffset(text, cursorOffset);
   if (safeCursor >= text.length) return text.length;
@@ -90,6 +118,7 @@ export function moveCursorRight(text: string, cursorOffset: number): number {
 
 // ─── Text mutations ───────────────────────────────────────────────────────────
 
+/** Insert normalized `text` at the cursor; the cursor ends after the inserted text. */
 export function insertInputText(params: { value: string; cursorOffset: number; text: string }): {
   value: string;
   cursorOffset: number;
@@ -103,6 +132,7 @@ export function insertInputText(params: { value: string; cursorOffset: number; t
   };
 }
 
+/** Backspace: delete one code point before the cursor. Chip-atomic deletion is handled by callers. */
 export function deleteInputBackward(params: { value: string; cursorOffset: number }): {
   value: string;
   cursorOffset: number;
@@ -121,6 +151,7 @@ export function deleteInputBackward(params: { value: string; cursorOffset: numbe
   };
 }
 
+/** Delete key: delete one code point after the cursor; the cursor does not move. */
 export function deleteInputForward(params: { value: string; cursorOffset: number }): {
   value: string;
   cursorOffset: number;
@@ -141,10 +172,15 @@ export function deleteInputForward(params: { value: string; cursorOffset: number
 
 // ─── Viewport ────────────────────────────────────────────────────────────────
 
+/** Wrap normalized text into rows of at most `width` cells, keeping source offsets per row. */
 export function wrapInputRows(text: string, width: number): WrappedInputRow[] {
   return wrapTextRows(normalizeInputText(text), width);
 }
 
+/**
+ * Find the wrapped row and cell column for a UTF-16 cursor offset. Offsets past
+ * the end land at the end of the last row. Assumes `rows` is non-empty.
+ */
 export function locateCursor(rows: WrappedInputRow[], cursorOffset: number) {
   const safeCursor = Math.max(0, cursorOffset);
 
@@ -166,6 +202,10 @@ export function locateCursor(rows: WrappedInputRow[], cursorOffset: number) {
   };
 }
 
+/**
+ * Return the minimal scroll adjustment that keeps `cursorRow` inside a window of
+ * `visibleRowCount` rows, never scrolling past the last full window.
+ */
 export function clampScrollToCursor(
   scrollRow: number,
   cursorRow: number,
@@ -187,6 +227,11 @@ export function clampScrollToCursor(
   return Math.max(0, Math.min(nextScrollRow, maxScroll));
 }
 
+/**
+ * Wrap `text` and compute the visible slice, cursor row/column and the clamped
+ * scroll row. Callers persist `scrollRow` and pass it back on the next render so
+ * the viewport only scrolls when the cursor leaves it.
+ */
 export function createInputViewport(params: {
   text: string;
   cursorOffset: number;
@@ -221,6 +266,11 @@ export const COMPOSER_ROW_CHROME = {
   prompt: "❯ ",
 } as const;
 
+/**
+ * Split a composer row's outer width into body (inside border + padding),
+ * prompt glyph, and editable text widths. Must agree with `COMPOSER_ROW_CHROME`
+ * as rendered, or the cursor drifts from the text.
+ */
 export function getComposerRowLayout(totalWidth: number) {
   const chrome = COMPOSER_ROW_CHROME;
   const bodyWidth = Math.max(
@@ -231,7 +281,15 @@ export function getComposerRowLayout(totalWidth: number) {
   return { bodyWidth, promptWidth, editorWidth: Math.max(0, bodyWidth - promptWidth) };
 }
 
-/** Bound a wrapped row, including its highlighted character or trailing cursor. */
+/**
+ * Bound a wrapped row, including its highlighted character or trailing cursor.
+ *
+ * Returns the text before the cursor cell, the cursor cell's grapheme (`" "`
+ * when the cursor is past the end; `""` when no cursor is requested), the text
+ * after it, and the cursor's cell column within the window. When the row is
+ * wider than `width`, the window is shifted right just enough to keep the cursor
+ * cell visible.
+ */
 export function createInputRowWindow(text: string, width: number, cursorColumn?: number) {
   const safeWidth = Math.max(0, width);
   if (safeWidth === 0) return { before: "", current: "", after: "", cursorColumn: 0 };
@@ -276,10 +334,12 @@ export function createInputRowWindow(text: string, width: number, cursorColumn?:
   return { before, current, after, cursorColumn: getTextWidth(before) };
 }
 
+/** Composer value plus cursor offset, as snapshotted by `InputUndo`. */
 interface Draft {
   value: string;
   cursor: number;
 }
+/** Snap an offset that falls strictly inside a chip to the chip edge in `direction`. */
 function atomicOffset(value: string, offset: number, direction: number): number {
   const span = findPastedContentSpan(value, offset);
   return span && offset > span.start && offset < span.end
@@ -288,11 +348,17 @@ function atomicOffset(value: string, offset: number, direction: number): number 
       : span.end
     : normalizeCursorOffset(value, offset);
 }
+/** Offset of the start (`end=false`) or end (`end=true`) of the logical line at `cursor`. */
 export function lineBoundary(value: string, cursor: number, end: boolean): number {
   if (!end) return cursor === 0 ? 0 : value.lastIndexOf("\n", cursor - 1) + 1;
   const next = value.indexOf("\n", cursor);
   return next < 0 ? value.length : next;
 }
+/**
+ * Offset of the previous (`direction < 0`) or next word boundary. Words are runs
+ * of letters/digits, or of any non-whitespace when `whitespace` is true. Iterates
+ * by code point and snaps out of chips.
+ */
 export function wordBoundary(
   value: string,
   cursor: number,
@@ -315,6 +381,12 @@ export function wordBoundary(
   const offset = positions[index]!;
   return atomicOffset(value, offset, direction);
 }
+/**
+ * Move the cursor one wrapped row up (`-1`) or down (`+1`), aiming for
+ * `desiredColumn` (sticky column) or the current column. `boundary: true` means
+ * there is no row in that direction and the cursor is unchanged, which callers
+ * can use to fall through to history navigation.
+ */
 export function verticalCursor(
   value: string,
   cursor: number,
@@ -334,6 +406,14 @@ export function verticalCursor(
   }
   return { cursor: atomicOffset(value, offset, direction), column, boundary: false };
 }
+/**
+ * Bounded undo stack (100 entries) for the composer.
+ *
+ * Consecutive single-character insertions made within 600 ms of each other on
+ * an unchanged base value are coalesced into one entry, so undo removes a typed
+ * burst rather than one character. Any other edit starts a new entry. `undo()`
+ * also breaks the current coalescing run.
+ */
 export class InputUndo {
   private entries: Draft[] = [];
   private lastEdit = 0;
@@ -359,6 +439,11 @@ export class InputUndo {
     return this.entries.pop();
   }
 }
+/**
+ * Case-insensitive substring search over `history`; returns the `offset`-th
+ * match in array order (the composer's Ctrl+R search cycles `offset`), or
+ * undefined.
+ */
 export function searchHistory(
   history: readonly string[],
   query: string,

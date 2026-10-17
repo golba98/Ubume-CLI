@@ -1,3 +1,8 @@
+/**
+ * Resolves Claude Code and Antigravity (`agy`) executables with platform and override handling.
+ * Provides shared cross-platform executable-name, PATH, override, and resolution utilities.
+ */
+
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { type CommandResult, runCommand, runShellCommand } from "../process/commandRunner.js";
@@ -252,6 +257,10 @@ export async function resolveAgyExecutable(options?: {
 /** AGY resolution is context-sensitive and has no process-global executable cache. */
 export function resetAgyExecutableCacheForTests(): void {}
 
+/**
+ * Searches an explicit path or PATH for an executable; invalid syntax or inaccessible candidates
+ * return null.
+ */
 export function findExecutable(command: string, cwd: string): string | null {
   try {
     command = normalizeExecutableValue(command, {
@@ -300,6 +309,7 @@ export type DirectCommandRunner = (spec: {
   timeoutMs?: number;
 }) => { result: Promise<CommandResultSubset> };
 
+/** Returns the first nonempty output line only for a successful command result. */
 export function firstOutputLine(result: CommandResultSubset): string | null {
   if (result.status !== "completed" || result.exitCode !== 0) return null;
   return (
@@ -310,6 +320,10 @@ export function firstOutputLine(result: CommandResultSubset): string | null {
   );
 }
 
+/**
+ * Respects VIBE_EXECUTABLE, otherwise performs a bounded platform lookup. Missing lookup results
+ * return null; invalid explicit overrides throw.
+ */
 export async function resolveVibeExecutable(
   options: {
     cwd?: string;

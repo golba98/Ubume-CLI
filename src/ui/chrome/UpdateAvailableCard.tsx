@@ -1,3 +1,11 @@
+/**
+ * Bordered "Update available" card shown beside the logo in the wide/medium
+ * `TopHeader` layouts.
+ *
+ * Pure presentation (props + theme). `UPDATE_CARD_ROWS` is exported so the
+ * header's row measurement matches the rendered card; keep it in sync with the
+ * number of `<Text>` lines below.
+ */
 import { Box, Text } from "ink";
 import { clampVisualText } from "../../core/shared/text.js";
 import { formatVersionLabel, UBUME_UPDATE_COMMAND } from "../../core/version/updateCheck.js";
@@ -14,6 +22,7 @@ interface UpdateAvailableCardProps {
   width?: number;
 }
 
+/** Four content lines inside a round border; each line is clamped to the inner width when `width` is set. */
 export function UpdateAvailableCard({
   latestVersion,
   currentVersion,

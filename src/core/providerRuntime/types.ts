@@ -1,3 +1,9 @@
+/**
+ * Shared route, discovery, reasoning and runtime contracts. Availability, inventory freshness
+ * and selected-model evidence are separate facts; consumers must not infer execution support
+ * from display labels.
+ */
+
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import type { ReasoningEffortCapability } from "../models/codexModelCapabilities.js";
 import type {
@@ -93,6 +99,7 @@ export interface ProviderModel {
   raw?: unknown;
 }
 
+/** Advertised control and transport; unknown support must not be treated as a supported level. */
 export type ReasoningControl =
   | { kind: "unknown" | "unsupported" }
   | { kind: "fixed"; label: string }
@@ -111,6 +118,7 @@ export type ReasoningControl =
       canDisable: boolean;
     };
 
+/** Inventory provenance is independent from route readiness and individual request success. */
 export interface ProviderModelDiscoveryResult {
   /** Only complete live inventories establish rejection through absence. */
   complete?: boolean;
@@ -178,6 +186,7 @@ export interface ProviderRouteValidationResult {
   diagnostics?: Record<string, string | number | boolean | null>;
 }
 
+/** One execution request with restored dialogue and optional native/Local resume evidence. */
 export interface ProviderChatRequest {
   modelDescriptor?: ProviderModel;
   prompt: string;
@@ -206,6 +215,7 @@ export interface ProviderImageAttachment {
   bytes: number;
 }
 
+/** Provider-specific adapter; selection ordering, catalog freshness and UI state have other owners. */
 export interface ProviderRuntime {
   providerId: ProviderId;
   label: string;
@@ -219,7 +229,9 @@ export interface ProviderRuntime {
   validateRoute?: (
     request: ProviderRouteValidationRequest,
   ) => Promise<ProviderRouteValidationResult>;
+  /** Synchronous current/configured view; live refresh must not be hidden in a render-time lookup. */
   discoverModels: () => ProviderModelDiscoveryResult;
+  /** Live discovery; the shared catalog guards publication against stale connection generations. */
   refreshModels?: (options: {
     cwd: string;
     localConfig?: ProviderWorkspaceOverride | null;

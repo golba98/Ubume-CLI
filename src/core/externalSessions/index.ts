@@ -1,3 +1,9 @@
+/**
+ * Converts a native transcript into Ubume conversation messages for "continue in Ubume". Routes
+ * listing and transcript reads to the store for each source. Builds the `claude --resume` /
+ * `codex resume` / `agy --conversation` / `vibe --resume` launch in the session's folder.
+ */
+
 import { statSync } from "node:fs";
 import { verifyAgyExecutable } from "../executables/antigravityExecutable.js";
 import { resolveCodexExecutable } from "../executables/codexExecutable.js";
@@ -42,6 +48,10 @@ export function listExternalSessions(
   }
 }
 
+/**
+ * Dispatches transcript reads by source; returned entries are display data rather than live tool
+ * state.
+ */
 export function readExternalTranscript(
   summary: ExternalSessionSummary,
   options: ExternalSessionOptions = {},
@@ -120,6 +130,10 @@ function isDirectory(path: string): boolean {
   }
 }
 
+/**
+ * Builds a native resume launch in the recorded original directory. Missing/removed directories
+ * return a refusal; executable resolution failures reject.
+ */
 export async function buildExternalResumeLaunch(
   summary: ExternalSessionSummary,
   options: ResumeLaunchOptions,
@@ -145,6 +159,10 @@ export async function buildExternalResumeLaunch(
 /** Imported history is replayed to the provider on every turn, so keep it bounded. */
 const DEFAULT_MAX_CHARS = 200_000;
 
+/**
+ * Maps a native transcript source, including the historical Antigravity alias, to Ubume's
+ * provider identity.
+ */
 export function externalProviderId(source: ExternalSessionSource): ProviderId {
   switch (source) {
     case "claude":

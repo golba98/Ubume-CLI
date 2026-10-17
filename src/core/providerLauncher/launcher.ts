@@ -1,3 +1,8 @@
+/**
+ * Builds and launches external provider CLI commands (and arbitrary resume commands via
+ * `launchCliCommand`) in the inherited terminal with safe hand-off and restoration.
+ */
+
 import { type ChildProcess, spawn } from "child_process";
 import { accessSync, constants, existsSync } from "fs";
 import { delimiter, join } from "path";
@@ -33,6 +38,7 @@ export interface LaunchProviderCliOptions {
   commandExists?: (executable: string) => Promise<boolean> | boolean;
 }
 
+/** Builds a validated launch specification; platform-specific wrapping happens at spawn time. */
 export function buildProviderLaunchSpec(
   provider: ProviderConfig,
   cwd: string,
@@ -107,6 +113,7 @@ function getPathExecutableCandidates(executable: string): string[] {
   return [executable, ...pathExt.map((ext) => `${executable}${ext.toLowerCase()}`)];
 }
 
+/** Checks executable availability without launching a provider prompt. */
 export async function commandExistsOnPath(executable: string): Promise<boolean> {
   let candidate: string;
   try {
@@ -159,6 +166,10 @@ function formatSpawnError(
   };
 }
 
+/**
+ * Builds a provider launch and hands the inherited terminal to it; returns setup/launch failures
+ * as structured results.
+ */
 export async function launchProviderCli(
   provider: ProviderConfig,
   options: LaunchProviderCliOptions,

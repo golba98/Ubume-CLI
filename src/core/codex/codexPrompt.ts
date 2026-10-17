@@ -1,3 +1,9 @@
+/**
+ * Pure prompt assembly and response heuristics for Codex planning/execution. Write intent and
+ * cleanup/hollow-response detection guide orchestration; they do not execute tools or prove
+ * that requested filesystem work happened.
+ */
+
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import type { AvailableMode } from "../../config/settings.js";
 import type { RunToolActivity } from "../../session/types.js";
@@ -60,6 +66,10 @@ const TERMINAL_RESPONSE_INSTRUCTIONS = [
   "- Answer simple questions simply and do not over-explain.",
 ];
 
+/**
+ * Applies the existing multi-pattern write-intent heuristic; this is prompt guidance, not
+ * authorization to mutate files.
+ */
 export function promptHasWriteIntent(prompt: string): boolean {
   const normalized = prompt.trim();
   if (!normalized) return false;
@@ -72,6 +82,10 @@ export function promptHasWriteIntent(prompt: string): boolean {
   return hits >= 2;
 }
 
+/**
+ * Recognizes narrow generated-artifact cleanup requests while rejecting broad/destructive
+ * wording.
+ */
 export function isClearlySafeGeneratedCleanupRequest(prompt: string): boolean {
   const normalized = prompt.trim();
   if (!normalized) return false;
@@ -86,6 +100,10 @@ export function isClearlySafeGeneratedCleanupRequest(prompt: string): boolean {
   );
 }
 
+/**
+ * Upgrades suggest mode to auto-edit for detected write intent; all other requested modes remain
+ * unchanged.
+ */
 export function resolveExecutionMode(
   requestedMode: AvailableMode,
   prompt: string,
@@ -152,6 +170,10 @@ function enrichFileCreationPrompt(prompt: string): string {
   ].join("\n");
 }
 
+/**
+ * Builds a plan-only prompt from task, current draft and explicit revision/constraint feedback;
+ * performs no filesystem work.
+ */
 export function buildPlanningPrompt({
   task,
   constraints = [],
@@ -193,6 +215,10 @@ export function buildPlanningPrompt({
   return sections.join("\n");
 }
 
+/**
+ * Builds execution instructions from an already approved plan without changing runtime
+ * permissions.
+ */
 export function buildPlanExecutionPrompt({
   task,
   approvedPlan,
@@ -256,6 +282,10 @@ const ACTION_CONFIRMATION_PATTERNS = [
   /\[QUESTION\]:/,
 ];
 
+/**
+ * Classifies empty/greeting/filler responses only for detected write-intent prompts; it does not
+ * verify filesystem changes.
+ */
 export function detectHollowResponse(prompt: string, response: string): HollowResponseResult {
   const trimmed = response.trim();
   const hasWriteIntent = promptHasWriteIntent(prompt);
@@ -339,6 +369,10 @@ function formatProjectInstructionsSection(
   return ["Project instructions:", `Loaded from: ${sourcePath}`, content, ""];
 }
 
+/**
+ * Builds wrapped prompt guidance from runtime permissions and loaded project instructions. Raw
+ * prompt policy bypasses this builder at the provider boundary.
+ */
 export function buildCodexPrompt(
   prompt: string,
   modeOrRuntime: AvailableMode | Pick<ResolvedRuntimeConfig, "mode" | "policy" | "planMode">,
@@ -461,6 +495,10 @@ const MESSAGES: Record<string, [string, string]> = {
   ],
 };
 
+/**
+ * Formats recovery guidance for a classified hollow response; raw backend text is included only
+ * in verbose output.
+ */
 export function formatHollowResponse(
   result: HollowResponseResult,
   rawResponse?: string,
@@ -534,6 +572,10 @@ function findBlockedPath(text: string): string | null {
   return null;
 }
 
+/**
+ * Recognizes failed delete-tool activity with explicit lock/permission evidence and returns stop
+ * guidance, otherwise null.
+ */
 export function getBlockedCleanupFailure(activity: RunToolActivity): string | null {
   if (activity.status !== "failed") return null;
 

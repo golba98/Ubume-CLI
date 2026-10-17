@@ -1,3 +1,8 @@
+/**
+ * Claude Code adapter: `claude auth status` plus the experimental `get_usage` SDK control
+ * request on a hook-free, tool-free, non-persisted stream-json host.
+ */
+
 import {
   buildClaudeSpawnSpec,
   resolveClaudeExecutable,
@@ -60,6 +65,7 @@ export interface ClaudeAuthIdentity {
   subscriptionType?: string;
 }
 
+/** Reads structured Claude identity without returning raw credentials. */
 export function parseClaudeAuthIdentity(stdout: string): ClaudeAuthIdentity | null {
   try {
     const parsed = JSON.parse(stdout.trim()) as unknown;
@@ -166,6 +172,10 @@ export function parseClaudeGetUsage(response: unknown, now: number): ParsedClaud
   return parsed;
 }
 
+/**
+ * Combines Claude authentication and usage outcomes while preserving unsupported and temporarily
+ * unavailable states.
+ */
 export function buildClaudeUsageSnapshot(
   context: UsageRequestContext,
   identity: ClaudeAuthIdentity | null,

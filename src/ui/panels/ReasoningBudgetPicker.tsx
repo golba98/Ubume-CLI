@@ -1,3 +1,19 @@
+/**
+ * Token-budget editor for providers whose reasoning control is a numeric
+ * thinking budget (`ReasoningControl` with `kind: "budget"`), rendered by
+ * `SimplePickers.ReasoningPicker` in place of the level list.
+ *
+ * Owns local state only: `draft` (the stepped/selected value, e.g.
+ * `budget:8000` or `auto`) and `entry` (digits typed directly). Values are
+ * validated with `core/models/reasoningControl.ts`; the result is reported via
+ * `onSelect` and persisted by the caller. Registers the `reasoningPicker` focus
+ * id with `autoFocus`; input is only handled while focused.
+ *
+ * Keys: digits type a budget (max 8 digits), Backspace/Delete erase, Left/Down
+ * and Right/Up step the draft (clearing typed digits), `A` sets auto (when the
+ * control supports it), `D` sets `budget:0` (when it can be disabled), Enter
+ * saves (silently ignored when the value is unsupported), Esc cancels.
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useState } from "react";
 import {
@@ -8,6 +24,7 @@ import {
 import type { ReasoningControl } from "../../core/providerRuntime/types.js";
 import { FOCUS_IDS } from "../input/focus.js";
 
+/** Budget editor; `value` is the current reasoning string, reconciled to the control on mount. */
 export function ReasoningBudgetPicker({
   control,
   value,

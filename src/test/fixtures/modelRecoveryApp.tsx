@@ -1,7 +1,9 @@
+/**
+ * Child-process App recovery scenarios. The parent supplies isolated homes/data and fake CLI
+ * paths; runtime registry replacements live only for this process. Network calls fail closed.
+ */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { PassThrough } from "node:stream";
-import { render } from "ink";
 import { App } from "../../app/App.js";
 import { parseLaunchArgs } from "../../config/launchArgs.js";
 import { loadSettings, saveSettings } from "../../config/persistence.js";
@@ -11,16 +13,36 @@ import {
 } from "../../core/providerLauncher/workspaceConfig.js";
 import { getProviderRuntime } from "../../core/providerRuntime/registry.js";
 import type { ProviderModelDiscoveryResult } from "../../core/providerRuntime/types.js";
+import { waitFor } from "../async.js";
+import { createTestTerminal } from "../terminal.js";
 
 // Exercise the real App and routing boundary. Every provider operation is local and mocked.
 globalThis.fetch = () => {
   throw new Error("Network access is forbidden in model recovery tests");
 };
-saveSettings({
-  ...loadSettings(),
-  updateCheck: { ...loadSettings().updateCheck!, enabled: false },
-});
 const scenario = process.argv[2];
+const scenarios = [
+  "recover",
+  "switch-provider",
+  "fail-only",
+  "restart-recover",
+  "cli-override",
+  "authentication",
+  "rate",
+  "retry-delay",
+  "quota",
+  "network",
+  "temporary",
+  "all-unavailable",
+  "catalog-failure",
+  "error-while-picker",
+];
+assert(scenario && scenarios.includes(scenario), `Unknown model recovery scenario: ${scenario}`);
+const settings = loadSettings();
+saveSettings({
+  ...settings,
+  updateCheck: { ...settings.updateCheck!, enabled: false },
+});
 const transientFailure: string | undefined = (
   {
     authentication: "Authentication expired; sign in",
@@ -30,7 +52,7 @@ const transientFailure: string | undefined = (
     network: "Network error ECONNRESET",
     temporary: "Temporary service outage (HTTP 503)",
   } as Record<string, string>
-)[scenario!];
+)[scenario];
 const emptyCatalog = scenario === "all-unavailable" || scenario === "catalog-failure";
 const calls: string[] = [];
 for (const providerId of ["google", "anthropic", "openai", "mistral", "local"] as const) {
@@ -112,48 +134,17 @@ if (!configured.activeRoute)
   });
 const parsed = parseLaunchArgs(scenario === "cli-override" ? ["--model", "gemini-withdrawn"] : []);
 assert(parsed.ok);
-class Input extends PassThrough {
-  isTTY = true;
-  setRawMode() {
-    return this;
-  }
-  ref() {
-    return this;
-  }
-  unref() {
-    return this;
-  }
-}
-class Output extends PassThrough {
-  isTTY = true;
-  columns = 120;
-  rows = 35;
-}
-const stdin = new Input();
-const stdout = new Output();
-let frame = "";
-let output = "";
+const terminal = createTestTerminal(<App launchArgs={parsed.value} />, { columns: 120, rows: 35 });
+const { stdin, stdout } = terminal;
 const recording: string[] = [];
-stdout.on("data", (chunk) => {
-  frame = chunk.toString();
-  output += frame;
-});
-const terminal = render(<App launchArgs={parsed.value} />, {
-  stdin: stdin as never,
-  stdout: stdout as never,
-  stderr: stdout as never,
-  debug: true,
-  patchConsole: false,
-  exitOnCtrlC: false,
-});
+// Input pacing preserves Ink's key parsing; readiness is checked separately through frames.
 const pause = (ms = 70) => new Promise((resolve) => setTimeout(resolve, ms));
-async function until(check: () => boolean, label: string) {
-  const deadline = Date.now() + 8000;
-  while (!check()) {
-    if (Date.now() > deadline)
-      throw new Error(`Timed out: ${label}\n${frame}\nCalls: ${JSON.stringify(calls)}`);
-    await pause(25);
-  }
+function until(check: () => boolean, label: string) {
+  return waitFor(check, {
+    label,
+    timeoutMs: 8000,
+    diagnostics: () => `${terminal.lastFrame()}\nCalls: ${JSON.stringify(calls)}`,
+  });
 }
 async function command(text: string) {
   stdin.write("\x15");
@@ -165,35 +156,39 @@ async function command(text: string) {
 }
 async function chooseWorkingModel() {
   await until(
-    () => frame.includes("Select model") && frame.includes("gemini-working"),
+    () =>
+      terminal.lastFrame().includes("Select model") &&
+      terminal.lastFrame().includes("gemini-working"),
     "Google recovery picker",
   );
-  recording.push(frame);
+  recording.push(terminal.lastFrame());
   stdin.write("\x1b[F");
   await pause();
   stdin.write("\r");
   await pause();
   await until(
     () =>
-      !(frame.includes("Select model") && frame.includes("gemini-working")) &&
-      frame.includes("gemini-working"),
+      !(
+        terminal.lastFrame().includes("Select model") &&
+        terminal.lastFrame().includes("gemini-working")
+      ) && terminal.lastFrame().includes("gemini-working"),
     "working model activated",
   );
   await command("say hello");
   await until(
-    () => output.includes("MOCK_SUCCESS:google:gemini-working"),
+    () => terminal.output().includes("MOCK_SUCCESS:google:gemini-working"),
     "working Google request",
   );
-  recording.push(frame);
+  recording.push(terminal.lastFrame());
 }
-try {
-  await pause(350);
+async function runRecoveryScenario(): Promise<void> {
+  await until(() => terminal.lastFrame().includes("gemini-withdrawn"), "initial App frame");
   if (emptyCatalog) {
     await command("/model");
     await until(
       () =>
-        frame.includes("Select model") &&
-        /No models|No Google models|catalog service failed|Unavailable/.test(frame),
+        terminal.lastFrame().includes("Select model") &&
+        /No models|No Google models|catalog service failed|Unavailable/.test(terminal.lastFrame()),
       "empty or failed catalog stays usable",
     );
     stdin.write("\x1b");
@@ -207,7 +202,7 @@ try {
     await pause();
     await command("say hello");
     await until(
-      () => output.includes("MOCK_SUCCESS:anthropic:anthropic-working"),
+      () => terminal.output().includes("MOCK_SUCCESS:anthropic:anthropic-working"),
       "provider navigation after catalog failure",
     );
   } else {
@@ -215,10 +210,13 @@ try {
       await command("say hello");
       if (scenario === "error-while-picker") await command("/model");
       await until(
-        () => output.includes(transientFailure ?? "unavailable or unsupported for this account"),
+        () =>
+          terminal
+            .output()
+            .includes(transientFailure ?? "unavailable or unsupported for this account"),
         "recoverable API error",
       );
-      recording.push(frame);
+      recording.push(terminal.lastFrame());
       assert.deepEqual(calls, ["google:gemini-withdrawn"]);
       assert.equal(
         loadProviderWorkspaceConfig(process.cwd()).providers?.google?.currentModel,
@@ -228,7 +226,7 @@ try {
     if (transientFailure) {
       await command("say hello again");
       if (scenario === "retry-delay") {
-        await until(() => output.includes("Retry later"), "retry delay respected");
+        await until(() => terminal.output().includes("Retry later"), "retry delay respected");
         assert.equal(calls.length, 1);
       } else await until(() => calls.length === 2, "transient failure permits manual retry");
       await pause();
@@ -244,7 +242,7 @@ try {
         await pause();
         await command("say hello");
         await until(
-          () => output.includes("MOCK_SUCCESS:anthropic:anthropic-working"),
+          () => terminal.output().includes("MOCK_SUCCESS:anthropic:anthropic-working"),
           "other provider works",
         );
         await command("/providers");
@@ -270,6 +268,9 @@ try {
       );
     }
   }
+}
+
+function saveRecording(): void {
   if (process.env.UBUME_TEST_CAPTURE)
     writeFileSync(
       process.env.UBUME_TEST_CAPTURE,
@@ -284,10 +285,12 @@ try {
         ...recording.map((text, index) => JSON.stringify([index * 2, "o", `\x1b[2J\x1b[H${text}`])),
       ].join("\n") + "\n",
     );
-  terminal.cleanup();
-} catch (error) {
-  terminal.cleanup();
-  throw error;
+}
+try {
+  await runRecoveryScenario();
+  saveRecording();
+} finally {
+  await terminal.dispose();
 }
 console.log(JSON.stringify({ scenario, calls }));
 process.exit(0);

@@ -1,3 +1,19 @@
+/**
+ * Run-event lifecycle: how a streaming run is represented in the timeline.
+ *
+ * A run's raw stream (assistant text, plan text, tool activity, file activity,
+ * thinking/progress text) arrives interleaved and out of display order. This
+ * module owns the pure `RunEvent` transformations the session reducer
+ * composes: appending each kind of stream content, assigning the
+ * turn-global `streamSeq` that orders thinking vs actions vs response
+ * segments, and finalizing the event when the run ends. It also owns the
+ * `UIState` state machine that drives all visual busy/idle/questioning
+ * decisions, and the question/action-required detection run on final text.
+ *
+ * Everything here is pure: no React, no I/O, no global state except the perf
+ * trace calls, so reducers can apply these transformations deterministically.
+ */
+
 import type { ResolvedRuntimeConfig } from "../config/runtimeConfig.js";
 import type { AvailableBackend } from "../config/settings.js";
 import { MAX_CHAT_LINES } from "../config/settings.js";
@@ -366,37 +382,46 @@ function demoteActivePlanToResponseSegment(event: RunEvent): RunEvent {
 
 // ─── Tool activities ─────────────────────────────────────────────────────────
 
-export function upsertRunToolActivity(inputEvent: RunEvent, activity: RunToolActivity): RunEvent {
-  const existingIndex = inputEvent.toolActivities.findIndex((item) => item.id === activity.id);
-  if (existingIndex < 0) {
-    const event = demoteActivePlanToResponseSegment(inputEvent);
-    const streamSeq = (event.lastStreamSeq ?? 0) + 1;
-    const enriched: RunToolActivity = { ...activity, streamSeq };
-    renderDebug.traceEvent("action", "normalized", {
-      runId: event.id,
-      turnId: event.turnId,
-      actionId: enriched.id,
-      status: enriched.status,
+/**
+ * Inserts the first sighting of a tool activity.
+ *
+ * A new tool demotes any active plan block to an ordinary response segment
+ * (see `demoteActivePlanToResponseSegment`), takes the next stream position,
+ * and clears the active response segment so the next assistant delta opens a
+ * fresh one after the tool.
+ */
+function insertRunToolActivity(event: RunEvent, activity: RunToolActivity): RunEvent {
+  const demotedEvent = demoteActivePlanToResponseSegment(event);
+  const streamSeq = (demotedEvent.lastStreamSeq ?? 0) + 1;
+  const enriched: RunToolActivity = { ...activity, streamSeq };
+  renderDebug.traceEvent("action", "normalized", {
+    runId: demotedEvent.id,
+    turnId: demotedEvent.turnId,
+    actionId: enriched.id,
+    status: enriched.status,
+    streamSeq,
+    operation: "insert",
+    stableKeyPreserved: true,
+  });
+  return {
+    ...demotedEvent,
+    toolActivities: [...demotedEvent.toolActivities, enriched],
+    streamItems: appendStreamItem(demotedEvent.streamItems ?? [], {
       streamSeq,
-      operation: "insert",
-      stableKeyPreserved: true,
-    });
-    return {
-      ...event,
-      toolActivities: [...event.toolActivities, enriched],
-      streamItems: appendStreamItem(event.streamItems ?? [], {
-        streamSeq,
-        kind: "action",
-        refId: enriched.id,
-      }),
-      lastStreamSeq: streamSeq,
-      // A new tool interrupts the current response segment; the next assistant
-      // delta will start a fresh segment with a larger streamSeq.
-      activeResponseSegmentId: null,
-    };
-  }
+      kind: "action",
+      refId: enriched.id,
+    }),
+    lastStreamSeq: streamSeq,
+    activeResponseSegmentId: null,
+  };
+}
 
-  const event = inputEvent;
+/** Merges a status update for an already-seen tool, keeping its original position. */
+function mergeRunToolActivity(
+  event: RunEvent,
+  existingIndex: number,
+  activity: RunToolActivity,
+): RunEvent {
   const existing = event.toolActivities[existingIndex]!;
   const merged: RunToolActivity = {
     ...existing,
@@ -419,6 +444,14 @@ export function upsertRunToolActivity(inputEvent: RunEvent, activity: RunToolAct
     ...event,
     toolActivities: nextToolActivities,
   };
+}
+
+export function upsertRunToolActivity(event: RunEvent, activity: RunToolActivity): RunEvent {
+  const existingIndex = event.toolActivities.findIndex((item) => item.id === activity.id);
+  if (existingIndex < 0) {
+    return insertRunToolActivity(event, activity);
+  }
+  return mergeRunToolActivity(event, existingIndex, activity);
 }
 
 function finalizePendingToolActivities(
@@ -688,6 +721,10 @@ function materializeProgressEntry(
     };
   }
 
+  // The upstream text was rewritten rather than appended (e.g. a provider
+  // resending normalized text). Rebuild the blocks from the new text, but
+  // reuse the original block objects wherever they still match, so visible
+  // blocks keep their identity instead of flickering.
   const rebuiltSeed: RunProgressEntry = {
     ...entry,
     source,
@@ -919,10 +956,6 @@ export function finalizeResponseSegments(event: RunEvent, finalResponse?: string
     return segment.status === "active" ? { ...segment, status: "completed" as const } : segment;
   });
   return { ...event, responseSegments: nextSegments, activeResponseSegmentId: null };
-}
-
-export function markResponseSegmentsCompleted(event: RunEvent, finalResponse?: string): RunEvent {
-  return finalizeResponseSegments(event, finalResponse);
 }
 
 // ─── Run lifecycle ────────────────────────────────────────────────────────────

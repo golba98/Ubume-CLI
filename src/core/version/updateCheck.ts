@@ -1,3 +1,8 @@
+/**
+ * Caches update-check results in app data with expiry and corruption-tolerant reads. Checks npm
+ * `dist-tags` for newer versions with an abortable timeout and SemVer-precedence comparison.
+ */
+
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { APP_VERSION, getHomeDir } from "../../config/settings.js";
@@ -32,6 +37,7 @@ export function normalizeVersion(v: string): string {
   return v.startsWith("v") ? v.slice(1) : v;
 }
 
+/** Normalizes and prefixes a nonblank version for display. */
 export function formatVersionLabel(version: string): string {
   const normalized = normalizeVersion(version.trim());
   return normalized ? `v${normalized}` : version;
@@ -44,6 +50,7 @@ export function isValidSemver(v: string): boolean {
   return SEMVER_RE.test(normalizeVersion(v));
 }
 
+/** Allows automatic checking only when enabled outside the local development channel. */
 export function shouldRunStartupUpdateCheck(
   env: NodeJS.ProcessEnv = process.env,
   enabled = true,
@@ -66,6 +73,10 @@ function comparePrereleaseIdentifier(a: string, b: string): number {
 // Pre-release versions (e.g. 1.0.2-beta.1) sort below their release counterpart (1.0.2 > 1.0.2-beta.1),
 // and prerelease identifiers follow SemVer precedence (rc.9 < rc.10, alpha < alpha.1 < beta).
 // Leading "v" is stripped before comparison.
+/**
+ * Compares normalized numeric versions and prerelease identifiers; release versions sort above
+ * prereleases.
+ */
 export function compareSemver(a: string, b: string): number {
   const parseParts = (v: string): { numeric: number[]; prerelease: string[] | null } => {
     const norm = normalizeVersion(v);
@@ -103,6 +114,7 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+/** Checks SemVer precedence rather than lexicographic ordering. */
 export function isNewerVersion(candidate: string, current: string): boolean {
   return compareSemver(candidate, current) > 0;
 }
@@ -149,6 +161,10 @@ export async function fetchNpmDistTags(
   }
 }
 
+/**
+ * Compares installed version with npm dist-tags; disabled checks return unknown and
+ * transport/abort failures become error results.
+ */
 export async function checkForUpdates(
   opts?: { enabled?: boolean },
   overrides?: UpdateCheckOverrides,
@@ -215,6 +231,7 @@ export async function checkForUpdates(
   }
 }
 
+/** Formats check outcomes and a manual update command without installing anything. */
 export function formatUpdateInstructions(
   result: UpdateCheckResult | null,
   updateCommand: string = UBUME_UPDATE_COMMAND,
@@ -252,6 +269,7 @@ export function formatUpdateInstructions(
   ].join("\n");
 }
 
+/** Explains the development-channel policy while retaining manual published-version checks. */
 export function formatLocalDevUpdateStatus(): string {
   return [
     "Running local-dev Ubume.",
@@ -269,6 +287,10 @@ export interface UpdateCheckCache {
 
 // Resolved per call (not at module load) so HOME changes — e.g. test isolation —
 // are honored. See the same pattern in src/core/models/modelCache.ts.
+/**
+ * Names the update cache using the live home environment so test and launch overrides are
+ * honored.
+ */
 export function getUpdateCheckCacheFilePath(): string {
   const home = getHomeDir();
   return join(home, ".ubume-update-check.json");
@@ -280,6 +302,9 @@ function getLegacyUpdateCheckCacheFilePath(): string {
   return join(home, ".codexa-update-check.json");
 }
 
+/**
+ * Reads validated current/legacy cache data or null for missing, unreadable or malformed files.
+ */
 export function loadUpdateCheckCache(
   filePath = getUpdateCheckCacheFilePath(),
 ): UpdateCheckCache | null {
@@ -306,6 +331,10 @@ export function loadUpdateCheckCache(
   }
 }
 
+/**
+ * Best-effort cache write via temporary-file rename; persistence failure never fails an update
+ * check.
+ */
 export function saveUpdateCheckCache(
   cache: UpdateCheckCache,
   filePath = getUpdateCheckCacheFilePath(),

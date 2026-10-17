@@ -24,13 +24,18 @@ import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 import type { BackendProvider } from "../../core/providers/types.js";
 
 interface UseOpenAiModelReconcileContext {
+  // Route and selection guards
   providerOverride: BackendProvider | undefined;
   preserveSavedRouteRef: React.RefObject<boolean>;
   routeChoiceRequiredRef: React.RefObject<string | null>;
   activeProviderRoute: ProviderRoute;
+
+  // Model and capabilities
   modelCapabilities: CodexModelCapabilities | null;
   model: string;
   reasoningLevel: string;
+
+  // Session and config
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
   updateRuntimeConfig: (updater: (current: RuntimeConfig) => RuntimeConfig) => void;
 }

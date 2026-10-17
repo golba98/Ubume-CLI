@@ -1,3 +1,22 @@
+/**
+ * Row builders for a turn's unified stream (reasoning, actions, response
+ * segments, plans), turn assembly (`buildTurnRows`), and the stream-shaping
+ * transforms that keep live turns stable.
+ *
+ * Live-turn invariants (pinned by `streamingHeightStability.test.ts` and
+ * `liveTurnOrderStability.test.ts`): while a run is `running`, its measured
+ * height may only grow and its block order must be append-only. A shrink or an
+ * insert-above lets the bottom-anchored viewport / live window re-reveal
+ * content the user already scrolled past. Hence:
+ * - `collectStreamEvents` hides reasoning blocks until the run finishes;
+ * - `compactActionBursts` (height-reducing) only runs for finished runs;
+ * - row keys derive from `streamSeq`, never array position.
+ *
+ * Caching: block rows go through `_streamingBlockRowCache` (LRU, content-token
+ * keys), finished action rows through `_completedActionRowCache`, summary
+ * cards through the frozen row-group cache, and action descriptors through
+ * `_actionDisplayCache` — all from `caches.ts`.
+ */
 import * as renderDebug from "../../../core/perf/renderDebug.js";
 import {
   clampVisualText,
@@ -54,6 +73,12 @@ const COMPACT_PROCESSING_BODY_LINE_CAP = 4;
 
 const VISIBLE_THINKING_SOURCES = new Set(["reasoning", "todo"]);
 
+/**
+ * Re-tone rows for a turn's opacity. "active" returns `rows` unchanged;
+ * "recent" downgrades active borders; "dim" also mutes text/accent tones.
+ * Action rows (key contains `-action-`) are left as-is. Non-active opacities
+ * return new row objects; only tones change, never the row count.
+ */
 export function applyTurnOpacity(
   rows: TimelineRow[],
   opacity: "active" | "recent" | "dim",
@@ -174,6 +199,8 @@ export function compactActionBursts(
 
 // ─── Codex stream block builders ─────────────────────────────────────────────
 
+// Borderless block: a bold label row ("Ubume", "Reasoning", …) then content
+// rows, all indented by transcriptContentIndent.
 function buildCodexPlainRows(
   keyPrefix: string,
   width: number,
@@ -202,6 +229,10 @@ function buildCodexPlainRows(
   return rows;
 }
 
+/**
+ * "Reasoning" block rows. Compact mode shows at most 4 body lines plus a
+ * "… (N more lines)" row; verbose shows everything.
+ */
 export function buildCodexThinkingRows(params: {
   keyPrefix: string;
   width: number;
@@ -248,6 +279,7 @@ export function buildCodexThinkingRows(params: {
   });
 }
 
+// Serialized descriptor: the action-row cache key and descriptor-equality check.
 function actionDisplayToken(descriptor: ActionDisplayDescriptor): string {
   return rowCacheKey([
     descriptor.id,
@@ -314,6 +346,7 @@ function getActionDisplayDescriptor(params: {
   return descriptor;
 }
 
+// Single uncached row used when the plain-actions render debug flag is on.
 function buildPlainActionDebugRows(params: {
   keyPrefix: string;
   width: number;
@@ -349,6 +382,8 @@ function compactActionText(descriptor: ActionDisplayDescriptor): string {
     : command;
 }
 
+// One `icon label command  duration  ▌` row (command clamped so the row never
+// wraps), plus a detail row in verbose mode.
 function buildCompactActionRows(params: {
   keyPrefix: string;
   width: number;
@@ -397,6 +432,13 @@ function buildCompactActionRows(params: {
   return rows;
 }
 
+/**
+ * Rows for one tool call: a compact single line (plus a detail line in verbose
+ * mode). Running actions are cached in the LRU streaming cache; finished ones
+ * in the completed-action cache, both keyed by the descriptor token so any
+ * visible change produces new rows. `borderTone` only feeds the cache token;
+ * the compact row has no border.
+ */
 export function buildActionEventRows(params: {
   keyPrefix: string;
   width: number;
@@ -482,6 +524,7 @@ export function buildActionEventRows(params: {
   return getCachedStreamingBlockRows(cacheKey, buildActionRows);
 }
 
+/** "action" card standing in for a compacted burst ("N repeated read activity summarized"). */
 export function buildActionSummaryRows(params: {
   keyPrefix: string;
   width: number;
@@ -516,6 +559,14 @@ export function buildActionSummaryRows(params: {
   );
 }
 
+/**
+ * "Ubume" response block: the segment parsed as markdown and laid out by
+ * `buildMarkdownRows`, preceded by the run's failure message when the run
+ * failed and this is the last event. Settled segments are cached by content
+ * token; an active segment is rebuilt every call (the markdown parser and row
+ * caches still reuse its unchanged prefix). Row keys contain
+ * `-codex-response-`, which the viewport's finalize anchoring searches for.
+ */
 export function buildCodexResponseRows(params: {
   keyPrefix: string;
   width: number;
@@ -589,6 +640,7 @@ export function buildCodexResponseRows(params: {
 
 // ─── Plan & unified stream rendering ─────────────────────────────────────────
 
+/** "Plan" dash card with the plan rendered as markdown; badge "approved" once approved. Not cached here. */
 export function buildApprovedPlanRows(params: {
   keyPrefix: string;
   width: number;
@@ -613,6 +665,9 @@ export function buildApprovedPlanRows(params: {
   });
 }
 
+// All stream events of a turn separated by gap rows, plus — once the run has
+// finished — the cancel notice, truncation notice and impact summary (or the
+// file-scan card in verbose mode).
 function buildUnifiedStreamRows(
   item: TurnRenderItem,
   width: number,
@@ -741,6 +796,12 @@ function buildUnifiedStreamRows(
   return rows;
 }
 
+/**
+ * Resolve a run's `streamItems` into ordered `StreamEvent`s (by `streamSeq`),
+ * with fallbacks for legacy sessions without stream items and for a first
+ * render that only has assistant text. Reasoning is withheld while the run is
+ * live (see the comment below); consecutive reasoning blocks are coalesced.
+ */
 export function collectStreamEvents(item: TurnRenderItem): StreamEvent[] {
   const run = item.item.run!;
   const assistant = item.item.assistant;
@@ -844,6 +905,12 @@ export function collectStreamEvents(item: TurnRenderItem): StreamEvent[] {
 
 // ─── Turn assembly & static caching ──────────────────────────────────────────
 
+/**
+ * Complete rows for one turn at `width`: prompt card, gap, unified stream
+ * (when there is a run), question card, end gap — re-toned for the turn's
+ * opacity. Used by the `Timeline` snapshot builders; `TranscriptShell` instead
+ * assembles turns per event in `nativeTranscript.ts`.
+ */
 export function buildTurnRows(
   item: TurnRenderItem,
   width: number,
@@ -863,6 +930,11 @@ export function buildTurnRows(
   return applyTurnOpacity(rows, item.renderState.opacity);
 }
 
+/**
+ * Rows for a single stream event (no gap rows). `forceStable` renders a
+ * response segment as if completed, so a block that is not the live one never
+ * shows streaming-only state and hits the settled-response cache.
+ */
 export function buildStreamEventRows(params: {
   item: TurnRenderItem;
   event: StreamEvent;

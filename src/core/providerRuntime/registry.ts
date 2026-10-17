@@ -1,3 +1,8 @@
+/**
+ * Registers provider runtimes and resolves discovery, activation validation, migrations,
+ * defaults, and active routes. Formats provider labels and chooses provider setup commands.
+ */
+
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import {
   getCodexModelCapabilities,
@@ -116,10 +121,15 @@ const PROVIDER_RUNTIMES: Record<ProviderId, ProviderRuntime> = {
   "codexa-cupy": codexaCupyRuntime,
 };
 
+/** Returns the registered provider implementation without probing or launching it. */
 export function getProviderRuntime(providerId: ProviderId): ProviderRuntime {
   return PROVIDER_RUNTIMES[providerId];
 }
 
+/**
+ * Checks route support and development-channel visibility independently from authentication or
+ * model readiness.
+ */
 export function isProviderRoutableInUbume(
   providerId: ProviderId,
   env: NodeJS.ProcessEnv = process.env,
@@ -130,6 +140,10 @@ export function isProviderRoutableInUbume(
   return getProviderRuntime(providerId).routeAvailable;
 }
 
+/**
+ * Combines routability with the provider's current setup state; does not validate a selected
+ * model.
+ */
 export function isProviderRouteConfigured(
   providerId: ProviderId,
   env: NodeJS.ProcessEnv = process.env,
@@ -138,11 +152,16 @@ export function isProviderRouteConfigured(
   return isProviderRoutableInUbume(providerId, env) && (runtime.isRouteConfigured?.() ?? true);
 }
 
+/** Returns provider-specific setup guidance without performing setup. */
 export function getProviderRouteSetupMessage(providerId: ProviderId): string {
   const runtime = getProviderRuntime(providerId);
   return runtime.routeSetupMessage ?? runtime.routeStatus;
 }
 
+/**
+ * Returns current catalog/native state with last-good disk seeds when appropriate; seed data
+ * remains unverified.
+ */
 export function discoverProviderModels(providerId: ProviderId): ProviderModelDiscoveryResult {
   if (providerId === "codexa-native") return getProviderRuntime(providerId).discoverModels();
   const snapshot = providerCatalog.get(providerId);
@@ -167,6 +186,10 @@ export function discoverProviderModels(providerId: ProviderId): ProviderModelDis
 }
 
 const persistedDiscovery = new WeakSet<ProviderModelDiscoveryResult>();
+/**
+ * Persists successful runtime inventory once per result object, excluding fallback-
+ * only/unverified failures.
+ */
 export function persistProviderDiscovery(discovery: ProviderModelDiscoveryResult): void {
   if (persistedDiscovery.has(discovery)) return;
   const runtimeModels = discovery.models.filter(
@@ -187,6 +210,10 @@ export function persistProviderDiscovery(discovery: ProviderModelDiscoveryResult
   persistedDiscovery.add(discovery);
 }
 
+/**
+ * Refreshes the shared generation-guarded catalog and persists only the still-current published
+ * result.
+ */
 export async function refreshProviderModels(
   providerId: ProviderId,
   context: CatalogContext,
@@ -196,6 +223,10 @@ export async function refreshProviderModels(
   return result;
 }
 
+/**
+ * Validates setup and selected-model evidence without executing a prompt; returns structured
+ * model/auth/setup failures.
+ */
 export async function validateProviderRouteActivation(options: {
   signal?: AbortSignal;
   providerConfig?: ProviderWorkspaceOverride;
@@ -249,6 +280,10 @@ export async function validateProviderRouteActivation(options: {
   };
 }
 
+/**
+ * Resolves a saved active route or the established OpenAI fallback, keeping legacy Google
+ * migration blocked.
+ */
 export function resolveActiveProviderRoute(options: {
   workspaceConfigActiveRoute?: ProviderActiveRoute;
   googleMigrationRequired?: boolean;
@@ -291,6 +326,10 @@ export function resolveActiveProviderRoute(options: {
   };
 }
 
+/**
+ * Returns the established provider default candidate; this is not proof that it is available for
+ * execution.
+ */
 export function getDefaultRouteModel(providerId: ProviderId, currentOpenAiModel: string): string {
   if (providerId === "anthropic") {
     const discovered = discoverProviderModels("anthropic");
@@ -351,6 +390,10 @@ function handleFailure(
   };
 }
 
+/**
+ * Adapts a route to the shared backend contract, preserving callback/error evidence and restored
+ * session metadata.
+ */
 export function createRoutedProvider(
   route: ProviderRoute,
   backend: BackendProvider,
@@ -499,6 +542,10 @@ export function createRoutedProvider(
       : undefined,
   };
 }
+/**
+ * Merges route model/reasoning and relevant executable overrides into an effective runtime
+ * value.
+ */
 export function effectiveProviderRuntime(
   runtime: ResolvedRuntimeConfig,
   config: ProviderWorkspaceConfig,
@@ -517,6 +564,7 @@ export function effectiveProviderRuntime(
   };
 }
 
+/** Formats route identity for display without changing provider selection. */
 export function formatRuntimeProviderLabel(providerId: ProviderId): string {
   if (providerId === "local") return "Local";
   if (providerId === "codexa-native" || providerId === "codexa-cupy") return "Codexa Native";
@@ -531,6 +579,10 @@ export interface ProviderSetupPlan {
   setupCommand: string;
 }
 
+/**
+ * Returns platform-specific manual setup commands; does not execute installation or
+ * authentication.
+ */
 export function getProviderSetupPlan(providerId: ProviderId, windows: boolean): ProviderSetupPlan {
   switch (providerId) {
     case "openai":

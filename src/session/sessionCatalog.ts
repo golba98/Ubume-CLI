@@ -1,3 +1,19 @@
+/**
+ * The resume catalog: every conversation Ubume can offer for /resume.
+ *
+ * Owned Ubume conversations live under the data dir, keyed by workspace (see
+ * `core/workspace/appData`), and external CLIs (Codex, Claude Code, Google,
+ * Mistral Vibe) expose their own session stores. `listSessionCatalog` merges
+ * both into one sorted list — native sessions already linked to an owned
+ * conversation are hidden — and reports per-source errors instead of hiding
+ * the chats that did load.
+ *
+ * Beyond listing, this module decides whether a saved conversation's provider
+ * route can be restored as-is (`assessSavedRoute`), imports native transcripts
+ * into the owned store (`importNativeConversation`), and builds the relaunch
+ * plan for resuming a chat in a different workspace.
+ */
+
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -146,44 +162,87 @@ function directories(root: string): string[] {
   }
 }
 
-/** Provider discovery is isolated; a broken native store never hides owned chats. */
-export async function listSessionCatalog(
+/**
+ * The workspace storage keys to scan. The active workspace is always included;
+ * an all-scope catalog adds every key found in the chat and legacy workspace
+ * directories.
+ */
+function collectWorkspaceKeys(
   workspaceRoot: string,
   scope: SessionScope,
-  options: SessionCatalogOptions = {},
-): Promise<SessionCatalogResult> {
-  const dataDir = options.dataDir ?? resolveUbumeDataDir();
-  const legacyDataDir = options.legacyDataDir ?? resolveLegacyCodexaDataDir();
-  const errors: string[] = [];
-  const owned: SessionSummary[] = [];
+  dataDir: string,
+  legacyDataDir: string,
+  errors: string[],
+): Set<string> {
   const keys = new Set<string>([workspaceStorageKey(workspaceRoot)]);
-  if (scope === "all")
-    for (const root of [
-      join(dataDir, "chats"),
-      join(dataDir, "workspaces"),
-      join(legacyDataDir, "workspaces"),
-    ]) {
-      try {
-        for (const key of directories(root)) keys.add(key);
-      } catch (error) {
-        errors.push(`Ubume: ${errorMessage(error, "Could not list chats")}`);
-      }
-    }
-  for (const key of keys) {
-    let folder: string | null = key === workspaceStorageKey(workspaceRoot) ? workspaceRoot : null;
+
+  if (scope !== "all") {
+    return keys;
+  }
+
+  for (const root of [
+    join(dataDir, "chats"),
+    join(dataDir, "workspaces"),
+    join(legacyDataDir, "workspaces"),
+  ]) {
     try {
-      const manifest = JSON.parse(
-        readFileSync(join(dataDir, "chats", key, "workspace.json"), "utf8"),
-      );
-      if (
-        manifest.version === 1 &&
-        typeof manifest.workspaceRoot === "string" &&
-        workspaceStorageKey(manifest.workspaceRoot) === key
-      )
-        folder = manifest.workspaceRoot;
-    } catch {
-      /* Legacy manifests may not exist; the current workspace is still known. */
+      for (const key of directories(root)) keys.add(key);
+    } catch (error) {
+      errors.push(`Ubume: ${errorMessage(error, "Could not list chats")}`);
     }
+  }
+
+  return keys;
+}
+
+/**
+ * Resolves which folder a storage key's workspace lives in. The active
+ * workspace is known without a manifest; older workspaces are resolved
+ * through their saved `workspace.json`.
+ */
+function resolveWorkspaceFolder(
+  dataDir: string,
+  key: string,
+  workspaceRoot: string,
+): string | null {
+  let folder: string | null = key === workspaceStorageKey(workspaceRoot) ? workspaceRoot : null;
+
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(dataDir, "chats", key, "workspace.json"), "utf8"),
+    );
+    if (
+      manifest.version === 1 &&
+      typeof manifest.workspaceRoot === "string" &&
+      workspaceStorageKey(manifest.workspaceRoot) === key
+    ) {
+      folder = manifest.workspaceRoot;
+    }
+  } catch {
+    /* Legacy manifests may not exist; the current workspace is still known. */
+  }
+
+  return folder;
+}
+
+/**
+ * Loads the Ubume-owned conversations for every workspace key.
+ *
+ * Each key's conversations live in `chats/<key>/conversations`, with the
+ * legacy workspace directories as fallbacks. Store diagnostics are collected
+ * as user-visible errors instead of failing the whole catalog.
+ */
+function listOwnedConversations(
+  keys: Iterable<string>,
+  workspaceRoot: string,
+  dataDir: string,
+  legacyDataDir: string,
+  errors: string[],
+): SessionSummary[] {
+  const owned: SessionSummary[] = [];
+
+  for (const key of keys) {
+    const folder = resolveWorkspaceFolder(dataDir, key, workspaceRoot);
     const rootDir = join(dataDir, "chats", key, "conversations");
     const legacyRootDirs = [dataDir, legacyDataDir].map((root) =>
       join(root, "workspaces", key, "conversations"),
@@ -193,6 +252,7 @@ export async function listSessionCatalog(
       legacyRootDirs,
       onDiagnostic: (message) => errors.push(`Ubume: ${message}`),
     });
+
     for (const entry of store.list()) {
       const savedFolder =
         folder ??
@@ -202,20 +262,68 @@ export async function listSessionCatalog(
       owned.push(conversationSummary(entry, savedFolder, key));
     }
   }
-  const sources = options.sources ?? EXTERNAL_SESSION_SOURCES;
+
+  return owned;
+}
+
+/**
+ * Lists native sessions from every external CLI in parallel.
+ *
+ * Provider discovery is isolated: a broken native store reports an error but
+ * never hides the owned chats.
+ */
+async function discoverNativeSessions(
+  sources: readonly ExternalSessionSource[],
+  loadExternal: typeof listExternalSessions,
+  workspaceRoot: string,
+  scope: SessionScope,
+  errors: string[],
+): Promise<ExternalSessionSummary[]> {
   const discovered = await Promise.allSettled(
     sources.map((source) =>
-      (options.loadExternal ?? listExternalSessions)(
+      loadExternal(
         source,
         scope === "workspace" ? { kind: "workspace", root: workspaceRoot } : { kind: "all" },
       ),
     ),
   );
+
   const native: ExternalSessionSummary[] = [];
   discovered.forEach((result, index) => {
     if (result.status === "fulfilled") native.push(...result.value);
     else errors.push(`${sources[index]}: ${errorMessage(result.reason)}`);
   });
+  return native;
+}
+
+/**
+ * Lists every conversation available for /resume: owned Ubume chats for the
+ * requested scope, merged with native external-CLI sessions.
+ *
+ * @returns The merged, newest-first catalog plus one deduplicated message
+ * per source that could not be read.
+ */
+export async function listSessionCatalog(
+  workspaceRoot: string,
+  scope: SessionScope,
+  options: SessionCatalogOptions = {},
+): Promise<SessionCatalogResult> {
+  const dataDir = options.dataDir ?? resolveUbumeDataDir();
+  const legacyDataDir = options.legacyDataDir ?? resolveLegacyCodexaDataDir();
+  const errors: string[] = [];
+
+  const keys = collectWorkspaceKeys(workspaceRoot, scope, dataDir, legacyDataDir, errors);
+  const owned = listOwnedConversations(keys, workspaceRoot, dataDir, legacyDataDir, errors);
+
+  const sources = options.sources ?? EXTERNAL_SESSION_SOURCES;
+  const native = await discoverNativeSessions(
+    sources,
+    options.loadExternal ?? listExternalSessions,
+    workspaceRoot,
+    scope,
+    errors,
+  );
+
   return { sessions: mergeSessionSummaries(owned, native), errors: [...new Set(errors)] };
 }
 

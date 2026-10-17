@@ -1,3 +1,16 @@
+/**
+ * Key → action mapping for the composer, plus the raw escape sequences the composer
+ * watches on stdin.
+ *
+ * `composerKeymap` is the single source of truth for composer key bindings. It is
+ * pure: Ink's `(input, key)` plus a snapshot of composer state (open search, file
+ * or command suggestions, pending Ctrl+X chord, raw-stdin signals) map to one
+ * `ComposerAction`. The order of the checks is the precedence: global shortcuts
+ * first, then modal states (history search, suggestion lists), then editing.
+ * `useComposerInput` performs the action.
+ */
+
+/** Which delete the terminal actually sent, from the raw byte (see `resolveDeleteIntentFromRawInput`). */
 export type DeleteIntent = "backspace" | "delete";
 
 export const BRACKETED_PASTE_START = /(?:\u001B)?\[200~/;

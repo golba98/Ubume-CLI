@@ -1,3 +1,15 @@
+/**
+ * The session domain model shared across the app.
+ *
+ * Timeline events (`TimelineEvent`) are the unit everything else renders and
+ * persists: user prompts, assistant replies, system/error notices, shell
+ * commands, and runs with their streamed tool activity, thinking blocks and
+ * response segments. `UIState` is the state machine driving all visual
+ * busy/idle/questioning decisions; `Screen` names every overlay the app can
+ * route to. These types are the contract between `src/session` and both the
+ * UI and the persistence layer — workbench snapshots serialize them as-is.
+ */
+
 import type { ResolvedRuntimeConfig } from "../config/runtimeConfig.js";
 import type { AvailableBackend } from "../config/settings.js";
 import type { RunActivitySummary, RunFileActivity } from "../core/workspace/workspaceActivity.js";

@@ -1,3 +1,23 @@
+/**
+ * Update overlay (`update-prompt` screen): offers "Update now" / "Later", runs
+ * the global package-manager update in-process while streaming its output, and
+ * then offers a restart or shows the failure.
+ *
+ * State machine (local): `available` -> `installing` -> `success` | `failed`.
+ * Entering `installing` starts the update command in an effect; the effect's
+ * cleanup cancels the command if it has not settled (on Esc, unmount or a state
+ * change) and ignores late results via a `disposed` flag. The package manager
+ * and version info come from `src/app`; `onSkip` / `onRestart` hand control
+ * back to it.
+ *
+ * Listeners: a raw stdin `data` listener (removed on unmount) records the last
+ * horizontal arrow seen in a raw chunk, which `useInput` uses as a fallback to
+ * `key.leftArrow` / `key.rightArrow` (see `input/rawArrowKeys.ts`).
+ *
+ * Keys: available — Left/h, Right/l choose, Enter confirms, Esc skips;
+ * installing — Esc cancels back to `available`; success — Enter restarts, Esc
+ * skips; failed — Enter or Esc closes.
+ */
 import { Box, Text, useFocus, useInput, useStdin } from "ink";
 import { useEffect, useRef, useState } from "react";
 import type { CommandResult, CommandStreamHandlers } from "../../core/process/commandRunner.js";
@@ -17,6 +37,7 @@ import { useTheme } from "../theme.js";
 
 type UpdateUIState = "available" | "installing" | "success" | "failed";
 
+/** Starts the update command; returns its result promise and a cancel function. */
 export type RunUpdateFn = (
   pm: GlobalPackageManager,
   handlers?: CommandStreamHandlers,
@@ -26,6 +47,7 @@ const MENU_ITEMS = [{ label: "Update now" }, { label: "Later" }] as const;
 
 type HorizontalDirection = HorizontalArrowDirection;
 
+// Re-exported so existing imports from this module (e.g. tests) keep working.
 export { getHorizontalArrowDirection };
 
 interface UpdatePromptPanelProps {
@@ -39,6 +61,7 @@ interface UpdatePromptPanelProps {
   onRestart: () => void;
 }
 
+/** Update prompt; see the module header for the state machine and keys. */
 export function UpdatePromptPanel({
   focusId,
   currentVersion,
@@ -57,6 +80,8 @@ export function UpdatePromptPanel({
   const [outputLines, setOutputLines] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Last horizontal arrow decoded from raw stdin. Consumed (reset) by the next
+  // `useInput` call in the `available` state.
   const rawArrowRef = useRef<HorizontalDirection | null>(null);
 
   useEffect(() => {

@@ -57,24 +57,33 @@ import {
 import { type ProviderRunDeps, startProviderRunSession } from "./providerRunSession.js";
 
 interface UsePromptRunContext extends ProviderRunDeps {
+  // Route and selection
   pendingRouteProviderId: ProviderRoute["providerId"] | null;
-  recoveryRef: React.RefObject<boolean>;
-  routeChoiceRequiredRef: React.RefObject<string | null>;
-  allowedWritableRoots: string[];
   activeProviderRoute: ProviderRoute;
   activeRouteProvider: ProviderConfig;
+  selectionCoordinator: SelectionCoordinator;
+  routeChoiceRequiredRef: React.RefObject<string | null>;
+  recoveryRef: React.RefObject<boolean>;
+
+  // Workspace guard
+  allowedWritableRoots: string[];
+
+  // Runtime config and provider backend
   runtimeConfig: RuntimeConfig;
   providerWorkspaceConfig: ProviderWorkspaceConfig;
   provider: BackendProvider;
   providerOverride: BackendProvider | undefined;
   authStatus: CodexAuthProbeResult;
+
+  // Context and conversation
   activeContextMetadata: ModelContextMetadata | null;
+  activeConversationRef: React.RefObject<ConversationRecord | null>;
   appendConversationMessage: (message: ConversationMessage) => void;
+
+  // Active-run refs
   activeTurnIdRef: React.RefObject<number | null>;
   activeRunLifecycleRef: React.RefObject<PromptRunLifecycle | null>;
   activeRunTimingRef: React.RefObject<(PromptRunTiming & { runId: number; turnId: number }) | null>;
-  activeConversationRef: React.RefObject<ConversationRecord | null>;
-  selectionCoordinator: SelectionCoordinator;
 }
 
 export function usePromptRun(context: UsePromptRunContext) {
@@ -282,18 +291,29 @@ export function usePromptRun(context: UsePromptRunContext) {
       // --- Phase 3: run --------------------------------------------------------
 
       startProviderRunSession(context, {
+        // Identity
         runId,
         turnId,
+
+        // Route, lifecycle and timing
         route,
         lifecycle,
         submitTiming,
+
+        // Prompts
         safeDisplayPrompt,
         safeProviderPrompt,
+
+        // Runtime
         runtimeForTurn,
         fastCleanupRun,
         effectiveMode,
+
+        // Provider content
         conversationHistory,
         imageAttachments,
+
+        // Model evidence and provider entry point
         modelConnection,
         modelRevision,
         runProvider,

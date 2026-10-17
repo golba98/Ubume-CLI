@@ -1,3 +1,8 @@
+/**
+ * Builds provider-picker records from runtime truth, workspace overrides, discovery, and
+ * active/default route state.
+ */
+
 import { DEFAULT_MODEL } from "../../config/settings.js";
 import { resolveModelCapabilityProfileCached } from "../providerRuntime/capabilityProfile.js";
 import {
@@ -49,6 +54,10 @@ const KNOWN_PROVIDER_IDS: readonly ProviderId[] = [
   "codexa-cupy",
 ];
 
+/**
+ * Lists selectable provider identities, exposing native development routes only on the local-dev
+ * channel.
+ */
 export function getProviderOrder(env: NodeJS.ProcessEnv = process.env): readonly ProviderId[] {
   if (isLocalDevChannel(env)) {
     return ALL_PROVIDER_ORDER;
@@ -216,6 +225,10 @@ function applyOverride(
   };
 }
 
+/**
+ * Resolves the preferred provider from environment/configuration while retaining a known
+ * fallback.
+ */
 export function getDefaultProviderId(
   config: ProviderWorkspaceConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -236,6 +249,10 @@ function getActiveRouteProviderId(
     : DEFAULT_PROVIDER_ID;
 }
 
+/**
+ * Builds picker records from runtime/discovery truth and workspace preferences; also supplies
+ * saved Local/native configuration to those runtimes.
+ */
 export function buildProviderRegistry(options: {
   activeModel: string;
   workspaceRoot?: string;
@@ -372,6 +389,7 @@ export function buildProviderRegistry(options: {
   });
 }
 
+/** Looks up a provider-picker record without resolving or launching its executable. */
 export function findProvider(
   providers: readonly ProviderConfig[],
   providerId: ProviderId,
@@ -379,6 +397,10 @@ export function findProvider(
   return providers.find((provider) => provider.id === providerId) ?? null;
 }
 
+/**
+ * Narrows a saved identifier to the supported provider union, including development-only
+ * identities.
+ */
 export function isKnownProviderId(value: string): value is ProviderId {
   return isProviderId(value);
 }

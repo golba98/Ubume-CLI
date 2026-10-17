@@ -1,3 +1,9 @@
+/**
+ * Schedules update checks with injected timers: single-flight requests, a periodic interval
+ * after successes, jittered exponential backoff after failures, and disposal that aborts in-
+ * flight requests. Classifies only completed comparisons as verified results.
+ */
+
 import { APP_VERSION } from "../../config/settings.js";
 import { traceUpdateCheck } from "../perf/debugLog.js";
 import { errorMessage } from "../shared/values.js";
@@ -41,6 +47,10 @@ export function isEquivalentUpdateResult(
   );
 }
 
+/**
+ * Computes capped exponential failure backoff or the success interval, with jitter that only
+ * shortens the delay.
+ */
 export function computeNextCheckDelay(
   policy: UpdateCheckPolicy,
   consecutiveFailures: number,
@@ -101,6 +111,10 @@ export interface UpdateCheckScheduler {
   getSnapshot(): UpdateCheckSchedulerSnapshot;
 }
 
+/**
+ * Owns single-flight checks and retry timers until dispose. Disposal aborts current work and
+ * prevents late results from publishing or rescheduling.
+ */
 export function createUpdateCheckScheduler(deps: UpdateCheckSchedulerDeps): UpdateCheckScheduler {
   const policy = deps.policy ?? DEFAULT_UPDATE_CHECK_POLICY;
   const setTimer = deps.setTimer ?? scheduleUnrefTimer;

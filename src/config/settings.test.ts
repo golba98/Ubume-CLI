@@ -6,10 +6,16 @@ import {
   DEFAULT_SHOW_BUSY_LOADER,
   DEFAULT_TERMINAL_TITLE_MODE,
   DEFAULT_WORKSPACE_DISPLAY_MODE,
+  estimateTokens,
+  formatAuthPreferenceLabel,
+  formatBackendLabel,
   formatBusyLoaderSettingValue,
+  formatModeCommandHelp,
   formatModeLabel,
+  formatReasoningLabel,
   formatTerminalTitleModeLabel,
   formatTerminalTitlePath,
+  formatThemeLabel,
   formatWorkspaceDisplayModeLabel,
   formatWorkspaceDisplayPath,
   getCodexConfigFile,
@@ -19,6 +25,7 @@ import {
   getNextMode,
   getNextRotatingMode,
   getUbumeTrustStoreFile,
+  resolveModeCommand,
   USER_SETTING_DEFINITIONS,
 } from "./settings.js";
 
@@ -26,6 +33,16 @@ test("formats codex-style mode labels", () => {
   assert.equal(formatModeLabel("suggest"), "Read-only");
   assert.equal(formatModeLabel("auto-edit"), "Auto");
   assert.equal(formatModeLabel("full-auto"), "Full Access");
+});
+
+test("resolves mode command aliases and help text", () => {
+  assert.equal(resolveModeCommand("suggest"), "suggest");
+  assert.equal(resolveModeCommand("ask"), "suggest");
+  assert.equal(resolveModeCommand("auto"), "auto-edit");
+  assert.equal(resolveModeCommand("add"), "auto-edit");
+  assert.equal(resolveModeCommand("default"), "full-auto");
+  assert.equal(resolveModeCommand("unknown"), null);
+  assert.ok(formatModeCommandHelp().includes("suggest"));
 });
 
 test("cycles modes in the same order as Ctrl+Y", () => {
@@ -150,4 +167,21 @@ test("home resolution honors injected Windows and POSIX environments", () => {
   );
   assert.equal(getHomeDir({ HOME: "/home/tester" }), "/home/tester");
   assert.equal(getHomeDir({}), homedir());
+
+  // Test getCodexHome with explicit env argument
+  assert.equal(getCodexHome({ CODEX_HOME: "/custom/codex" }), "/custom/codex");
+  assert.equal(getCodexHome({ HOME: "/custom/home" }), "/custom/home/.codex");
+});
+
+test("formats labels for backend, reasoning, theme, and estimates tokens", () => {
+  assert.equal(formatBackendLabel("codex-subprocess"), "Ubume Core");
+  assert.equal(formatBackendLabel("custom-backend"), "custom-backend");
+  assert.equal(formatReasoningLabel("high"), "High");
+  assert.equal(formatReasoningLabel("xhigh"), "XHigh");
+  assert.equal(formatReasoningLabel("custom-level"), "Custom Level");
+  assert.equal(formatThemeLabel("dark"), "Ubume Dark");
+  assert.equal(formatThemeLabel("custom-id"), "custom-id");
+  assert.equal(formatAuthPreferenceLabel("chatgpt-login-goal"), "ChatGPT login goal");
+  assert.equal(estimateTokens(100), 25);
+  assert.equal(estimateTokens(0), 0);
 });

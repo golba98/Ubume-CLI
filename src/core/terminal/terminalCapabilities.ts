@@ -1,3 +1,7 @@
+/**
+ * Detects supported TTY environments and reports blocking errors or compatibility warnings.
+ */
+
 interface TerminalCapabilityInput {
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
@@ -36,6 +40,10 @@ function hasSupportedWindowsTerminal(env: Record<string, string | undefined>): b
   return WINDOWS_SUPPORTED_TERM_PATTERNS.some((pattern) => pattern.test(term));
 }
 
+/**
+ * Evaluates TTY/environment support without probing stdout. Forced VT does not bypass the
+ * interactive-TTY requirement.
+ */
 export function getTerminalCapability(input: TerminalCapabilityInput): TerminalCapabilityResult {
   if (!input.stdinIsTTY || !input.stdoutIsTTY) {
     return {

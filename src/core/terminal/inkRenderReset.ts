@@ -1,3 +1,7 @@
+/**
+ * Locates Ink internals and resets render caches when a deliberately fresh frame is required.
+ */
+
 import * as renderDebug from "../perf/renderDebug.js";
 
 /**

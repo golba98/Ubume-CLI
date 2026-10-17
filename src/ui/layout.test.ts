@@ -11,6 +11,7 @@ import {
   getShellHeight,
   getShellWidth,
   getUsableShellWidth,
+  resolvePickerPanelGeometry,
   resolveStartupHeaderMode,
 } from "./layout.js";
 
@@ -246,4 +247,50 @@ test("getContentWidth returns responsive content widths", () => {
   assert.equal(getContentWidth(180), 171);
   assert.equal(getContentWidth(220), 207);
   assert.equal(getContentWidth(300), 287);
+});
+
+test("picker geometry prefers explicit, then context, then derived panel layouts", () => {
+  const explicit = { mode: "compact" as const, availableRows: 7, availableCols: 50 };
+  const fromContext = { mode: "regular" as const, availableRows: 9, availableCols: 60 };
+  const layout = { cols: 100, rows: 30, mode: "regular" as const };
+  const mins = { minPanelWidth: 38, minAvailableCols: 20 };
+
+  assert.equal(
+    resolvePickerPanelGeometry({
+      layout,
+      panelLayout: explicit,
+      contextPanelLayout: fromContext,
+      ...mins,
+    }).panelLayout,
+    explicit,
+  );
+  assert.equal(
+    resolvePickerPanelGeometry({ layout, contextPanelLayout: fromContext, ...mins }).panelLayout,
+    fromContext,
+  );
+
+  const active = { width: 70, height: 12, availableRows: 10, availableCols: 66 };
+  const fromBox = resolvePickerPanelGeometry({ layout, activePanelLayout: active, ...mins });
+  assert.deepEqual(fromBox.panelLayout, { mode: "regular", availableRows: 10, availableCols: 66 });
+  assert.equal(fromBox.panelWidth, 70);
+  assert.equal(fromBox.innerWidth, 66);
+
+  const derived = resolvePickerPanelGeometry({ layout, availableRows: 11, ...mins });
+  assert.equal(derived.panelLayout.availableRows, 11);
+  assert.equal(derived.panelWidth, derived.shellWidth - 2);
+});
+
+test("picker geometry enforces minimum widths on narrow terminals and has a default layout", () => {
+  const narrow = resolvePickerPanelGeometry({
+    layout: { cols: 30, rows: 20, mode: "compact" },
+    minPanelWidth: 42,
+    minAvailableCols: 30,
+  });
+  assert.equal(narrow.panelWidth, 42);
+  assert.equal(narrow.panelLayout.availableCols, 30);
+  assert.equal(narrow.innerWidth, 30);
+
+  const standalone = resolvePickerPanelGeometry({ minPanelWidth: 42, minAvailableCols: 30 });
+  assert.equal(standalone.panelLayout.mode, "regular");
+  assert.ok(standalone.panelLayout.availableRows > 0);
 });

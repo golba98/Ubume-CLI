@@ -1,3 +1,8 @@
+/**
+ * Snapshots workspace files, detects changes, aggregates activity, and tracks modifications
+ * during runs.
+ */
+
 import { readdirSync, readFileSync, statSync } from "fs";
 import { join, relative, sep } from "path";
 import { normalizeLineBreaks } from "../shared/text.js";
@@ -193,6 +198,7 @@ function buildLineDiff(before: string[], after: string[]): DiffOperation[] | nul
   return operations;
 }
 
+/** Builds a bounded display diff; it is not an exact recovery checkpoint. */
 export function createTextDiffExcerpt(
   beforeContent: string,
   afterContent: string,
@@ -230,6 +236,10 @@ export function createTextDiffExcerpt(
   };
 }
 
+/**
+ * Captures bounded display-oriented file metadata/content while skipping excluded workspace
+ * trees.
+ */
 export function captureWorkspaceSnapshot(rootDir: string): Map<string, WorkspaceFileSnapshot> {
   const snapshot = new Map<string, WorkspaceFileSnapshot>();
 
@@ -274,6 +284,7 @@ export function captureWorkspaceSnapshot(rootDir: string): Map<string, Workspace
   return snapshot;
 }
 
+/** Classifies created/modified/deleted files between display snapshots. */
 export function diffWorkspaceSnapshots(
   previous: Map<string, WorkspaceFileSnapshot>,
   next: Map<string, WorkspaceFileSnapshot>,
@@ -336,6 +347,7 @@ export function diffWorkspaceSnapshots(
   return activity;
 }
 
+/** Aggregates file counts and paths for a completed run; no changes yield undefined. */
 export function summarizeRunActivity(activity: RunFileActivity[]): RunActivitySummary | undefined {
   if (activity.length === 0) return undefined;
 
@@ -357,6 +369,10 @@ export function summarizeRunActivity(activity: RunFileActivity[]): RunActivitySu
   };
 }
 
+/**
+ * Owns a run's baseline and bounded polling for display activity; stop/finalization remains with
+ * the caller.
+ */
 export function createWorkspaceActivityTracker(
   options: WorkspaceActivityTrackerOptions,
 ): WorkspaceActivityTracker {

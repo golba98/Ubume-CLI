@@ -1,14 +1,29 @@
+/**
+ * Approval prompt for a tool call requested by a local model run (the
+ * `tool-approval` screen). Shows the tool, description, command and paths, and
+ * offers Allow once / Allow matching action for this run / Deny.
+ *
+ * Owns only the highlighted option index. The decision goes to `onSelect`;
+ * `src/app/overlays/OverlayPanels.tsx` resolves the pending approval with it.
+ * "Allow for run" is hidden when `request.allowForRun === false`.
+ *
+ * Focus: registers `focusId` with `autoFocus`; input is handled only while
+ * focused. Keys: Up/k and Down/j/Tab move, Enter decides, Esc denies, Ctrl+C
+ * calls `onCancelRun` (the app denies and cancels the run).
+ */
 import { Box, Text, useFocus, useInput } from "ink";
 import { useState } from "react";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "../../core/providers/types.js";
 import { useTheme } from "../theme.js";
 
+/** All decisions in display order; filtered per request. */
 const OPTIONS: Array<{ label: string; value: ToolApprovalDecision }> = [
   { label: "Allow once", value: "allow-once" },
   { label: "Allow matching action for this run", value: "allow-for-run" },
   { label: "Deny", value: "deny" },
 ];
 
+/** Tool-approval prompt; see the module header for keys. */
 export function ToolApprovalPanel({
   focusId,
   request,

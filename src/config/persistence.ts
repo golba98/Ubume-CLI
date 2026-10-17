@@ -1,5 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+/**
+ * @fileoverview User Preferences and Runtime Persistence
+ *
+ * Manages persisting and loading UI preferences, authentication settings, header
+ * configuration, update check intervals, and interactive execution modes.
+ *
+ * Persistence destinations:
+ * - App settings: `~/.ubume-settings.json` (with automatic migration from `~/.codexa-settings.json`).
+ * - Runtime execution mode: `~/.codex/config.toml` (`[ubume]` or `[codexa]` table).
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { writeJsonFileAtomic, writeTextFileAtomic } from "./atomicFile.js";
 import { mergeRuntimeIntoTomlConfig, parseTomlDocument } from "./layeredConfig.js";
 import { normalizeRuntimeConfig, type RuntimeConfig } from "./runtimeConfig.js";
 import type { AvailableMode, Theme } from "./settings.js";
@@ -25,7 +36,7 @@ import {
 } from "./settings.js";
 import { serializeTomlDocument } from "./tomlSerialize.js";
 
-interface UiSettings {
+export interface UiSettings {
   layoutStyle: string;
   theme: string;
   workspaceDisplayMode: WorkspaceDisplayMode;
@@ -34,11 +45,11 @@ interface UiSettings {
   customTheme?: Partial<Theme>;
 }
 
-interface AuthSettings {
+export interface AuthSettings {
   preference: AuthPreference;
 }
 
-interface UpdateCheckSettings {
+export interface UpdateCheckSettings {
   enabled: boolean;
   intervalHours: number;
   skippedUpdateVersion?: string | null;
@@ -49,15 +60,18 @@ export const DEFAULT_UPDATE_CHECK_SETTINGS: UpdateCheckSettings = {
   intervalHours: 6,
 };
 
-interface AppSettings {
+export interface AppSettings {
   ui: UiSettings;
   auth: AuthSettings;
   header: HeaderConfig;
   updateCheck: UpdateCheckSettings;
 }
 
-// Pick the first string value found under the camelCase or snake_case key.
-// Falls through to the snake_case key only when the camelCase value is absent or not a string.
+// ─── Extraction & Normalization Helpers ────────────────────────────────────────
+
+/**
+ * Returns the first string value found under either camelCase or snake_case key.
+ */
 function pickStr(src: Record<string, unknown>, camel: string, snake: string): string | undefined {
   const camelVal = src[camel];
   if (typeof camelVal === "string") return camelVal;
@@ -66,7 +80,9 @@ function pickStr(src: Record<string, unknown>, camel: string, snake: string): st
   return undefined;
 }
 
-// Same as pickStr but for boolean values.
+/**
+ * Returns the first boolean value found under either camelCase or snake_case key.
+ */
 function pickBool(src: Record<string, unknown>, camel: string, snake: string): boolean | undefined {
   const camelVal = src[camel];
   if (typeof camelVal === "boolean") return camelVal;
@@ -136,6 +152,9 @@ function normalizeUpdateCheckSettings(
   };
 }
 
+/**
+ * Returns default AppSettings with fallback values for all settings categories.
+ */
 export function getDefaultSettings(): AppSettings {
   return {
     ui: normalizeUiSettings(null),
@@ -160,6 +179,9 @@ function parseLegacyRuntime(data: Record<string, unknown>): RuntimeConfig {
   });
 }
 
+/**
+ * Extracts legacy flat runtime settings from settings data for migration to TOML.
+ */
 export function extractLegacyRuntime(data: unknown): RuntimeConfig | null {
   if (!data || typeof data !== "object") {
     return null;
@@ -236,6 +258,9 @@ function parseWorkspaceDisplayMode(
   return fallback;
 }
 
+/**
+ * Parses and sanitizes raw JSON settings into typed AppSettings.
+ */
 export function parseSettingsData(data: unknown): AppSettings {
   const defaults = getDefaultSettings();
   if (!data || typeof data !== "object") {
@@ -304,6 +329,9 @@ export function parseSettingsData(data: unknown): AppSettings {
   };
 }
 
+/**
+ * Serializes AppSettings into canonical disk JSON representation (snake_case).
+ */
 export function serializeSettings(settings: AppSettings): Record<string, unknown> {
   return {
     ui: {
@@ -336,13 +364,6 @@ export function serializeSettings(settings: AppSettings): Record<string, unknown
   };
 }
 
-function writeJsonFile(filePath: string, data: Record<string, unknown>): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const tmpFile = `${filePath}.tmp`;
-  writeFileSync(tmpFile, JSON.stringify(data, null, 2), "utf-8");
-  renameSync(tmpFile, filePath);
-}
-
 function maybeMigrateLegacyRuntime(rawData: unknown): void {
   const legacyRuntime = extractLegacyRuntime(rawData);
   if (!legacyRuntime) {
@@ -355,16 +376,17 @@ function maybeMigrateLegacyRuntime(rawData: unknown): void {
       ? parseTomlDocument(readFileSync(codexConfigFile, "utf-8"))
       : {};
     const mergedConfig = mergeRuntimeIntoTomlConfig(existingConfig, legacyRuntime);
-    mkdirSync(dirname(codexConfigFile), { recursive: true });
-    const tmpTomlFile = `${codexConfigFile}.tmp`;
-    writeFileSync(tmpTomlFile, serializeTomlDocument(mergedConfig), "utf-8");
-    renameSync(tmpTomlFile, codexConfigFile);
-    writeJsonFile(SETTINGS_FILE, stripLegacyRuntime(rawData));
+    writeTextFileAtomic(codexConfigFile, serializeTomlDocument(mergedConfig));
+    writeJsonFileAtomic(SETTINGS_FILE, stripLegacyRuntime(rawData));
   } catch {
     // Best-effort migration only; keep legacy JSON intact if anything fails.
   }
 }
 
+/**
+ * Loads user settings from `~/.ubume-settings.json`.
+ * Migrates from `~/.codexa-settings.json` and migrates flat runtime settings if present.
+ */
 export function loadSettings(): AppSettings {
   try {
     let text = "";
@@ -373,7 +395,7 @@ export function loadSettings(): AppSettings {
     } else if (existsSync(LEGACY_SETTINGS_FILE)) {
       text = readFileSync(LEGACY_SETTINGS_FILE, "utf-8");
       try {
-        writeJsonFile(SETTINGS_FILE, JSON.parse(text));
+        writeJsonFileAtomic(SETTINGS_FILE, JSON.parse(text));
       } catch {
         // Best-effort migration only
       }
@@ -388,15 +410,21 @@ export function loadSettings(): AppSettings {
   }
 }
 
+/**
+ * Persists user settings to `~/.ubume-settings.json` atomically.
+ */
 export function saveSettings(settings: AppSettings): void {
   try {
-    writeJsonFile(SETTINGS_FILE, serializeSettings(settings));
+    writeJsonFileAtomic(SETTINGS_FILE, serializeSettings(settings));
   } catch {
     // Silently ignore — settings are best-effort
   }
 }
 
-/** Persist the interactive execution choice without replacing unrelated Codex config. */
+/**
+ * Persists the interactive execution mode choice to `~/.codex/config.toml`
+ * without replacing unrelated configuration keys.
+ */
 export function saveRuntimeModePreference(mode: AvailableMode, planMode: boolean): void {
   try {
     const codexConfigFile = getCodexConfigFile();
@@ -416,10 +444,7 @@ export function saveRuntimeModePreference(mode: AvailableMode, planMode: boolean
         ? { ...(current[tableKey] as Record<string, unknown>) }
         : {};
     current[tableKey] = { ...existing, mode, plan_mode: planMode };
-    mkdirSync(dirname(codexConfigFile), { recursive: true });
-    const tmpFile = `${codexConfigFile}.tmp`;
-    writeFileSync(tmpFile, serializeTomlDocument(current), "utf-8");
-    renameSync(tmpFile, codexConfigFile);
+    writeTextFileAtomic(codexConfigFile, serializeTomlDocument(current));
   } catch {
     // Runtime preference persistence is best-effort and must not crash the TUI.
   }

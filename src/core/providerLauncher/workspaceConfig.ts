@@ -1,3 +1,9 @@
+/**
+ * Workspace provider configuration parsing, compatibility migration and persistence. Pure
+ * setters return merged values; save uses a same-directory temporary file and rename. Caller
+ * orchestration owns concurrent updates and execution leases.
+ */
+
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { getProviderRuntime, isProviderRoutableInUbume } from "../providerRuntime/registry.js";
@@ -17,6 +23,10 @@ import type {
   ProviderWorkspaceOverride,
 } from "./types.js";
 
+/**
+ * Resolves providers.json in workspace app data; readOnly avoids triggering legacy data
+ * migration.
+ */
 export function getProviderWorkspaceConfigFile(
   workspaceRoot: string,
   options: { readOnly?: boolean } = {},
@@ -27,6 +37,7 @@ export function getProviderWorkspaceConfigFile(
   );
 }
 
+/** Names the historical workspace-local provider file without creating it. */
 export function getLegacyProviderWorkspaceConfigFile(workspaceRoot: string): string {
   return join(normalizeWorkspaceRoot(workspaceRoot), ".codexa", "providers.json");
 }
@@ -201,6 +212,10 @@ function parseActiveRoute(value: unknown): ProviderActiveRoute | undefined {
   };
 }
 
+/**
+ * Normalizes supported fields and legacy identities while retaining blocked Google migration
+ * data instead of silently routing elsewhere.
+ */
 export function parseProviderWorkspaceConfig(data: unknown): ProviderWorkspaceConfig {
   if (!isRecord(data)) return {};
   const config: ProviderWorkspaceConfig = {};
@@ -305,6 +320,10 @@ function serializeLaunchCommand(
   };
 }
 
+/**
+ * Produces the persisted compatibility representation, retaining provider/model overrides and
+ * separate default/active route state.
+ */
 export function serializeProviderWorkspaceConfig(
   config: ProviderWorkspaceConfig,
 ): Record<string, unknown> {
@@ -407,6 +426,10 @@ export function serializeProviderWorkspaceConfig(
   };
 }
 
+/**
+ * Reads current then legacy configuration when absent; malformed/unreadable files return an
+ * empty configuration.
+ */
 export function loadProviderWorkspaceConfig(
   workspaceRoot: string,
   options: { readOnly?: boolean } = {},
@@ -429,6 +452,10 @@ export function loadProviderWorkspaceConfig(
   }
 }
 
+/**
+ * Writes mode-0600 JSON via temporary-file rename. I/O failures throw; the caller owns
+ * serialization of competing updates.
+ */
 export function saveProviderWorkspaceConfig(
   workspaceRoot: string,
   config: ProviderWorkspaceConfig,
@@ -443,6 +470,7 @@ export function saveProviderWorkspaceConfig(
   renameSync(tmpFile, filePath);
 }
 
+/** Returns a new workspace default preference without changing the active route. */
 export function setProviderWorkspaceDefault(
   config: ProviderWorkspaceConfig,
   providerId: ProviderId,
@@ -453,6 +481,10 @@ export function setProviderWorkspaceDefault(
   };
 }
 
+/**
+ * Merges a provider's preferred model without altering other provider settings or activating a
+ * route.
+ */
 export function setProviderDefaultModel(
   config: ProviderWorkspaceConfig,
   providerId: ProviderId,
@@ -470,32 +502,32 @@ export function setProviderDefaultModel(
   };
 }
 
+/**
+ * Merges provider reasoning and, when a current model exists, its per-model preference. Existing
+ * capabilities and other models are retained.
+ */
 export function setProviderDefaultReasoning(
   config: ProviderWorkspaceConfig,
   providerId: ProviderId,
   reasoning: string,
 ): ProviderWorkspaceConfig {
+  const provider = config.providers?.[providerId];
+  const currentModel = provider?.currentModel;
   return {
     ...config,
     providers: {
       ...config.providers,
       [providerId]: {
-        ...config.providers?.[providerId],
+        ...provider,
         currentReasoning: reasoning,
-        ...(config.providers?.[providerId]?.currentModel
+        ...(currentModel
           ? {
               models: {
-                ...config.providers?.[providerId]?.models,
-                ...(config.providers?.[providerId]?.currentModel
-                  ? {
-                      [config.providers[providerId]!.currentModel!]: {
-                        ...config.providers[providerId]?.models?.[
-                          config.providers[providerId]!.currentModel!
-                        ],
-                        reasoningPreference: reasoning,
-                      },
-                    }
-                  : {}),
+                ...provider.models,
+                [currentModel]: {
+                  ...provider.models?.[currentModel],
+                  reasoningPreference: reasoning,
+                },
               },
             }
           : {}),
@@ -504,6 +536,10 @@ export function setProviderDefaultReasoning(
   };
 }
 
+/**
+ * Records a routable selection; Local routes synchronize backend preference using the shared
+ * precedence rule.
+ */
 export function setProviderActiveRoute(
   config: ProviderWorkspaceConfig,
   activeRoute: ProviderActiveRoute,
@@ -534,6 +570,7 @@ export function setProviderActiveRoute(
   };
 }
 
+/** Merges the saved Local backend preference without changing the active route. */
 export function setLocalBackendPreference(
   config: ProviderWorkspaceConfig,
   localBackend: LocalBackendId,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   getTextUnits,
@@ -25,6 +26,29 @@ test("wrapCommandText handles extremely long unbroken tokens by breaking them", 
   assert.equal(result[0], "A_Very_Long_Token_Wi");
   assert.equal(result[1], "  thout_Spaces_That_");
   assert.equal(result[2], "  Exceeds_Max_Width");
+});
+
+test("narrow command wrapping terminates without splitting or losing wide graphemes", () => {
+  // Isolate this regression: a synchronous wrapping loop cannot be interrupted
+  // by the test runner's own timeout when it stops making progress.
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `import { wrapCommandText } from ${JSON.stringify(new URL("./text.ts", import.meta.url).href)};
+       console.log(JSON.stringify(["界界", "👩‍💻👩‍💻", "a 界"].map(text => wrapCommandText(text, 3))));`,
+    ],
+    { encoding: "utf8", timeout: 2_000 },
+  );
+  assert.equal(probe.error, undefined, "wrapping must finish within the subprocess timeout");
+  assert.equal(probe.status, 0, probe.stderr);
+  const rows: string[][] = JSON.parse(probe.stdout);
+  assert.deepEqual(rows, [
+    ["界", "界"],
+    ["👩‍💻", "👩‍💻"],
+    ["a", "界"],
+  ]);
+  for (const row of rows.flat()) assert.ok(getTextWidth(row) <= 3, row);
 });
 
 test("wrapPlainText default firstLineWidth equals maxWidth (existing callers unchanged)", () => {

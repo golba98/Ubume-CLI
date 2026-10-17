@@ -1,3 +1,9 @@
+/**
+ * Usage adapter and snapshot contracts consumed by the usage service and UI. Unknown quota
+ * values are optional; freshness describes the data source separately from the service cache
+ * origin.
+ */
+
 import type { LocalBackendId, ProviderWorkspaceOverride } from "../providerLauncher/types.js";
 import type { ContextConfidence } from "../providerRuntime/contextMetadata.js";
 import type { ProviderRoute } from "../providerRuntime/types.js";

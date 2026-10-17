@@ -1,3 +1,9 @@
+/**
+ * Leaf version/channel resolution used by settings. Keep settings and other version modules out
+ * of its imports to avoid initialization cycles; package metadata precedes generated build-info
+ * fallback.
+ */
+
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,10 +17,12 @@ function getUbumeChannel(env: NodeJS.ProcessEnv = process.env): string {
   return env[UBUME_CHANNEL_ENV]?.trim() || env[CODEXA_CHANNEL_ENV]?.trim() || "published";
 }
 
+/** Recognizes the explicit development channel, including the legacy environment alias. */
 export function isLocalDevChannel(env: NodeJS.ProcessEnv = process.env): boolean {
   return getUbumeChannel(env) === LOCAL_DEV_CHANNEL;
 }
 
+/** Adds the local development label only when the selected channel requires it. */
 export function formatUbumeVersionLabel(
   version: string = getAppVersion(),
   env: NodeJS.ProcessEnv = process.env,
@@ -22,6 +30,7 @@ export function formatUbumeVersionLabel(
   return isLocalDevChannel(env) ? `${version}-dev local` : version;
 }
 
+/** Builds the application brand using the resolved installed version and channel label. */
 export function formatUbumeBrandLabel(env: NodeJS.ProcessEnv = process.env): string {
   return `Ubume v${formatUbumeVersionLabel(getAppVersion(), env)}`;
 }

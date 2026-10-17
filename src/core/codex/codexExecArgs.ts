@@ -1,3 +1,8 @@
+/**
+ * Builds the exact Codex CLI exec argument vector from effective runtime configuration and
+ * launch context.
+ */
+
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import type { ProviderImageAttachment } from "../providerRuntime/types.js";
 import type { CodexCliCapabilities } from "./codexCapabilities.js";
@@ -97,6 +102,10 @@ function buildRuntimePolicyArgs(
   };
 }
 
+/**
+ * Builds argv without spawning. Returns an error when detected CLI controls cannot represent the
+ * requested reasoning, attachments or runtime policy.
+ */
 export function buildCodexExecArgs(
   options: BuildCodexExecArgsOptions,
   capabilities: CodexCliCapabilities,

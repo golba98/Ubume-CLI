@@ -1,9 +1,20 @@
+/**
+ * Static catalog of slash commands shown as composer autocomplete suggestions.
+ *
+ * This list only drives suggestions (`chrome/composer/composerModel.ts` and the
+ * exact-match check in `chrome/composer/useComposerInput.ts`); the commands are
+ * parsed and executed by `src/commands/handler.ts`. Adding an entry here does
+ * not implement a command, and a command missing here still works when typed.
+ *
+ * Pure module: no state, no side effects.
+ */
 interface SlashCommandSuggestion {
   cmd: string;
   desc: string;
   aliases?: readonly string[];
 }
 
+/** Suggestion entries in display order; `aliases` also match the typed prefix. */
 export const SLASH_COMMANDS = [
   { cmd: "/help", desc: "Show available commands" },
   { cmd: "/clear", desc: "Clear chat and cancel active run" },
@@ -45,6 +56,11 @@ function matchesPrefix(suggestion: SlashCommandSuggestion, prefix: string): bool
   return suggestion.aliases?.some((alias) => alias.startsWith(prefix)) ?? false;
 }
 
+/**
+ * Return up to five suggestions whose command or any alias starts with
+ * `prefix` (case-insensitive), preserving catalog order. The suggestion shows
+ * the canonical `cmd`, even when only an alias matched.
+ */
 export function getSlashCommandSuggestions(prefix: string): readonly CommandSuggestion[] {
   const normalized = prefix.toLowerCase();
   return SLASH_COMMANDS.filter((command) => matchesPrefix(command, normalized)).slice(0, 5);

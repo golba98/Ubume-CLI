@@ -1,3 +1,9 @@
+/**
+ * Development-only PyTorch and CuPy adapters with distinct worker protocols/configuration.
+ * PyTorch checks checkpoint/tokenizer identity and ordered stream events; CuPy retains its
+ * legacy request/response bridge. Neither route supplies agent tools.
+ */
+
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
@@ -103,6 +109,10 @@ function diagnostic(event: string, fields: Record<string, unknown> = {}): void {
 let requestSequence = 0;
 let runActive = false;
 let configuredOptions: CodexaNativeOptions | undefined;
+/**
+ * Updates process-local development model settings; loading/unloading remains with the native
+ * runtime.
+ */
 export function setCodexaNativeConfig(options?: CodexaNativeOptions): void {
   configuredOptions = options;
 }
@@ -113,6 +123,10 @@ function missingNativePaths(config: CodexaNativeConfig): string[] {
     (path) => !path || !existsSync(path),
   );
 }
+/**
+ * Lists configured development-only native model choices without implicitly selecting an
+ * initializer.
+ */
 export function discoverCodexaNativeModels(
   config = resolveCodexaNativeConfig(process.env, configuredOptions),
   env: NodeJS.ProcessEnv = process.env,
@@ -178,6 +192,7 @@ export function discoverCodexaNativeModels(
   };
 }
 
+/** Requests native worker teardown and waits for the tracked stop work before returning. */
 export function unloadCodexaNative(message = "Codexa Native unloaded."): Promise<void> {
   const active = bridge;
   if (!active) return shutdown;
@@ -643,6 +658,7 @@ function missing(config: Config): string[] {
     .concat(executableMissing ? [config.python] : []);
 }
 
+/** Lists the development CuPy route independently from native checkpoint discovery. */
 export function discoverCodexaCupyModels(
   config = resolveCodexaCupyConfig(),
   env: NodeJS.ProcessEnv = process.env,

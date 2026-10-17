@@ -1,3 +1,12 @@
+/**
+ * Display formatting for the active provider/model/runtime and the
+ * permission-mode indicator.
+ *
+ * Not part of the transcript render pipeline: consumed by `app/App.tsx`
+ * (`buildActiveRuntimeDisplay` → `runtimeDisplayToSummary` for the header and
+ * composer) and `chrome/BottomComposer.tsx` (`getModeDisplaySpec`). Pure
+ * functions over route/capability/context metadata; no state or caching.
+ */
 import type { RuntimeSummary } from "../../config/runtimeConfig.js";
 import type { Theme } from "../../config/settings.js";
 import { formatModeLabel, formatReasoningLabel } from "../../config/settings.js";
@@ -85,6 +94,16 @@ function getModelLabel(
   return route.modelId;
 }
 
+/**
+ * Build provider/model/reasoning/context labels for the active route.
+ *
+ * Reasoning shown is the effective level: reconciled through the model's
+ * reasoning control when it has one, otherwise the requested level only if the
+ * model supports it (else its default); with no capability data only OpenAI
+ * routes show the requested level. It is omitted when the model label
+ * already ends with `(level)`. Context usage is only shown for local runtimes,
+ * and only trusted when the metadata matches the current provider + model.
+ */
 export function buildActiveRuntimeDisplay({
   route,
   reasoningLevel,
@@ -146,6 +165,7 @@ export function buildActiveRuntimeDisplay({
   };
 }
 
+/** Overlay the computed display labels onto a base `RuntimeSummary`. */
 export function runtimeDisplayToSummary(
   display: ActiveRuntimeDisplay,
   base: RuntimeSummary,
@@ -169,6 +189,7 @@ interface ModeDisplaySpec {
   ringBold: boolean;
 }
 
+/** Glyph, colors and weights for the permission-mode indicator; unknown modes render as "suggest". */
 export function getModeDisplaySpec(mode: string, theme: Theme): ModeDisplaySpec {
   switch (mode) {
     case "full-auto":

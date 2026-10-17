@@ -26,11 +26,16 @@ import {
 import type { Screen } from "../../session/types.js";
 
 interface UseUpdateCheckContext {
+  // Update result state
   startupUpdateEnabled: React.RefObject<boolean>;
   updateCheckResult: UpdateCheckResult | null;
   setUpdateCheckResult: React.Dispatch<React.SetStateAction<UpdateCheckResult | null>>;
+
+  // Update overlay navigation
   returnFromUpdateOverlay: () => void;
   screenRef: React.RefObject<Screen>;
+
+  // Test seam
   /** Test seam — replaces the registry check, timers, or policy. */
   schedulerDeps?: Partial<Omit<UpdateCheckSchedulerDeps, "onResult">>;
 }
@@ -132,7 +137,8 @@ export function useUpdateCheck(context: UseUpdateCheckContext) {
         schedulerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Runs once: the scheduler lives for the whole mount and reads current
+    // values through refs, so it never needs the changing values as deps.
   }, []);
 
   /** Explicit `/update` checks share the scheduler's single in-flight request. */

@@ -1,3 +1,13 @@
+/**
+ * React entry point for rendering parsed markdown, plus re-exports of the
+ * parser's public API (`parseMarkdown`, segment types).
+ *
+ * `MemoizedRenderMessage` does not lay text out itself: it runs the same
+ * `buildMarkdownRows` → `createRow` pipeline the measured transcript uses and
+ * renders each row through `TimelineRowView`. That makes React-rendered
+ * markdown row-for-row identical to the measured rows by construction
+ * (pinned by `TurnGroup.test.tsx`).
+ */
 import { Box, Text } from "ink";
 import React, { useMemo } from "react";
 import { useTheme } from "../theme.js";
@@ -39,6 +49,11 @@ function RenderMessage({
     </Box>
   );
 }
+/**
+ * Render markdown `segments` wrapped at `width` columns, one Ink row per
+ * measured row. Memoized on prop identity, so callers should pass a stable
+ * `segments` array (e.g. from a `useMemo`-wrapped `parseMarkdown`).
+ */
 export const MemoizedRenderMessage = React.memo(RenderMessage);
 
 interface PanelProps {
@@ -50,6 +65,11 @@ interface PanelProps {
   children: React.ReactNode;
 }
 
+/**
+ * Titled panel frame (`╭─ TITLE ─── RIGHT ╮` over a round Ink border with no
+ * top edge). Its measured counterpart is `buildPanelRows` in
+ * `timeline/measure/cards.ts`.
+ */
 export function Panel({ cols, title, rightTitle, borderColor, titleColor, children }: PanelProps) {
   const theme = useTheme();
   const cBorder = borderColor || theme.borderFocused;

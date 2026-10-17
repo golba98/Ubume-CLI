@@ -17,6 +17,10 @@ export function isLocalEndpoint(endpoint: string): boolean {
   }
 }
 
+/**
+ * Classifies the effective route using explicit deployment configuration before endpoint
+ * locality.
+ */
 export function isLocalRuntime(
   route: ActiveProviderRoute,
   config?: ProviderWorkspaceOverride,

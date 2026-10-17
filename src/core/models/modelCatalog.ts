@@ -1,3 +1,9 @@
+/**
+ * Process-local provider discovery cache with connection-scoped identities and generation-
+ * guarded refreshes. A failed refresh retains unverified prior models; only current entries
+ * publish results. This is separate from selection evidence and disk caches.
+ */
+
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,6 +32,10 @@ export interface CatalogContext {
 
 /** Connection identities never contain credential material and are never logged. */
 const salt = randomBytes(32);
+/**
+ * Hashes workspace, connection and auth-change evidence into a process-local identity without
+ * exposing credentials in the key.
+ */
 export function catalogContextKey(provider: ProviderId, context: CatalogContext): string {
   const config = context.providerConfig ?? context.localConfig;
   const {
@@ -130,6 +140,9 @@ export class ModelCatalog {
   private listeners = new Set<
     (providerId: ProviderId, snapshot: ProviderModelDiscoveryResult) => void
   >();
+  /**
+   * Subscribes to published snapshots; the returned function removes this listener.
+   */
   subscribe(
     listener: (providerId: ProviderId, snapshot: ProviderModelDiscoveryResult) => void,
   ): () => void {
@@ -143,9 +156,16 @@ export class ModelCatalog {
     private now: () => number = Date.now,
     private timeoutMs = 20_000,
   ) {}
+  /**
+   * Reads the currently published snapshot without contacting the provider.
+   */
   get(provider: ProviderId): ProviderModelDiscoveryResult | undefined {
     return this.entries.get(provider)?.snapshot;
   }
+  /**
+   * Updates one current model; expected identity prevents late request evidence from changing
+   * a replacement descriptor.
+   */
   amendModel(
     provider: ProviderId,
     id: string,
@@ -162,14 +182,26 @@ export class ModelCatalog {
     this.emit(provider, entry.snapshot);
     return true;
   }
+  /**
+   * Aborts this provider refresh and forgets its entry; late work cannot publish into a
+   * replacement.
+   */
   invalidate(provider: ProviderId): void {
     this.entries.get(provider)?.controller?.abort();
     this.entries.delete(provider);
   }
+  /**
+   * Aborts refreshes and clears entries. Subscribers own their unsubscribe callbacks.
+   */
   dispose(): void {
     for (const entry of this.entries.values()) entry.controller?.abort();
     this.entries.clear();
   }
+  /**
+   * Coalesces discovery for the same connection, applies TTL/backoff, and publishes only the
+   * owning generation. Aborted/timed-out/failed refresh work resolves to an unverified snapshot.
+   * Concurrent callers share the initiating context's abort signal and request lifetime.
+   */
   refresh(
     runtime: ProviderRuntime,
     context: CatalogContext,

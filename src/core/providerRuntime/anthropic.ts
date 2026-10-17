@@ -1,3 +1,9 @@
+/**
+ * Anthropic execution through authenticated Claude Code or the direct API. Owns CLI event
+ * adaptation and bounded compatibility retries; runControl tracks subprocess teardown separately
+ * from response delivery.
+ */
+
 import { formatConversationHistory } from "../../session/conversation.js";
 import {
   buildClaudeSpawnSpec,
@@ -60,6 +66,9 @@ function isAnthropicRouteConfigured(): boolean {
   return getAnthropicApiKey() !== null || claudeCodeValidated || anthropicApiValidated;
 }
 
+/**
+ * Resets process-local Claude validation/discovery state for isolated tests.
+ */
 export function resetAnthropicRouteValidationCacheForTests(
   models: readonly ProviderModel[] | null = null,
 ): void {
@@ -77,10 +86,12 @@ export function resetAnthropicRouteValidationCacheForTests(
 
 // Claude Code CLI accepts both short aliases ("sonnet", "opus", "haiku") and
 // full versioned IDs ("claude-sonnet-4-20250514"). Pass through unchanged.
+/** Preserves the native Claude model identifier passed to the CLI. */
 export function mapModelIdToClaudeArg(modelId: string): string {
   return modelId;
 }
 
+/** Normalizes a requested Claude effort value, returning null for an absent preference. */
 export function mapReasoningToEffort(reasoning: string | null | undefined): string | null {
   return reasoning?.trim() || null;
 }
@@ -101,6 +112,7 @@ function buildClaudeCodeBaseArgs(request: ProviderChatRequest): string[] {
   ];
 }
 
+/** Returns args with verbose output enabled when stream-json requires it. */
 export function ensureClaudeStreamJsonVerbose(args: string[]): string[] {
   const outputFormatIndex = args.indexOf("--output-format");
   const usesStreamJson = outputFormatIndex >= 0 && args[outputFormatIndex + 1] === "stream-json";
@@ -113,6 +125,9 @@ export function ensureClaudeStreamJsonVerbose(args: string[]): string[] {
   return next;
 }
 
+/**
+ * Builds streaming Claude CLI argv from prompt/history, model, effort and runtime permissions.
+ */
 export function buildClaudeCodeArgs(request: ProviderChatRequest): string[] {
   return ensureClaudeStreamJsonVerbose([
     "-p",
@@ -123,6 +138,10 @@ export function buildClaudeCodeArgs(request: ProviderChatRequest): string[] {
   ]);
 }
 
+/**
+ * Builds the compatibility plain-text invocation using the same model and policy as streaming
+ * execution.
+ */
 export function buildClaudeCodePlainTextArgs(request: ProviderChatRequest): string[] {
   return ["-p", ...buildClaudeCodeBaseArgs(request)];
 }
@@ -179,6 +198,9 @@ interface ClaudeStreamBlock {
   is_error?: boolean;
 }
 
+/**
+ * Creates per-stream tool state and forwards Claude tool lifecycle events to Ubume callbacks.
+ */
 export function createClaudeToolParser(handlers: BackendRunHandlers): (line: string) => void {
   const tools = new Map<string, { command: string; startedAt: number }>();
   return (line) => {
@@ -368,6 +390,10 @@ function formatClaudeCommandDiagnostic(executable: string, args: string[], promp
   return `Claude Code command args: ${JSON.stringify([executable, ...safeArgs])}`;
 }
 
+/**
+ * Starts Claude with bounded compatibility retries. The returned cancel function stops the
+ * active attempt; run control includes every attempt's teardown.
+ */
 export function runClaudeCodeWithRunner(
   request: ProviderChatRequest,
   handlers: BackendRunHandlers,
@@ -544,6 +570,10 @@ function runClaudeCode(request: ProviderChatRequest, handlers: BackendRunHandler
 // Route validation
 // ---------------------------------------------------------------------------
 
+/**
+ * Probes native Claude authentication/discovery and updates process-local route facts; API-key
+ * configuration can provide a ready fallback.
+ */
 export async function validateAnthropicRoute(options: {
   cwd: string;
   env?: NodeJS.ProcessEnv;

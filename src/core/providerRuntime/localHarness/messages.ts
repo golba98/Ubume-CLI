@@ -6,10 +6,12 @@ export const MAX_DISPLAY_REASONING_CHARS = 32_768;
 
 export const REASONING_TRUNCATED_PREFIX = "… Earlier reasoning omitted for memory safety.\n";
 
+/** Returns recovery guidance for a Harness memory safety stop. */
 export function harnessMemoryLimitMessage(): string {
   return "Local Harness hit a RAM safety limit (1 GiB process RAM or 768 MiB Node heap). The turn was stopped to protect your system. The partial response remains visible; your next prompt will start a fresh Harness session.";
 }
 
+/** Collects text from supported nested content blocks, ignoring malformed/non-text blocks. */
 export function textFromContent(value: unknown): string {
   if (!Array.isArray(value)) return "";
   return value
@@ -23,18 +25,25 @@ export function textFromContent(value: unknown): string {
     .join("");
 }
 
+/** Formats a nonnegative rounded token count for diagnostics. */
 export function formatTokens(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString("en-US");
 }
 
+/** Creates the Local cancellation error recognized by callers. */
 export function abortError(): DOMException {
   return new DOMException("Local request cancelled.", "AbortError");
 }
 
+/**
+ * Replaces known concrete secrets in diagnostic stderr; callers supply the active connection
+ * secrets.
+ */
 export function redactStderr(stderr: string, secrets: readonly string[]): string {
   return secrets.reduce((text, secret) => text.split(secret).join("[redacted]"), stderr).trim();
 }
 
+/** Builds backend/model/endpoint diagnostics with URL credentials removed. */
 export function describeLocalRoute(request: ProviderChatRequest): string[] {
   return [
     `Backend: ${request.resolvedLocalAgentConfig?.localBackend ?? request.route.localBackend ?? "local"}`,
@@ -43,6 +52,7 @@ export function describeLocalRoute(request: ProviderChatRequest): string[] {
   ];
 }
 
+/** Adds route-specific streaming/tool or idle-timeout recovery guidance to a model failure. */
 export function formatModelRequestFailure(
   message: string,
   code: unknown,

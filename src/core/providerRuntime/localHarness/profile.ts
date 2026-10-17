@@ -1,3 +1,9 @@
+/**
+ * Writes the Ubume-owned Harness profile and resolves lazy session scratch hints. Profiles
+ * disable unsupported hosted services and telemetry; scratch folders are created only when a
+ * tool actually targets them.
+ */
+
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,10 +27,15 @@ import {
   resolveHarnessSandboxMode,
 } from "./config.js";
 
+/** Quotes a string as a YAML single-quoted scalar, escaping embedded quotes. */
 export function yamlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+/**
+ * Returns a lazy scratch hint for writable sessions and prunes old folders on fresh sessions;
+ * failures are diagnostic-only.
+ */
 export function prepareSessionScratch(
   request: ProviderChatRequest,
   sessionId: string,
@@ -45,10 +56,15 @@ export function prepareSessionScratch(
   }
 }
 
+/** Resolves the packaged tool-policy bridge relative to this module. */
 export function bridgePath(): string {
   return fileURLToPath(new URL("../../../../bin/ubume-local-harness-bridge.js", import.meta.url));
 }
 
+/**
+ * Builds the Harness profile patch for native tool/browser support and explicitly enabled
+ * reasoning.
+ */
 export function profilePatch(supportsVision: boolean, reasoningEffortEnabled = false): string {
   const input = supportsVision ? "[text, image]" : "[text]";
   // pi-ai only accepts a reasoning effort for models that declare their
@@ -158,6 +174,10 @@ export function profilePatch(supportsVision: boolean, reasoningEffortEnabled = f
 `;
 }
 
+/**
+ * Creates or reuses the Ubume-owned profile home and writes its configuration; does not modify
+ * the user's provider CLI settings.
+ */
 export function ensureProfile(workspaceRoot: string, config: HarnessConfig): string {
   const home = join(
     resolveUbumeChatWorkspaceDir(workspaceRoot),

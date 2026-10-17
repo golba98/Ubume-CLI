@@ -1,3 +1,26 @@
+/**
+ * Main-screen transcript: finalized content in Ink `<Static>` (written once to
+ * the terminal's native scrollback) plus a live region for the running turn,
+ * followed by the notice line and the composer.
+ *
+ * Data flow: events → render items (`timelineItems.ts`) → measured rows. The
+ * static half is built incrementally by `staticTranscriptCache.ts`; the live
+ * half (running turn only) is rebuilt per flush by `buildNativeTranscriptParts`
+ * and tail-windowed by `windowLiveRows`. Rows render through `TimelineRowView`.
+ *
+ * Height constraints (all row-count math, valid only because each measured row
+ * is one terminal line):
+ * - Live output must stay strictly shorter than the terminal; otherwise Ink
+ *   clears screen + scrollback on every frame (see `liveViewportWindow.ts`).
+ * - A spacer pads short transcripts so the composer sits at the bottom.
+ *
+ * Remount boundaries: the outer component keys the inner one on `clearCount`
+ * and `repaintGeneration`, so `/clear` and width repaints get a fresh
+ * `<Static>` and a fresh static cache. Screen clearing itself is owned by
+ * `core/terminal/clearFrameBoundary.ts`, not by this component. While hidden
+ * behind an overlay (`visible === false`) the last visible events/UI state are
+ * held, so streaming updates do not rebuild the transcript rows while hidden.
+ */
 import { Box, Static, Text } from "ink";
 import type React from "react";
 import { memo, useEffect, useMemo, useRef } from "react";
@@ -81,6 +104,7 @@ function isHomeScreenState({
   );
 }
 
+// Startup tracing only: names the logo variant for the "homeRender" debug event.
 function getLogoVariantName(
   rows: readonly string[],
 ): "large" | "medium" | "compact" | "wordmark" | "none" {
@@ -266,6 +290,7 @@ function TranscriptShellInner({
     [liveWindowRows, nativeTranscript.liveRows],
   );
   const liveRowsHidden = nativeTranscript.liveRows.length - visibleLiveRows.length;
+  // Bottom-align the composer while the transcript is shorter than the screen.
   const spacerRows = Math.max(0, conversationViewportRows - committedRows - visibleLiveRows.length);
 
   useEffect(() => {
@@ -340,6 +365,7 @@ function TranscriptShellInner({
   );
 }
 
+/** Main-chat transcript + composer; remounted per `/clear` and width repaint (see below). */
 export const TranscriptShell = memo(function TranscriptShell(props: TranscriptShellProps) {
   // repaintGeneration must fold into the outer remount key (not just <Static>'s
   // own key) — Ink only reliably re-flushes already-printed <Static> content on
@@ -354,6 +380,7 @@ export const TranscriptShell = memo(function TranscriptShell(props: TranscriptSh
   );
 });
 
+/** A column of measured rows, one Ink line each. */
 function NativeRowsItem({ rows }: { rows: TimelineRow[] }) {
   return (
     <Box flexDirection="column">

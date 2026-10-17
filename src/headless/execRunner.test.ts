@@ -9,12 +9,12 @@ import {
 } from "../config/runtimeConfig.js";
 import type { BackendProvider } from "../core/providers/types.js";
 import {
-  createHeadlessExecTiming,
   HEADLESS_EXEC_PROVIDER_UNAVAILABLE,
   HEADLESS_EXEC_RUN_FAILED,
   type HeadlessExecIo,
   runHeadlessExec,
 } from "./execRunner.js";
+import { createHeadlessExecTiming } from "./execTiming.js";
 
 function createLaunchArgs(): LaunchArgs {
   return {
@@ -516,4 +516,136 @@ test("abort saves partial result and ignores late provider callbacks", async () 
   assert.equal(result.text, "partial");
   assert.equal(io.stdoutText(), "partial");
   assert(stopped);
+});
+
+const mockDependencies = (provider: BackendProvider) => ({
+  resolveLayeredConfig: () => createLayeredConfig(),
+  getBackendProvider: () => provider,
+  loadProjectInstructions: () => ({ status: "missing" as const }),
+});
+
+test("an already-aborted signal never starts the provider", async () => {
+  const io = createIo();
+  const controller = new AbortController();
+  controller.abort();
+  let started = false;
+  const provider = createProvider(() => {
+    started = true;
+    return () => {};
+  });
+  const result = await runHeadlessExec(
+    {
+      prompt: "Prompt",
+      launchArgs: createLaunchArgs(),
+      workspaceRoot: "C:\\Repo",
+      signal: controller.signal,
+    },
+    io,
+    mockDependencies(provider),
+  );
+  assert.deepEqual(result, { exitCode: 130, text: "", error: "Run interrupted." });
+  assert.equal(started, false);
+  assert.equal(io.stdoutText(), "");
+});
+
+test("denied tool approval fails with exit 3 and cancels the provider", async () => {
+  const io = createIo();
+  let canceled = 0;
+  const provider = createProvider((_prompt, _options, handlers) => {
+    queueMicrotask(async () => {
+      assert.equal(await handlers.onToolApproval?.({ id: "t1" } as never), "deny");
+      handlers.onResponse("too late");
+    });
+    return () => {
+      canceled += 1;
+    };
+  });
+  const result = await runHeadlessExec(
+    { prompt: "Prompt", launchArgs: createLaunchArgs(), workspaceRoot: "C:\\Repo" },
+    io,
+    mockDependencies(provider),
+  );
+  assert.equal(result.exitCode, 3);
+  assert.match(result.error ?? "", /requires interactive approval/);
+  assert.match(io.stderrText(), /\[ubume exec\] approval: This tool requires interactive approval/);
+  assert.equal(io.stdoutText(), "", "callbacks after settle are ignored");
+  assert.equal(canceled, 1, "cleanup runs exactly once");
+});
+
+test("a provider that throws while starting fails with exit 1", async () => {
+  const io = createIo();
+  const provider = createProvider(() => {
+    throw new Error("spawn failed");
+  });
+  const result = await runHeadlessExec(
+    { prompt: "Prompt", launchArgs: createLaunchArgs(), workspaceRoot: "C:\\Repo" },
+    io,
+    mockDependencies(provider),
+  );
+  assert.deepEqual(result, { exitCode: HEADLESS_EXEC_RUN_FAILED, text: "", error: "spawn failed" });
+  assert.match(io.stderrText(), /\[ubume exec\] error: spawn failed/);
+});
+
+test("provider errors combine message and raw output, defaulting when both are blank", async () => {
+  for (const [message, raw, expected] of [
+    ["Exited 1", "stderr tail", "Exited 1\nstderr tail"],
+    ["  ", undefined, "Provider run failed."],
+  ] as const) {
+    const io = createIo();
+    const provider = createProvider((_prompt, _options, handlers) => {
+      handlers.onError(message, raw);
+      return () => {};
+    });
+    const result = await runHeadlessExec(
+      { prompt: "Prompt", launchArgs: createLaunchArgs(), workspaceRoot: "C:\\Repo" },
+      io,
+      mockDependencies(provider),
+    );
+    assert.equal(result.exitCode, HEADLESS_EXEC_RUN_FAILED);
+    assert.equal(result.error, expected);
+  }
+});
+
+test("a final response that diverges from the stream is printed on a new line", async () => {
+  const io = createIo();
+  const provider = createProvider((_prompt, _options, handlers) => {
+    handlers.onAssistantDelta?.("Draft");
+    handlers.onResponse("Final answer");
+    return () => {};
+  });
+  const result = await runHeadlessExec(
+    { prompt: "Prompt", launchArgs: createLaunchArgs(), workspaceRoot: "C:\\Repo" },
+    io,
+    mockDependencies(provider),
+  );
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.text, "Final answer");
+  assert.equal(io.stdoutText(), "Draft\nFinal answer");
+});
+
+test("ignored config entries and failed instruction loads are reported on stderr", async () => {
+  const io = createIo();
+  const layered = createLayeredConfig();
+  layered.diagnostics.ignoredEntries = ["foo (unknown key)"];
+  const provider = createProvider((_prompt, _options, handlers) => {
+    handlers.onResponse("ok");
+    return () => {};
+  });
+  await runHeadlessExec(
+    {
+      prompt: "Prompt",
+      launchArgs: createLaunchArgs(),
+      workspaceRoot: "C:\\Repo",
+      promptPolicy: "wrapped",
+    },
+    io,
+    {
+      resolveLayeredConfig: () => layered,
+      getBackendProvider: () => provider,
+      loadProjectInstructions: () => ({ status: "error", path: "AGENTS.md", message: "EACCES" }),
+    },
+  );
+  assert.match(io.stderrText(), /\[ubume exec\] config: ignored foo \(unknown key\)/);
+  assert.match(io.stderrText(), /could not load project instructions at AGENTS\.md: EACCES/);
+  assert.equal(io.stdoutText(), "ok");
 });
