@@ -329,7 +329,7 @@ test("/resume arms the clear boundary before swapping the transcript so the logo
   const body = callbackBody(appSource, "resumeConversation");
   assert.ok(body, "resumeConversation callback should exist");
   const armIndex = body.search(
-    /armTranscriptReplacement\(\s*"src\/app\/conversation\/useConversation\.ts:resumeConversation"\s*,?\s*\)/,
+    /armTranscriptReplacement\(\s*"src\/app\/conversation\/useResumeFlows\.ts:resumeConversation"\s*,?\s*\)/,
   );
   const swapIndex = body.indexOf('type: "RESTORE_SESSION"');
   const finishIndex = body.indexOf("replacement.finish()");
