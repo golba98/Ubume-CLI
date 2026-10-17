@@ -31,3 +31,12 @@ test("concrete saved models stay usable even before discovery has loaded", () =>
   assert.equal(isUsableSavedModel("mistral-medium-3.5", []), true);
   assert.equal(isUsableSavedModel("gemini-3.8-flash", []), true);
 });
+
+test("a verified catalog is authoritative: only listed, available models are usable", () => {
+  const unavailable = { ...model("gemini-old"), available: false };
+  const catalog = [model("gemini-3.8-flash"), unavailable];
+  assert.equal(isUsableSavedModel("gemini-3.8-flash", catalog, true), true);
+  assert.equal(isUsableSavedModel("gemini-old", catalog, true), false);
+  assert.equal(isUsableSavedModel("gemini-removed", catalog, true), false);
+  assert.equal(isUsableSavedModel(undefined, catalog, true), false);
+});
