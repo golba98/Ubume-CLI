@@ -44,11 +44,20 @@ type ReasoningSourceLabel =
 
 /** Label for where Claude's reasoning options came from, shown in the reasoning picker. */
 function claudeReasoningSourceLabel(raw: unknown): ReasoningSourceLabel {
-  const metadata = raw as { source?: string; effortVerified?: boolean } | null | undefined;
-  if (metadata?.source === "claude-code" || metadata?.source === "discovered") {
+  const metadata = raw as
+    | { source?: string; effortSource?: string; effortVerified?: boolean }
+    | null
+    | undefined;
+  const source = metadata?.effortSource ?? metadata?.source;
+  if (
+    source === "claude-code" ||
+    source === "discovered" ||
+    source === "claude-code-command" ||
+    source === "claude-code-package"
+  ) {
     return "Discovered from Claude Code";
   }
-  if (metadata?.source === "settings" || metadata?.source === "config") {
+  if (source === "settings" || source === "config") {
     return "From Claude settings";
   }
   return metadata?.effortVerified === false ? "Fallback defaults; unverified" : "Fallback defaults";

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { normalizeRuntimeConfig, resolveRuntimeConfig } from "../../config/runtimeConfig.js";
+import { withEnvironment } from "../../test/environment.js";
 import { buildClaudeSpawnSpec } from "../executables/executableResolver.js";
 import type { CommandResult, runCommand } from "../process/commandRunner.js";
 import {
@@ -872,57 +873,60 @@ test("runClaudeCodeWithRunner: known stream-json verbose error falls back once t
   );
 });
 
-test("runClaudeCodeWithRunner: invalid Claude effort falls back to model default once", async () => {
+test("runClaudeCodeWithRunner: rejected max effort fails once without downgrading", async () => {
   resetAnthropicRouteValidationCacheForTests(VERIFIED_EFFORT_FIXTURE);
   const calls: string[][] = [];
-  const progress: string[] = [];
-  const response = await new Promise<string>((resolve, reject) => {
+  const request = buildRequest({
+    route: {
+      providerId: "anthropic",
+      modelId: "opus",
+      backendKind: "claude-code-auth",
+      reasoning: "max",
+    },
+  });
+  const error = await new Promise<string>((resolve) => {
     runClaudeCodeWithRunner(
-      buildRequest({
-        route: {
-          providerId: "anthropic",
-          modelId: "opus",
-          backendKind: "claude-code-auth",
-          reasoning: "max",
-        },
-        prompt: "Hi",
-      }),
+      request,
       {
-        onResponse: resolve,
-        onError: reject,
-        onProgress: (update) => progress.push(update.text),
+        onResponse: () => assert.fail("must not retry at a lower effort"),
+        onError: resolve,
       },
-      mockRunCommand((_executable, args) => {
+      mockRunCommand((_exe, args) => {
         calls.push(args);
-        if (args.includes("--effort") && args[args.indexOf("--effort") + 1] === "max") {
-          return commandResult({
-            status: "failed",
-            exitCode: 2,
-            stderr:
-              "Invalid effort max for selected model. Valid efforts: low, medium, high, xhigh.",
-            userMessage: "Invalid effort max for selected model.",
-          });
-        }
-        return commandResult({ stdout: "Hi from xhigh.\n" });
+        return commandResult({
+          status: "failed",
+          exitCode: 2,
+          stderr: "Invalid effort max",
+          userMessage: "Invalid effort max",
+        });
       }),
       "claude",
     );
   });
-
-  assert.equal(response, "Hi from xhigh.");
-  assert.equal(calls.length, 2, "must retry only once");
-  assert.deepEqual(
-    calls[0]?.slice(calls[0].indexOf("--effort"), calls[0].indexOf("--effort") + 2),
-    ["--effort", "max"],
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.[calls[0].indexOf("--effort") + 1], "max");
+  assert.match(error, /did not retry at a lower level/);
+  assert.equal(request.route.reasoning, "max");
+  assert.equal(
+    anthropicRuntime
+      .discoverModels()
+      .models.find((model) => model.modelId === "opus")
+      ?.supportedReasoningLevels?.some((level) => level.id === "max"),
+    false,
   );
-  assert.deepEqual(
-    calls[1]?.slice(calls[1].indexOf("--effort"), calls[1].indexOf("--effort") + 2),
-    ["--effort", "xhigh"],
+  assert.equal(
+    anthropicRuntime
+      .discoverModels()
+      .models.find((model) => model.modelId === "sonnet")
+      ?.supportedReasoningLevels?.some((level) => level.id === "max"),
+    true,
   );
-  assert.ok(progress.some((line) => /retrying once with --effort xhigh/i.test(line)));
 });
 
 test("runClaudeCodeWithRunner: invalid medium effort reports error without looping", async () => {
+  resetAnthropicRouteValidationCacheForTests([
+    { ...VERIFIED_EFFORT_FIXTURE[0]!, id: "haiku", modelId: "haiku" },
+  ]);
   const calls: string[][] = [];
   const error = await new Promise<{ message: string; rawOutput?: string }>((resolve) => {
     runClaudeCodeWithRunner(
@@ -957,6 +961,7 @@ test("runClaudeCodeWithRunner: invalid medium effort reports error without loopi
 });
 
 test("runClaudeCodeWithRunner: non-retryable CLI argument error reports safe command args once", async () => {
+  resetAnthropicRouteValidationCacheForTests(VERIFIED_EFFORT_FIXTURE);
   const calls: string[][] = [];
   const error = await new Promise<{ message: string; rawOutput?: string }>((resolve) => {
     runClaudeCodeWithRunner(
@@ -1066,7 +1071,11 @@ test("integration: validation stores resolved exe used by subsequent execution",
       },
       prompt: "Hello",
     });
-    const args = buildClaudeCodeArgs(request);
+    assert.throws(() => buildClaudeCodeArgs(request), /does not advertise effort/);
+    const args = buildClaudeCodeArgs({
+      ...request,
+      route: { ...request.route, reasoning: undefined },
+    });
     assert.ok(args.includes("-p"));
     assert.ok(args.includes("claude-sonnet-4-20250514"));
     assert.equal(
@@ -1329,6 +1338,7 @@ test("refreshModels keeps previous good capability data on failure", async () =>
 });
 
 test("buildClaudeCodeArgs uses short alias 'sonnet' directly as --model arg", () => {
+  resetAnthropicRouteValidationCacheForTests(VERIFIED_EFFORT_FIXTURE);
   const request = buildRequest({
     route: {
       providerId: "anthropic",
@@ -1422,4 +1432,98 @@ test("Claude tool transcript captures commands, full results and failures", () =
   assert.equal(activities[1]?.command, "cat example.ts");
   assert.equal(activities[1]?.status, "failed");
   assert.equal(activities[1]?.output, "line one\nline two");
+});
+
+test("Claude explicit max survives inherited effort and the compatibility retry", async () => {
+  await withEnvironment({ CLAUDE_CODE_EFFORT_LEVEL: "high" }, async () => {
+    const calls: Parameters<typeof runCommand>[0][] = [];
+    const request = buildRequest({
+      modelDescriptor: VERIFIED_EFFORT_FIXTURE[0],
+      route: {
+        providerId: "anthropic",
+        modelId: "sonnet",
+        backendKind: "claude-code-auth",
+        reasoning: "max",
+      },
+    });
+    const response = await new Promise<string>((resolve, reject) => {
+      runClaudeCodeWithRunner(
+        request,
+        { onResponse: resolve, onError: reject },
+        mockRunCommand(
+          (_exe, args) =>
+            args.includes("stream-json")
+              ? commandResult({
+                  status: "failed",
+                  exitCode: 1,
+                  stderr: "stream-json requires --verbose",
+                })
+              : commandResult({ stdout: "Done" }),
+          (spec) => calls.push(spec),
+        ),
+        "claude",
+      );
+    });
+    assert.equal(response, "Done");
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(call.args[call.args.indexOf("--effort") + 1], "max");
+      assert.equal(call.env?.CLAUDE_CODE_EFFORT_LEVEL, "max");
+    }
+    assert.equal(process.env.CLAUDE_CODE_EFFORT_LEVEL, "high");
+  });
+});
+
+test("Claude never silently omits an unsupported requested effort", async () => {
+  const request = buildRequest({
+    modelDescriptor: {
+      ...VERIFIED_EFFORT_FIXTURE[0]!,
+      supportedReasoningLevels: [],
+      reasoningControl: { kind: "unsupported" },
+    },
+  });
+  assert.throws(() => buildClaudeCodeArgs(request), /does not advertise effort/);
+  let called = false;
+  const error = await new Promise<string>((resolve) => {
+    runClaudeCodeWithRunner(
+      request,
+      { onResponse: () => assert.fail("unexpected success"), onError: resolve },
+      mockRunCommand(() => {
+        called = true;
+        return commandResult({});
+      }),
+      "claude",
+    );
+  });
+  assert.equal(called, false);
+  assert.match(error, /select a supported effort/);
+});
+
+test("a late Claude effort rejection cannot amend replacement model metadata", async () => {
+  const descriptor = { ...VERIFIED_EFFORT_FIXTURE[0]! };
+  const replacement = { ...descriptor };
+  resetAnthropicRouteValidationCacheForTests([replacement]);
+  await new Promise<void>((resolve, reject) => {
+    runClaudeCodeWithRunner(
+      buildRequest({
+        modelDescriptor: descriptor,
+        route: {
+          providerId: "anthropic",
+          modelId: "sonnet",
+          backendKind: "claude-code-auth",
+          reasoning: "max",
+        },
+      }),
+      { onResponse: () => reject(new Error("unexpected success")), onError: () => resolve() },
+      mockRunCommand(
+        commandResult({ status: "failed", exitCode: 2, userMessage: "Invalid effort max" }),
+      ),
+      "claude",
+    );
+  });
+  assert.equal(anthropicRuntime.discoverModels().models[0], replacement);
+  assert.equal(
+    replacement.supportedReasoningLevels?.some((level) => level.id === "max"),
+    true,
+  );
 });

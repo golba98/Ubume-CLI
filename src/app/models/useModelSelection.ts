@@ -360,7 +360,13 @@ export function useModelSelection(context: UseModelSelectionContext) {
                 nextModel,
               );
         const capability = findModelCapability(routeCapabilities, nextModel);
-        if (reasoningExcludedByModel(capability, nextReasoning)) {
+        if (
+          providerId === "anthropic" &&
+          nextReasoning &&
+          capability?.supportedReasoningLevels?.length
+            ? reasoningNotAdvertised(capability, nextReasoning)
+            : reasoningExcludedByModel(capability, nextReasoning)
+        ) {
           recover(
             `${nextModel} does not support the selected reasoning setting. Choose a model and supported reasoning setting.`,
           );
@@ -371,6 +377,16 @@ export function useModelSelection(context: UseModelSelectionContext) {
           nextReasoning,
           routeCapabilities,
         );
+        // Switching from another provider can carry its global effort into a
+        // Claude model with no configurable control. The picker presents that
+        // model as provider-managed; do not persist an inherited effort for it.
+        if (
+          providerId === "anthropic" &&
+          !capability?.reasoningControl &&
+          !capability?.supportedReasoningLevels?.length
+        ) {
+          route.reasoning = "";
+        }
 
         // Step 3: validate with the provider.
         traceInputDebug(

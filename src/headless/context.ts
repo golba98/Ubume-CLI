@@ -104,6 +104,7 @@ function selectProviderId(
  * Reasoning follows the same chain, with `-c model_reasoning_effort=…` taking priority.
  * Google takes no reasoning default, and an explicit Google model clears inherited
  * reasoning, because AGY models carry their own effort.
+ * Claude uses provider-managed effort when no Claude preference was selected.
  */
 function buildProviderRoute(
   selectedId: ProviderId,
@@ -139,7 +140,7 @@ function buildProviderRoute(
       savedRoute?.reasoning ??
       workspaceRoute?.reasoning ??
       override?.currentReasoning ??
-      (isGoogle ? undefined : base.reasoningLevel);
+      (isGoogle || selectedId === "anthropic" ? undefined : base.reasoningLevel);
 
   return {
     providerId: selectedId,

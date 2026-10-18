@@ -629,3 +629,80 @@ test("resolveActiveProviderRoute preserves stale Anthropic selection for explici
     resetAnthropicRouteValidationCacheForTests();
   });
 });
+
+test("Anthropic routing preserves selected effort and rejects stale unsupported preferences", () => {
+  const runtime = getProviderRuntime("anthropic");
+  const originalDiscover = runtime.discoverModels;
+  const originalRun = runtime.run;
+  const levels = ["high", "xhigh", "max"].map((id) => ({ id, label: id, description: null }));
+  const model: ProviderModel = {
+    id: "claude-test",
+    modelId: "claude-test",
+    label: "Claude Test",
+    source: "discovered",
+    description: null,
+    defaultReasoningLevel: "high",
+    supportedReasoningLevels: levels,
+    reasoningControl: { kind: "levels", levels, default: "high", transport: "parameter" },
+  };
+  const sent: ProviderChatRequest[] = [];
+  const errors: string[] = [];
+  providerCatalog.invalidate("anthropic");
+  runtime.discoverModels = () => ({
+    status: "ready",
+    providerId: "anthropic",
+    backendKind: "claude-code-auth",
+    models: [model],
+  });
+  runtime.run = (request) => {
+    sent.push(request);
+    return () => {};
+  };
+  const backend: BackendProvider = {
+    id: "codex-subprocess",
+    label: "Fixture",
+    description: "Fixture",
+    authState: "delegated",
+    authLabel: "Fixture",
+    statusMessage: "Fixture",
+    supportsModels: () => true,
+  };
+  const send = (reasoning: string) =>
+    createRoutedProvider(
+      {
+        providerId: "anthropic",
+        modelId: model.modelId,
+        reasoning,
+        backendKind: "claude-code-auth",
+      },
+      backend,
+      {},
+    ).run!(
+      "Task",
+      { runtime: resolveRuntimeConfig(normalizeRuntimeConfig({})), workspaceRoot: "/tmp" },
+      { onResponse: () => {}, onError: (message) => errors.push(message) },
+    );
+  try {
+    send("max");
+    send("xhigh");
+    assert.deepEqual(
+      sent.map((request) => request.route.reasoning),
+      ["max", "xhigh"],
+    );
+    send("ultra");
+    assert.equal(sent.length, 2);
+    assert.match(errors[0]!, /does not advertise effort/);
+    for (const kind of ["fixed", "unsupported", "unknown"] as const) {
+      model.reasoningControl = kind === "fixed" ? { kind, label: "Provider managed" } : { kind };
+      send("max");
+      assert.equal(sent.length, 2);
+    }
+    send("");
+    assert.equal(sent.length, 3);
+    assert.equal(sent[2]?.route.reasoning, undefined);
+  } finally {
+    runtime.discoverModels = originalDiscover;
+    runtime.run = originalRun;
+    providerCatalog.invalidate("anthropic");
+  }
+});

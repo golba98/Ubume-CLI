@@ -45,6 +45,7 @@ export function catalogContextKey(provider: ProviderId, context: CatalogContext)
     ...connection
   } = config ?? {};
   const home = getHomeDir();
+  const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(home, ".claude");
   const paths =
     provider === "mistral"
       ? [
@@ -56,7 +57,21 @@ export function catalogContextKey(provider: ProviderId, context: CatalogContext)
       : provider === "google"
         ? [join(home, ".gemini", "antigravity-cli", "settings.json")]
         : provider === "anthropic"
-          ? [join(home, ".claude", ".credentials.json"), join(home, ".claude", "settings.json")]
+          ? [
+              join(claudeDir, ".credentials.json"),
+              join(claudeDir, "settings.json"),
+              join(context.cwd, ".claude", "settings.json"),
+              join(context.cwd, ".claude", "settings.local.json"),
+              process.platform === "win32"
+                ? join(
+                    process.env.ProgramFiles ?? "C:\\Program Files",
+                    "ClaudeCode",
+                    "managed-settings.json",
+                  )
+                : process.platform === "darwin"
+                  ? "/Library/Application Support/ClaudeCode/managed-settings.json"
+                  : "/etc/claude-code/managed-settings.json",
+            ]
           : provider === "openai"
             ? [join(getCodexHome(), "auth.json")]
             : [];
@@ -88,6 +103,18 @@ export function catalogContextKey(provider: ProviderId, context: CatalogContext)
           provider === "google" ? process.env.PATH : undefined,
           process.env.ANTHROPIC_BASE_URL,
           process.env.ANTHROPIC_API_KEY,
+          provider === "anthropic"
+            ? [
+                process.env.CLAUDE_CONFIG_DIR,
+                process.env.CLAUDE_CODE_EFFORT_LEVEL,
+                process.env.CLAUDE_CODE_USE_BEDROCK,
+                process.env.CLAUDE_CODE_USE_VERTEX,
+                process.env.CLAUDE_CODE_USE_FOUNDRY,
+                ...["FABLE", "OPUS", "SONNET", "HAIKU"].map(
+                  (family) => process.env[`ANTHROPIC_DEFAULT_${family}_MODEL`],
+                ),
+              ]
+            : undefined,
           process.env.CODEX_HOME,
           process.env.UBUME_LOCAL_BASE_URL,
           process.env.OPENAI_BASE_URL,

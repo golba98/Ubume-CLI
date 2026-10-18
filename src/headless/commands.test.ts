@@ -321,6 +321,17 @@ test("headless execution honors workspace provider selection and saved routes", 
     assert.equal(first.status, 0, first.stderr);
     const result = JSON.parse(first.stdout);
     assert.equal(result.data.text, "anthropic fixture answer");
+    const saved = JSON.parse(
+      readFileSync(
+        join(f.chatRoot, "conversations", result.data.sessionId, "snapshot.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(
+      saved.metadata.reasoning,
+      undefined,
+      "a Claude route must not inherit OpenAI's default High effort",
+    );
     writeFileSync(
       join(f.dataRoot, "providers.json"),
       JSON.stringify({
@@ -592,4 +603,38 @@ test("inspection argument parsing separates flags, values and positionals", () =
   assert.deepEqual([...parsed.flags], ["--json"]);
   assert.throws(() => parseInspectionArgs("status", ["--probe"]), /Unknown option: --probe/);
   assert.throws(() => parseInspectionArgs("models", ["--provider", "--json"]), /Missing value/);
+});
+
+test("headless Claude discovers explicit high efforts and sends them without downgrading", () => {
+  const f = fixture();
+  try {
+    f.env.ANTHROPIC_API_KEY = "";
+    f.env.UBUME_TEST_ARGV_LOG = join(f.root, "claude-args.jsonl");
+    writeFileSync(
+      join(f.dataRoot, "providers.json"),
+      JSON.stringify({
+        activeRoute: {
+          providerId: "anthropic",
+          modelId: "sonnet",
+          backendKind: "claude-code-auth",
+        },
+        providers: { anthropic: { claudeCommandPath: provider } },
+      }),
+    );
+    for (const effort of ["xhigh", "max"]) {
+      const result = f.run(["exec", "--reasoning", effort, "Plan the fix", "--json"]);
+      assert.equal(result.status, 0, result.stderr);
+      const args: string[] = JSON.parse(
+        readFileSync(f.env.UBUME_TEST_ARGV_LOG!, "utf8").trim().split("\n").at(-1)!,
+      );
+      assert.equal(args[args.indexOf("--effort") + 1], effort);
+    }
+    const before = readFileSync(f.env.UBUME_TEST_ARGV_LOG!, "utf8");
+    const invalid = f.run(["exec", "--reasoning", "ultra", "Do not run", "--json"]);
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /does not advertise effort/);
+    assert.equal(readFileSync(f.env.UBUME_TEST_ARGV_LOG!, "utf8"), before);
+  } finally {
+    f.close();
+  }
 });

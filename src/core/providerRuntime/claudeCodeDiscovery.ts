@@ -12,8 +12,12 @@ import {
 import type { CommandResult } from "../process/commandRunner.js";
 import { runCommand } from "../process/commandRunner.js";
 import { isRecord } from "../shared/values.js";
-import { ANTHROPIC_FALLBACK_MODELS, getClaudeCodeEffortLevels } from "./models.js";
-import type { ProviderModel } from "./types.js";
+import {
+  ANTHROPIC_FALLBACK_MODELS,
+  getClaudeCodeEffortLevels,
+  getKnownClaudeCodeEffort,
+} from "./models.js";
+import type { ProviderModel, ReasoningControl } from "./types.js";
 
 type CommandRunner = typeof runCommand;
 
@@ -55,6 +59,7 @@ export interface ClaudeCodeModel {
   effortSource: ClaudeCodeModelSource;
   effortVerified: boolean;
   description?: string;
+  reasoningControl?: ReasoningControl;
 }
 
 export interface ClaudeCodeCapabilityDiscovery {
@@ -90,6 +95,9 @@ interface ClaudeSettingsInfo {
   effortLevel?: string;
   availableModels?: readonly string[];
   models?: readonly ClaudeCodeModel[];
+  env?: Record<string, unknown>;
+  modelSettings?: Record<string, unknown>;
+  maxEffortLevel?: string;
 }
 
 function readString(value: unknown): string | undefined {
@@ -126,12 +134,17 @@ export function parseClaudeAuthStatus(stdout: string): ClaudeCodeAuthInfo | null
  * levels.
  */
 export function parseClaudeEffortLevelsFromHelp(helpText: string): string[] | null {
-  const match = helpText.match(/^\s*--effort\b[^\r\n]*\(([^)]+)\)/im);
+  // Commander wraps option descriptions. Stop at the next option so another
+  // option's parenthesized choices cannot become effort capabilities.
+  const section = helpText.match(
+    /^[ \t]*--effort\b[^\r\n]*(?:\r?\n(?![ \t]*-|\S)[^\r\n]*)*/im,
+  )?.[0];
+  const match = section?.match(/\(([^)]+)\)/);
   if (!match?.[1]) return null;
   const levels = match[1]
     .split(",")
     .map((level) => level.trim())
-    .filter(Boolean);
+    .filter((level) => /^[a-z][a-z0-9_-]*$/.test(level));
   return levels.length > 0 ? levels : null;
 }
 
@@ -151,7 +164,7 @@ function fallbackModelByFamily(family: string): ProviderModel | undefined {
 
 function fallbackEffortIds(family: string): string[] {
   const fallback = fallbackModelByFamily(family);
-  return fallback?.supportedReasoningLevels?.map((level) => level.id) ?? ["low", "medium", "high"];
+  return fallback?.supportedReasoningLevels?.map((level) => level.id) ?? [];
 }
 
 function fallbackDefaultEffort(family: string): string {
@@ -216,6 +229,8 @@ function normalizeClaudeDisplayLabel(value: string, rawLabel?: string): string {
 }
 
 function normalizeEffortIds(value: unknown, fallbackFamily: string): string[] {
+  if (Array.isArray(value))
+    return [...new Set(value.map(readString).filter((id): id is string => Boolean(id)))];
   const fromArray = readStringArray(value);
   return fromArray && fromArray.length > 0 ? fromArray : fallbackEffortIds(fallbackFamily);
 }
@@ -257,8 +272,19 @@ function normalizeClaudeCodeModel(
     readString(raw.defaultEffort ?? raw.default_effort ?? raw.effortLevel ?? raw.effort_level) ??
     fallbackDefaultEffort(family);
   const hasRawEffortArray = Array.isArray(rawEffortArray);
+  const rawControl = isRecord(raw.reasoningControl) ? raw.reasoningControl : null;
+  const reasoningControl: ReasoningControl | undefined =
+    rawControl?.kind === "fixed" && typeof rawControl.label === "string"
+      ? { kind: "fixed", label: rawControl.label }
+      : rawControl?.kind === "unsupported" || rawControl?.kind === "unknown"
+        ? { kind: rawControl.kind }
+        : hasRawEffortArray && effortLevels.length === 0
+          ? { kind: "unsupported" }
+          : undefined;
 
+  const canonicalId = readString(raw.canonicalId ?? raw.canonical_id) ?? value;
   const version =
+    versionFromModelText(canonicalId) ??
     versionFromModelText(value) ??
     versionFromModelText(readString(raw.label ?? raw.displayName ?? raw.display_name) ?? "");
 
@@ -269,7 +295,7 @@ function normalizeClaudeCodeModel(
     ),
     family,
     value,
-    canonicalId: readString(raw.canonicalId ?? raw.canonical_id) ?? value,
+    canonicalId,
     source,
     ...(version ? { version } : {}),
     isFallback: source === "fallback",
@@ -286,6 +312,7 @@ function normalizeClaudeCodeModel(
         source === "claude-code-package") &&
       hasRawEffortArray,
     description: readString(raw.description),
+    reasoningControl,
   };
 }
 
@@ -336,7 +363,8 @@ function applyAvailableModelAllowlist(
 
 function defaultClaudeSettingsPath(): string | null {
   const home = process.env.USERPROFILE ?? process.env.HOME;
-  return home ? join(home, ".claude", "settings.json") : null;
+  const configDir = process.env.CLAUDE_CONFIG_DIR || (home ? join(home, ".claude") : null);
+  return configDir ? join(configDir, "settings.json") : null;
 }
 
 function readClaudeSettings(settingsPath: string | null | undefined): ClaudeSettingsInfo | null {
@@ -361,10 +389,111 @@ function readClaudeSettings(settingsPath: string | null | undefined): ClaudeSett
       effortLevel: readString(parsed.effortLevel ?? parsed.effort_level),
       availableModels,
       models: overrideModels,
+      env: isRecord(parsed.env) ? parsed.env : undefined,
+      modelSettings: isRecord(parsed.modelSettings) ? parsed.modelSettings : undefined,
+      maxEffortLevel: readString(parsed.maxEffortLevel),
     };
   } catch {
     return null;
   }
+}
+
+function readEffectiveClaudeSettings(
+  options: DiscoverClaudeCodeCapabilitiesOptions,
+): ClaudeSettingsInfo | null {
+  // An explicit path (including null) is also the isolation boundary for callers/tests.
+  if (options.settingsPath !== undefined) return readClaudeSettings(options.settingsPath);
+  const managedPath =
+    process.platform === "win32"
+      ? join(process.env.ProgramFiles ?? "C:\\Program Files", "ClaudeCode", "managed-settings.json")
+      : process.platform === "darwin"
+        ? "/Library/Application Support/ClaudeCode/managed-settings.json"
+        : "/etc/claude-code/managed-settings.json";
+  const sources = [
+    readClaudeSettings(undefined),
+    readClaudeSettings(join(options.cwd, ".claude", "settings.json")),
+    readClaudeSettings(join(options.cwd, ".claude", "settings.local.json")),
+    readClaudeSettings(managedPath),
+  ].filter((source): source is ClaudeSettingsInfo => source !== null);
+  return sources.reduce<ClaudeSettingsInfo | null>((previous, source) => {
+    const caps = [previous?.maxEffortLevel, source.maxEffortLevel].filter((id): id is string =>
+      Boolean(id),
+    );
+    const order = ["low", "medium", "high", "xhigh", "max"];
+    return {
+      ...previous,
+      ...source,
+      model: source.model ?? previous?.model,
+      effortLevel: source.effortLevel ?? previous?.effortLevel,
+      availableModels: source.availableModels ?? previous?.availableModels,
+      models: source.models?.length ? source.models : previous?.models,
+      env: { ...previous?.env, ...source.env },
+      modelSettings: { ...previous?.modelSettings, ...source.modelSettings },
+      maxEffortLevel: caps
+        .filter((id) => order.includes(id))
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b))[0],
+    };
+  }, null);
+}
+
+function applyClaudeEffortCapabilities(
+  model: ClaudeCodeModel,
+  cliLevels: readonly string[] | null,
+  settings: ClaudeSettingsInfo | null,
+): ClaudeCodeModel {
+  const known = getKnownClaudeCodeEffort(model.canonicalId);
+  const explicit = model.effortSource !== "fallback";
+  // CLI-wide choices only establish transport support. Never use them alone
+  // as model capabilities, including for unversioned fallback aliases.
+  let levels = explicit
+    ? [...model.effortLevels]
+    : known && cliLevels
+      ? known.levels.filter((id) => cliLevels.includes(id))
+      : [];
+  const cap = settings?.maxEffortLevel;
+  const order = ["low", "medium", "high", "xhigh", "max"];
+  if (cap && order.includes(cap))
+    levels = levels.filter((id) => order.includes(id) && order.indexOf(id) <= order.indexOf(cap));
+  if (model.reasoningControl && model.reasoningControl.kind !== "levels") levels = [];
+  const perModel = settings?.modelSettings?.[model.canonicalId];
+  const preferred =
+    (isRecord(perModel) ? readString(perModel.effortLevel) : undefined) ??
+    settings?.effortLevel ??
+    (explicit ? model.defaultEffort : known?.default) ??
+    "";
+  const defaultEffort = levels.includes(preferred)
+    ? preferred
+    : explicit && levels.includes(model.defaultEffort)
+      ? model.defaultEffort
+      : levels.includes(known?.default ?? "")
+        ? known!.default
+        : (levels[0] ?? "");
+  return {
+    ...model,
+    effortLevels: levels,
+    defaultEffort,
+    effortSource: explicit
+      ? model.effortSource
+      : levels.length
+        ? "claude-code-command"
+        : "fallback",
+    effortVerified: explicit ? model.effortVerified : Boolean(known && cliLevels),
+    reasoningControl:
+      model.reasoningControl ??
+      (levels.length
+        ? {
+            kind: "levels",
+            levels: getClaudeCodeEffortLevels(levels),
+            default: defaultEffort,
+            transport: "parameter",
+          }
+        : {
+            kind:
+              known?.levels.length === 0 || (explicit && !levels.length)
+                ? "unsupported"
+                : "unknown",
+          }),
+  };
 }
 
 async function runClaudeCommand(
@@ -503,7 +632,16 @@ function resolveAliasModelsWithPackageMetadata(
   const byFamily = new Map(packageMetadata.models.map((model) => [model.family, model]));
   return models.map((model) => {
     if (!isVagueClaudeFamilyLabel(model.value) || model.version) return model;
-    return byFamily.get(model.family) ?? model;
+    const resolved = byFamily.get(model.family);
+    if (!resolved) return model;
+    return model.effortSource === "fallback" && !model.reasoningControl
+      ? resolved
+      : {
+          ...model,
+          canonicalId: resolved.canonicalId,
+          version: resolved.version,
+          label: resolved.label,
+        };
   });
 }
 
@@ -637,8 +775,18 @@ export function claudeCodeModelsToProviderModels(
             model.source === "claude-code-config"
           ? `${model.label} - From Claude settings`
           : `${model.label} - ${model.discoveryKind === "aliases" ? "Claude Code alias resolved" : "Discovered from Claude Code"} (${model.source})`),
-    defaultReasoningLevel: model.defaultEffort,
+    defaultReasoningLevel: model.effortLevels.length ? model.defaultEffort : null,
     supportedReasoningLevels: getClaudeCodeEffortLevels(model.effortLevels),
+    reasoningControl:
+      model.reasoningControl ??
+      (model.effortLevels.length
+        ? {
+            kind: "levels",
+            levels: getClaudeCodeEffortLevels(model.effortLevels),
+            default: model.defaultEffort,
+            transport: "parameter",
+          }
+        : { kind: "unknown" }),
     source: model.source,
     canonicalId: model.canonicalId,
     family: model.family,
@@ -678,7 +826,7 @@ export async function discoverClaudeCodeCapabilities(
       : null;
   const auth: ClaudeCodeAuthInfo = authJson?.loggedIn === true ? authJson : { loggedIn: false };
 
-  const settings = readClaudeSettings(options.settingsPath);
+  const settings = readEffectiveClaudeSettings(options);
   const helpResult = await runClaudeCommand(
     resolvedCommand,
     ["--help"],
@@ -744,24 +892,25 @@ export async function discoverClaudeCodeCapabilities(
   }
 
   models = applyAvailableModelAllowlist(dedupeModels(models), settings?.availableModels);
-  if (cliEffortLevels) {
-    models = models.map((model) => {
-      if (model.effortSource !== "fallback") return model;
-      const preferredDefault =
-        settings?.effortLevel && cliEffortLevels.includes(settings.effortLevel)
-          ? settings.effortLevel
-          : model.defaultEffort;
-      return {
+  models = models.map((model) => {
+    const pinKey = `ANTHROPIC_DEFAULT_${model.family.toUpperCase()}_MODEL`;
+    const pinned = readString(settings?.env?.[pinKey]) ?? readString(process.env[pinKey]);
+    const thirdParty =
+      /bedrock|vertex|foundry/i.test(auth.apiProvider ?? "") ||
+      ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].some(
+        (key) => process.env[key] === "1" || settings?.env?.[key] === "1",
+      );
+    if (isVagueClaudeFamilyLabel(model.value) && (pinned || thirdParty)) {
+      const canonicalId = pinned ?? model.value;
+      model = {
         ...model,
-        effortLevels: cliEffortLevels,
-        defaultEffort: cliEffortLevels.includes(preferredDefault)
-          ? preferredDefault
-          : (cliEffortLevels[0] ?? "high"),
-        effortSource: "claude-code-command",
-        effortVerified: true,
+        canonicalId,
+        version: versionFromModelText(canonicalId) ?? undefined,
+        label: normalizeClaudeDisplayLabel(canonicalId),
       };
-    });
-  }
+    }
+    return applyClaudeEffortCapabilities(model, cliEffortLevels, settings);
+  });
 
   return {
     provider: "anthropic",
@@ -800,15 +949,7 @@ export function getClaudeModelDefaultEffort(
   modelId: string,
   models: readonly ProviderModel[],
 ): string {
-  const normalized = modelId.toLowerCase();
-  const model = models.find(
-    (item) =>
-      item.modelId.toLowerCase() === normalized ||
-      item.id.toLowerCase() === normalized ||
-      item.family?.toLowerCase() === normalized ||
-      item.canonicalId?.toLowerCase() === normalized ||
-      (item.family ? normalized.includes(item.family.toLowerCase()) : false),
-  );
+  const model = findClaudeModel(modelId, models);
   return model?.defaultReasoningLevel ?? "medium";
 }
 
@@ -822,14 +963,28 @@ export function modelSupportsClaudeEffort(
   models: readonly ProviderModel[],
 ): boolean {
   if (!effort) return false;
-  const normalized = modelId.toLowerCase();
-  const model = models.find(
-    (item) =>
-      item.modelId.toLowerCase() === normalized ||
-      item.id.toLowerCase() === normalized ||
-      item.family?.toLowerCase() === normalized ||
-      item.canonicalId?.toLowerCase() === normalized ||
-      (item.family ? normalized.includes(item.family.toLowerCase()) : false),
-  );
+  const model = findClaudeModel(modelId, models);
+  if (model?.reasoningControl)
+    return (
+      model.reasoningControl.kind === "levels" &&
+      model.reasoningControl.levels.some((level) => level.id === effort)
+    );
   return Boolean(model?.supportedReasoningLevels?.some((level) => level.id === effort));
+}
+
+/** Exact native identities win; a versioned model never borrows a family's levels. */
+export function findClaudeModel(
+  modelId: string,
+  models: readonly ProviderModel[],
+): ProviderModel | undefined {
+  const normalized = modelId.toLowerCase();
+  return (
+    models.find(
+      (item) => item.modelId.toLowerCase() === normalized || item.id.toLowerCase() === normalized,
+    ) ??
+    models.find((item) => item.canonicalId?.toLowerCase() === normalized) ??
+    (isVagueClaudeFamilyLabel(normalized)
+      ? models.find((item) => item.family?.toLowerCase() === normalized)
+      : undefined)
+  );
 }

@@ -290,6 +290,17 @@ export interface ModelPickerSelection {
   cursor: number;
   identity: string | undefined;
   reasoning: string;
+  /** Claude intent survives stale capability snapshots until fresh discovery arrives. */
+  requestedReasoning?: string;
+}
+
+function isClaudeModel(model: CodexModelCapability | undefined): boolean {
+  const raw = model?.raw as { providerId?: string; effortSource?: string; source?: string } | null;
+  return (
+    raw?.providerId === "anthropic" ||
+    raw?.effortSource !== undefined ||
+    Boolean(raw?.source?.startsWith("claude-code"))
+  );
 }
 
 export type ModelPickerSelectionAction =
@@ -330,6 +341,7 @@ export function initModelPickerSelection(params: {
       model,
       getVariantReasoning(model, currentModel) ?? currentReasoning,
     ),
+    ...(isClaudeModel(model) ? { requestedReasoning: currentReasoning } : {}),
   };
 }
 
@@ -341,10 +353,14 @@ function highlight(
 ): ModelPickerSelection {
   const cursor = Math.max(0, Math.min(models.length - 1, index));
   const model = models[cursor];
+  const requested =
+    model?.reasoningPreference ??
+    (isClaudeModel(model) ? (state.requestedReasoning ?? state.reasoning) : state.reasoning);
   return {
     cursor,
     identity: model?.model,
-    reasoning: normalizeDraftReasoning(model, model?.reasoningPreference ?? state.reasoning),
+    reasoning: normalizeDraftReasoning(model, requested),
+    ...(isClaudeModel(model) ? { requestedReasoning: requested } : {}),
   };
 }
 
@@ -369,7 +385,11 @@ export function modelPickerSelectionReducer(
       return highlight(state, action.models, action.index);
 
     case "setReasoning":
-      return { ...state, reasoning: action.reasoning };
+      return {
+        ...state,
+        reasoning: action.reasoning,
+        ...(state.requestedReasoning !== undefined ? { requestedReasoning: action.reasoning } : {}),
+      };
 
     case "stepReasoning": {
       const model = action.models[state.cursor];
@@ -384,7 +404,12 @@ export function modelPickerSelectionReducer(
       if (levels.length <= 1) return state;
       const currentIndex = getReasoningIndex(levels, state.reasoning);
       const nextIndex = Math.max(0, Math.min(levels.length - 1, currentIndex + action.direction));
-      return { ...state, reasoning: levels[nextIndex]?.id ?? state.reasoning };
+      const reasoning = levels[nextIndex]?.id ?? state.reasoning;
+      return {
+        ...state,
+        reasoning,
+        ...(isClaudeModel(model) ? { requestedReasoning: reasoning } : {}),
+      };
     }
 
     case "sync": {
@@ -398,15 +423,16 @@ export function modelPickerSelectionReducer(
       const cursor =
         identityIndex >= 0 ? identityIndex : Math.min(Math.max(0, state.cursor), models.length - 1);
       const model = models[cursor];
+      const requested = activeChanged
+        ? (getVariantReasoning(model, currentModel) ?? currentReasoning)
+        : isClaudeModel(model)
+          ? (state.requestedReasoning ?? state.reasoning)
+          : state.reasoning;
       return {
         cursor,
         identity: model?.model,
-        reasoning: normalizeDraftReasoning(
-          model,
-          activeChanged
-            ? (getVariantReasoning(model, currentModel) ?? currentReasoning)
-            : state.reasoning,
-        ),
+        reasoning: normalizeDraftReasoning(model, requested),
+        ...(isClaudeModel(model) ? { requestedReasoning: requested } : {}),
       };
     }
   }

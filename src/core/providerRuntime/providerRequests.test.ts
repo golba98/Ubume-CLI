@@ -433,7 +433,7 @@ test("Claude Messages API sends configured endpoint, native ID and only advertis
   }
 });
 
-test("Claude effort rejection reconciles catalog, footer and actual retry payload", async () => {
+test("Claude effort rejection corrects the catalog without retrying or displaying a lower effort", async () => {
   const { providerCatalog } = await import("../models/modelCatalog.js");
   const { getProviderRuntime } = await import("./registry.js");
   const { resetAnthropicRouteValidationCacheForTests, runClaudeCodeWithRunner } = await import(
@@ -501,15 +501,20 @@ test("Claude effort rejection reconciles catalog, footer and actual retry payloa
         cancel: () => {},
       };
     }) as unknown as typeof runCommand;
-    await new Promise<string>((resolve, reject) =>
+    const failure = await new Promise<string>((resolve, reject) =>
       runClaudeCodeWithRunner(
         { prompt: "hi", route, modelDescriptor: descriptor, workspaceRoot: "/tmp", runtime },
-        { onResponse: resolve, onError: reject },
+        {
+          onResponse: () => reject(new Error("unexpected lower-effort execution")),
+          onError: resolve,
+        },
         runner,
         "claude",
       ),
     );
-    expect(efforts).toEqual(["high", "low"]);
+    expect(failure).toContain("did not retry at a lower level");
+    expect(efforts).toEqual(["high"]);
+    expect(route.reasoning).toBe("high");
     const updated = providerCatalog.get("anthropic")!.models;
     expect(updated[0]!.supportedReasoningLevels?.map((l) => l.id)).toEqual(["low"]);
     const capability = providerModelsToCodexCapabilities(updated, model.modelId).models[0]!;
@@ -520,8 +525,8 @@ test("Claude effort rejection reconciles catalog, footer and actual retry payloa
       tokensUsed: 0,
       modelCapability: capability,
     });
-    expect(display.footerModelDisplay).toContain("(Low)");
-    expect(display.footerModelDisplay).not.toContain("(High)");
+    expect(display.footerModelDisplay).toContain("(High unavailable)");
+    expect(display.footerModelDisplay).not.toContain("(Low)");
   } finally {
     providerCatalog.dispose();
     resetAnthropicRouteValidationCacheForTests();

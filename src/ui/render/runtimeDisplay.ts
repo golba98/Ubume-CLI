@@ -11,7 +11,7 @@ import type { RuntimeSummary } from "../../config/runtimeConfig.js";
 import type { Theme } from "../../config/settings.js";
 import { formatModeLabel, formatReasoningLabel } from "../../config/settings.js";
 import type { CodexModelCapability } from "../../core/models/codexModelCapabilities.js";
-import { reconcileReasoning } from "../../core/models/reasoningControl.js";
+import { isSupportedReasoning, reconcileReasoning } from "../../core/models/reasoningControl.js";
 import { getAntigravityModelLabel } from "../../core/providerRuntime/antigravity.js";
 import { codexaModelLabel } from "../../core/providerRuntime/codexaNativeConfig.js";
 import type {
@@ -114,7 +114,9 @@ export function buildActiveRuntimeDisplay({
   isLocalRuntime = false,
 }: ActiveRuntimeDisplayInput): ActiveRuntimeDisplay {
   const providerLabel = PROVIDER_DISPLAY[route.providerId] ?? route.providerId;
-  const rawReasoning = route.reasoning ?? (route.providerId === "google" ? "" : reasoningLevel);
+  const rawReasoning =
+    route.reasoning ??
+    (route.providerId === "google" || route.providerId === "anthropic" ? "" : reasoningLevel);
   // Local runtimes own their reasoning behavior; Ubume cannot adjust it.
   // Do not present the global fallback as if it were an active Local setting.
   const supported =
@@ -125,11 +127,19 @@ export function buildActiveRuntimeDisplay({
     : supported
       ? rawReasoning
       : modelCapability?.defaultReasoningLevel;
-  const reasoning = effectiveReasoning
-    ? formatReasoningLabel(effectiveReasoning)
-    : !modelCapability && route.providerId === "openai" && rawReasoning
-      ? formatReasoningLabel(rawReasoning)
-      : null;
+  const claudeSupported = modelCapability?.reasoningControl
+    ? isSupportedReasoning(modelCapability.reasoningControl, rawReasoning)
+    : supported;
+  const reasoning =
+    route.providerId === "anthropic"
+      ? rawReasoning
+        ? `${formatReasoningLabel(rawReasoning)}${claudeSupported ? "" : " unavailable"}`
+        : null
+      : effectiveReasoning
+        ? formatReasoningLabel(effectiveReasoning)
+        : !modelCapability && route.providerId === "openai" && rawReasoning
+          ? formatReasoningLabel(rawReasoning)
+          : null;
   const modelLabel = getModelLabel(route, modelCapability);
   const reasoningAlreadyInLabel = reasoning && modelLabel.endsWith(`(${reasoning})`);
   const validContextMetadata = isContextForRoute(contextMetadata, route) ? contextMetadata : null;

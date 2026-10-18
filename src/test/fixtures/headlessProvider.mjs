@@ -16,12 +16,29 @@ if (args[0] === "login" || args[0] === "auth") {
   console.log('{"loggedIn":true}');
   process.exit(0);
 }
+if (args[0] === "model" && args[1] === "list" && args.includes("--json")) {
+  console.log(
+    JSON.stringify({
+      models: [
+        {
+          value: "sonnet",
+          canonicalId: "claude-sonnet-5-5",
+          effortLevels: ["low", "medium", "high", "xhigh", "max"],
+          defaultEffort: "medium",
+        },
+      ],
+    }),
+  );
+  process.exit(0);
+}
 if (args.includes("-p")) {
   if (args.indexOf("-p") === args.length - 1) {
     throw new Error("Headless provider fixture requires a prompt after -p");
   }
   if (process.env.UBUME_TEST_PROMPT_LOG)
     appendFileSync(process.env.UBUME_TEST_PROMPT_LOG, JSON.stringify(args.at(-1)) + "\n");
+  if (process.env.UBUME_TEST_ARGV_LOG)
+    appendFileSync(process.env.UBUME_TEST_ARGV_LOG, JSON.stringify(args) + "\n");
   console.log(
     JSON.stringify({
       type: "assistant",

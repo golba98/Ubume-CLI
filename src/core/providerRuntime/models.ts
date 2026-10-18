@@ -20,6 +20,44 @@ export const CLAUDE_CODE_EFFORT_LEVELS: readonly ReasoningEffortCapability[] = [
   { id: "max", label: "Max", description: "Claude Code maximum effort." },
 ] as const;
 
+/**
+ * Claude Code's documented per-model effort support (2026-10). This is a
+ * model constraint, not proof that the installed CLI accepts the flag.
+ * Unknown versions deliberately require native metadata instead of inheriting
+ * the newest model's capabilities.
+ * https://code.claude.com/docs/en/model-config#adjust-effort-level
+ */
+export function getKnownClaudeCodeEffort(modelId: string): {
+  levels: readonly string[];
+  default: string;
+} | null {
+  const match = modelId
+    .toLowerCase()
+    .match(/(?:^|[.:/])claude-(fable|opus|sonnet|haiku)-(\d+(?:-\d+)*)(?=$|\[1m\]|-v\d|[:@]\d)/);
+  if (!match) return null;
+  const family = match[1];
+  const parts = match[2]!.split("-");
+  if (parts.length > 1 && /^\d{8}$/.test(parts.at(-1)!)) parts.pop();
+  const version = parts.join(".");
+  const all = CLAUDE_CODE_EFFORT_LEVELS.map((level) => level.id);
+  if (
+    (family === "fable" && ["5", "5.1"].includes(version)) ||
+    (family === "opus" && ["4.7", "4.8", "5", "5.5"].includes(version)) ||
+    (family === "sonnet" && ["5", "5.5"].includes(version)) ||
+    (family === "haiku" && version === "5.5")
+  ) {
+    return {
+      levels: all,
+      default:
+        version === "5.5" ? "medium" : family === "opus" && version === "4.7" ? "xhigh" : "high",
+    };
+  }
+  if ((family === "opus" || family === "sonnet") && version === "4.6")
+    return { levels: all.filter((id) => id !== "xhigh"), default: "high" };
+  if (["3", "3.5", "3.7", "4", "4.1", "4.5"].includes(version)) return { levels: [], default: "" };
+  return null;
+}
+
 function fallbackModelDescription(family: string): string {
   return `Claude ${family} alias — version unknown because model discovery is unavailable`;
 }
