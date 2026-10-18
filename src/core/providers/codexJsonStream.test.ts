@@ -188,3 +188,37 @@ test("returns false for non-json lines so callers can fall back to transcript pa
   assert.equal(parser.feedLine("assistant"), false);
   assert.equal(parser.hasStructuredEvents(), false);
 });
+
+test("nonfatal error items do not fail a complete structured plan", () => {
+  const progress: BackendProgressUpdate[] = [];
+  const final: string[] = [];
+  const parser = createCodexJsonStreamParser({
+    onProgress: (event) => progress.push(event),
+    onFinalAnswerObserved: (response) => final.push(response),
+  });
+  const plan = "<proposed_plan>\n1. Inspect.\n2. Fix and test.\n</proposed_plan>";
+  for (const event of [
+    { type: "item.completed", item: { id: "warning", type: "error", message: "Nonfatal warning" } },
+    { type: "item.completed", item: { id: "plan", type: "agent_message", text: plan } },
+    { type: "turn.completed" },
+  ])
+    parser.feedLine(JSON.stringify(event));
+  assert.equal(parser.getFailureMessage(), null);
+  assert.equal(parser.getFinalResponse(), plan);
+  assert.deepEqual(final, [plan]);
+  assert.deepEqual(progress, [{ id: "warning", source: "stderr", text: "Nonfatal warning" }]);
+});
+
+for (const type of ["error", "turn.failed"]) {
+  test(`Codex ${type} remains fatal even when plan text was streamed`, () => {
+    const parser = createCodexJsonStreamParser({});
+    parser.feedLine(
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "plan", type: "agent_message", text: "A plan" },
+      }),
+    );
+    parser.feedLine(JSON.stringify({ type, message: "Fatal", error: { message: "Fatal" } }));
+    assert.equal(parser.getFailureMessage(), "Fatal");
+  });
+}

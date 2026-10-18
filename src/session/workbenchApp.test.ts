@@ -105,3 +105,9 @@ test(
   { timeout: 30000 },
   () => scenarios(["usage-during-run"]),
 );
+
+test(
+  "Codex plan warnings preserve approval through immediate save, restart, resize, revision and cancel",
+  { timeout: 30000 },
+  () => scenarios(["plan-warning-save", "plan-warning-resume"]),
+);

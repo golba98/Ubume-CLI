@@ -8,6 +8,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { App } from "../../app/App.js";
 import { parseLaunchArgs } from "../../config/launchArgs.js";
 import { loadSettings, saveSettings } from "../../config/persistence.js";
+import { codexSubprocessProvider } from "../../core/providers/codexSubprocess.js";
 import type { BackendProvider, BackendRunHandlers } from "../../core/providers/types.js";
 import { resolveUbumeConversationDir } from "../../core/workspace/appData.js";
 import { ConversationStore } from "../../core/workspace/conversationStore.js";
@@ -26,6 +27,8 @@ assert(
       "quit",
       "cancel-start",
       "plan-actions",
+      "plan-warning-save",
+      "plan-warning-resume",
       "usage-during-run",
     ].includes(scenario),
   `Unknown workbench scenario: ${scenario}`,
@@ -100,7 +103,85 @@ if (scenario === "usage-during-run") {
   });
   process.env.CODEX_EXECUTABLE = `${process.cwd()}/codex-usage-fixture`;
 }
-const terminal = createTestTerminal(<App launchArgs={parsed.value} providerOverride={provider} />);
+if (scenario === "plan-warning-save") {
+  const fakePath = `${process.cwd()}/codex-plan-fixture`;
+  writeFileSync(
+    fakePath,
+    [
+      "#!/usr/bin/env node",
+      'if (process.argv.includes("--version")) { console.log("codex-cli 0.0.0"); process.exit(0); }',
+      'if (!process.argv.includes("exec")) process.exit(1);',
+      'process.stdin.resume(); process.stdin.on("end", () => {',
+      "const events = [",
+      '{type:"item.completed",item:{id:"warning",type:"error",message:"Nonfatal planning warning"}},',
+      '{type:"item.completed",item:{id:"plan",type:"agent_message",text:"<proposed_plan>\\n1. Inspect the code.\\n2. Repair it with tests.\\n</proposed_plan>"}},',
+      '{type:"turn.completed"}];',
+      'const text = events.map(JSON.stringify).join("\\n");',
+      "process.stdout.write(text.slice(0, 33)); setTimeout(() => process.stdout.write(text.slice(33)), 10);",
+      "});",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+  process.env.CODEX_EXECUTABLE = fakePath;
+}
+const terminal = createTestTerminal(
+  <App
+    launchArgs={parsed.value}
+    providerOverride={scenario === "plan-warning-save" ? codexSubprocessProvider : provider}
+  />,
+);
+
+async function savePlanAfterWarning(): Promise<void> {
+  terminal.stdin.write("/plan on");
+  await delay();
+  terminal.stdin.write("\r");
+  await delay(200);
+  terminal.stdin.write("Plan a safe fix");
+  await delay();
+  terminal.stdin.write("\r");
+  await until(
+    () => terminal.lastFrame().includes("[R] Redo plan"),
+    "review after successful Codex process with warning",
+  );
+  assert(!terminal.lastFrame().includes("Ask again or use /command"));
+  // Check before the 300ms draft autosave, then exit without normal teardown.
+  await waitFor(() => store.load(store.list()[0]!.id)?.session?.plan.kind === "awaiting_action", {
+    timeoutMs: 200,
+    label: "review persisted immediately",
+  });
+  process.exit(0);
+}
+
+async function resumePlanAfterWarning(): Promise<void> {
+  const original = store.list()[0]!;
+  assert.equal(store.load(original.id)?.session?.plan.kind, "awaiting_action");
+  terminal.stdin.write(`/resume ${original.id}`);
+  await delay();
+  terminal.stdin.write("\r");
+  await until(() => terminal.lastFrame().includes("[R] Redo plan"), "restored review picker");
+  assert.equal(runs.length, 0);
+  terminal.stdout.columns = 45;
+  terminal.stdout.emit("resize");
+  await until(() => terminal.lastFrame().includes("Plan ready"), "review survives narrow resize");
+  terminal.stdout.columns = 100;
+  terminal.stdout.emit("resize");
+  await delay(150);
+  terminal.stdin.write("r");
+  await until(() => runs.length === 1, "restored review can revise");
+  assert.match(runs[0]!.prompt, /Plan a safe fix/);
+  runs[0]!.handlers.onAssistantDelta?.("1. Revised plan with tests.");
+  runs[0]!.stopped();
+  runs[0]!.handlers.onResponse("1. Revised plan with tests.");
+  await until(() => terminal.lastFrame().includes("[R] Redo plan"), "streamed revision ready");
+  await delay(100);
+  terminal.stdin.write("\u001b");
+  await until(
+    () => terminal.lastFrame().includes("Plan review canceled"),
+    "restored review can cancel",
+  );
+  assert.equal(runs.length, 1);
+}
+
 async function runPlanActions(): Promise<void> {
   terminal.stdin.write("/plan on");
   await delay();
@@ -357,6 +438,8 @@ async function resumeConversation(): Promise<void> {
 }
 const runScenario = {
   "plan-actions": runPlanActions,
+  "plan-warning-save": savePlanAfterWarning,
+  "plan-warning-resume": resumePlanAfterWarning,
   save: saveInterruptedConversation,
   "draft-only": verifyDraftOnly,
   quit: verifyQuitWindow,
