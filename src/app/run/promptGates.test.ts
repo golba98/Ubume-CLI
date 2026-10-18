@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ProviderConfig } from "../../core/providerLauncher/types.js";
+import { buildPlanExecutionPrompt } from "../../core/codex/codexPrompt.js";
+import type { ProviderConfig, ProviderId } from "../../core/providerLauncher/types.js";
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 import {
   checkCodexAuth,
@@ -107,4 +108,54 @@ test("an unknown login state after a probe warns but still runs", () => {
   });
   assert.equal(result.rejection, null);
   assert.match(result.warning ?? "", /codex login/);
+});
+
+const instagramPlan = [
+  "## Steps",
+  "1. Implement `fetch_media()` in `bot.py` calling `GET /{ig-user-id}/media?fields=id,media_type,timestamp`.",
+  "## Assumptions",
+  "- The existing `venv/` was created on Windows with the MSYS2 interpreter at C:\\msys2.org\\mingw64\\bin, so it cannot be reused on Linux.",
+].join("\n");
+const runnableProviders: ProviderId[] = [
+  "openai",
+  "anthropic",
+  "google",
+  "mistral",
+  "local",
+  "codexa-cupy",
+];
+const workspaceFixtures = [
+  { root: "/home/user/insta_bot", externalTarget: "Create /etc/cron.d/insta_bot." },
+  {
+    root: "C:\\Users\\Example\\insta_bot",
+    externalTarget: "Create C:\\Windows\\System32\\insta_bot.cfg.",
+  },
+];
+
+test("an approved plan with ordinary documentation passes preflight for every provider", () => {
+  for (const { root } of workspaceFixtures) {
+    const prompt = buildPlanExecutionPrompt({
+      task: "Build an Instagram media fetcher.",
+      approvedPlan: instagramPlan,
+    });
+    for (const providerId of runnableProviders) {
+      assert.equal(checkWorkspaceBoundary(prompt, root, [], providerId), null, providerId);
+    }
+  }
+});
+
+test("an approved plan with a genuine external write target is blocked for every provider", () => {
+  for (const { root, externalTarget } of workspaceFixtures) {
+    const prompt = buildPlanExecutionPrompt({
+      task: "Build an Instagram media fetcher.",
+      approvedPlan: `${instagramPlan}\n2. ${externalTarget}`,
+    });
+    for (const providerId of runnableProviders) {
+      assert.equal(
+        checkWorkspaceBoundary(prompt, root, [], providerId)?.title,
+        "Workspace boundary",
+        `${providerId} ${root}`,
+      );
+    }
+  }
 });

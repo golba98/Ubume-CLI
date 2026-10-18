@@ -308,7 +308,7 @@ Local completion explicitly flushes the Harness session journal before publishin
 - `workspaceRoot.ts` establishes the normalized workspace used throughout a run.
 - `launchContext.ts` describes installed/dev launches and controlled workspace relaunches.
 - `projectInstructions.ts` loads repository instructions with explicit status reporting.
-- `workspaceGuard.ts` recognizes paths outside the workspace and dependency paths before commands or diagnostics are accepted.
+- `workspaceGuard.ts` recognizes paths outside the workspace and dependency paths before commands or diagnostics are accepted. Shell commands are checked strictly; prompt text (including approved plans embedded in execution prompts) skips incidental mentions — Windows paths on a POSIX host, HTTP route templates, and explanatory clauses with no filesystem action — while explicit targets and `../` traversal stay blocked.
 - `workspaceActivity.ts` snapshots and diffs files so the timeline can report what a run changed.
 - `appData.ts` centralizes platform-specific data paths; new persistent state, including workspace-scoped conversation history, should use it rather than inventing project-local folders.
 

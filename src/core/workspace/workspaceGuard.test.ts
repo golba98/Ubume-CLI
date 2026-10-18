@@ -318,3 +318,121 @@ test("isDangerousShellCommand flags destructive commands only", () => {
     assert.equal(isDangerousShellCommand(command), false, command);
   }
 });
+
+// --- Prompt-text classification ---------------------------------------------
+
+const linuxWorkspace = normalizeWorkspaceRoot("/home/user/insta_bot");
+
+// Mirrors the Mistral Vibe plan that was rejected on approval: a historical Windows venv path
+// in an explanation and a Graph API route template in documentation.
+const instagramPlan = [
+  "## Files",
+  "- `bot.py` - main entry point",
+  "- `requirements.txt`",
+  "- `README.md` - setup docs",
+  "",
+  "## Steps",
+  "1. Create a fresh virtual environment in `./venv` (`python3 -m venv venv`).",
+  "2. Implement `fetch_media()` in `bot.py` calling `GET /{ig-user-id}/media?fields=id,media_type,timestamp`.",
+  "3. Document the setup in `README.md`.",
+  "",
+  "## Assumptions",
+  "- The existing `venv/` was created on Windows with the MSYS2 interpreter at C:\\msys2.org\\mingw64\\bin, so it cannot be reused on Linux.",
+  "",
+  "## Risks",
+  "- Graph API rate limits.",
+].join("\n");
+
+test("reported Instagram plan passes the prompt guard on a Linux workspace", () => {
+  assert.equal(getPromptWorkspaceGuardMessage(instagramPlan, linuxWorkspace), null);
+  const { violations } = findOutsideWorkspacePaths(instagramPlan, linuxWorkspace, [], {
+    context: "prompt",
+  });
+  assert.deepEqual(violations, []);
+});
+
+test("historical Windows environment paths in explanations are permitted", () => {
+  assert.equal(getPromptWorkspaceGuardMessage(instagramPlan, workspaceRoot), null);
+  assert.equal(
+    getPromptWorkspaceGuardMessage(
+      "The old venv was built against C:\\Python39\\Scripts\\python.exe; recreate it in ./venv.",
+      workspaceRoot,
+    ),
+    null,
+  );
+});
+
+test("HTTP endpoint templates are permitted in prompts", () => {
+  for (const prompt of [
+    "Call /{ig-user-id}/media?fields=id,media_type,timestamp to list posts.",
+    "Add a handler for /users/:id/posts in api.py.",
+    "The client hits /v1/accounts?limit=10 for paging.",
+    "Document the GET /me/accounts endpoint in README.md.",
+  ]) {
+    assert.equal(getPromptWorkspaceGuardMessage(prompt, linuxWorkspace), null, prompt);
+    assert.equal(getPromptWorkspaceGuardMessage(prompt, workspaceRoot), null, prompt);
+  }
+});
+
+test("shell brace expansion is not mistaken for a route template", () => {
+  assert(getPromptWorkspaceGuardMessage("Show /etc/{passwd,shadow}", linuxWorkspace));
+});
+
+test("absolute Windows and Linux paths inside the workspace are permitted", () => {
+  assert.equal(
+    getPromptWorkspaceGuardMessage("Edit /home/user/insta_bot/bot.py", linuxWorkspace),
+    null,
+  );
+  assert.equal(
+    getPromptWorkspaceGuardMessage(
+      "Edit C:\\Users\\Example\\OneDrive\\Desktop\\3-Python\\Programs\\2-Personal\\20-Tester\\bot.py",
+      workspaceRoot,
+    ),
+    null,
+  );
+});
+
+test("explicit external file operations remain blocked in prompts", () => {
+  for (const prompt of [
+    "Create /etc/ubume.conf with the token.",
+    "Read /home/other/secrets.txt and summarize it.",
+    "Run `cp config.json /etc/insta_bot/config.json` after setup.",
+    "DELETE /etc/passwd",
+    "Previously we stored tokens elsewhere; now write them to /home/other/tokens.txt.",
+    "/home/other/notes.txt",
+  ]) {
+    assert(getPromptWorkspaceGuardMessage(prompt, linuxWorkspace), prompt);
+  }
+  for (const prompt of [
+    "Write C:\\Users\\Example\\Desktop\\Other\\x.txt",
+    "Update /etc/hosts with the new host.",
+  ]) {
+    assert(getPromptWorkspaceGuardMessage(prompt, workspaceRoot), prompt);
+  }
+});
+
+test("a path mentioned incidentally and targeted elsewhere is still blocked", () => {
+  const prompt =
+    "The old config was kept in /home/other/app.toml.\nCopy settings into /home/other/app.toml too.";
+  const message = getPromptWorkspaceGuardMessage(prompt, linuxWorkspace);
+  assert(message);
+  assert.match(message, /\/home\/other\/app\.toml/);
+});
+
+test("parent-directory traversal stays blocked even in explanatory prompts", () => {
+  assert(getPromptWorkspaceGuardMessage("The legacy file was ../outside.txt", linuxWorkspace));
+  assert(getPromptWorkspaceGuardMessage("The legacy file was ..\\outside.txt", workspaceRoot));
+});
+
+test("shell commands keep strict path checking", () => {
+  for (const command of [
+    "cat /{ig-user-id}/media",
+    "echo was legacy /home/other/notes.txt",
+    "ls C:\\msys2.org\\mingw64\\bin",
+  ]) {
+    assert(getShellWorkspaceGuardMessage(command, linuxWorkspace), command);
+  }
+  assert.match(getShellWorkspaceGuardMessage("cd ..", linuxWorkspace) ?? "", /Directory-changing/);
+  const { violations } = findOutsideWorkspacePaths(instagramPlan, linuxWorkspace);
+  assert.equal(violations.length, 2);
+});

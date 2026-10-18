@@ -295,7 +295,7 @@ Start with [docs/architecture/app.md](architecture/app.md) for lifecycles and in
 | `src/core/workspace/scratchDir.ts` | Describes, lazily creates, removes when unused, and prunes per-session `.ubume/scratch/<session>` folders where the Local agent keeps throwaway test/debug files. |
 | `src/core/workspace/workspaceActivity.ts` | Snapshots workspace files, detects changes, aggregates activity, and tracks modifications during runs. |
 | `src/core/workspace/workspaceFiles.ts` | Resolves, reads, and guards workspace file selections. |
-| `src/core/workspace/workspaceGuard.ts` | Normalizes diagnostic paths, blocks or explains paths and commands outside the active workspace, and classifies destructive shell commands. |
+| `src/core/workspace/workspaceGuard.ts` | Normalizes diagnostic paths, blocks or explains paths and commands outside the active workspace (strict for shell commands, context-classified for prompt text), and classifies destructive shell commands. |
 | `src/core/workspace/workspaceRoot.ts` | Resolves, normalizes, and compares the active workspace root across platforms and launch modes. |
 
 ### `src/headless/`
