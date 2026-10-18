@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { withEnvironment } from "../../test/environment.js";
 import type {
   ProviderModel,
   ProviderModelDiscoveryResult,
@@ -270,4 +271,45 @@ test("non-Local connection keys ignore Local backend selection", () => {
   expect(providerConnectionKey("google", { cwd, config: {} })).toBe(
     providerConnectionKey("google", { cwd, config: {}, routeLocalBackend: "unsloth" }),
   );
+});
+
+test("forced Claude refresh replaces cached effort restrictions with current model metadata", async () => {
+  let ids = ["low", "medium", "high"];
+  const snapshot = (): ProviderModelDiscoveryResult => ({
+    ...ready([]),
+    providerId: "anthropic",
+    backendKind: "claude-code-auth",
+    models: [
+      {
+        ...model("claude-opus-5-5"),
+        supportedReasoningLevels: ids.map((id) => ({ id, label: id, description: null })),
+      },
+    ],
+  });
+  const provider: ProviderRuntime = {
+    ...runtime(async () => snapshot(), "anthropic"),
+    backendKind: "claude-code-auth",
+    discoverModels: snapshot,
+  };
+  const catalog = new ModelCatalog();
+  try {
+    await catalog.refresh(provider, context);
+    ids = ["low", "medium", "high", "xhigh", "max"];
+    await catalog.refresh(provider, { ...context, forceRefresh: true });
+    expect(
+      catalog.get("anthropic")?.models[0]?.supportedReasoningLevels?.map((level) => level.id),
+    ).toEqual(ids);
+  } finally {
+    catalog.dispose();
+  }
+});
+
+test("Claude alias pin changes invalidate only Claude capability identity", async () => {
+  await withEnvironment({ ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5" }, async () => {
+    const first = catalogContextKey("anthropic", context);
+    const google = catalogContextKey("google", context);
+    process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-opus-4-6";
+    expect(catalogContextKey("anthropic", context)).not.toBe(first);
+    expect(catalogContextKey("google", context)).toBe(google);
+  });
 });

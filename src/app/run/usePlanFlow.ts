@@ -119,6 +119,14 @@ export function usePlanFlow(context: UsePlanFlowContext) {
     workbenchVersion,
   } = context;
 
+  // Finalization saves before onCompleted updates React state. Save review
+  // states after commit rather than waiting for the draft autosave debounce.
+  useEffect(() => {
+    if (planFlow.kind === "awaiting_action" || planFlow.kind === "collecting_feedback") {
+      saveWorkbenchRef.current?.();
+    }
+  }, [planFlow, saveWorkbenchRef]);
+
   /**
    * Starts a read-only planning run for `state`. Any outcome other than a
    * non-empty plan resets plan mode's flow to idle. Returns whether the run
@@ -192,10 +200,11 @@ export function usePlanFlow(context: UsePlanFlowContext) {
 
   /**
    * Runs an approved plan in auto-edit mode. If the run cannot start, the
-   * review state is restored so the user can try again.
+   * review state is restored so the user can try again, and `false` is
+   * returned.
    */
   const startApprovedPlanExecution = useCallback(
-    (state: Extract<PlanFlowState, { kind: "awaiting_action" }>) => {
+    (state: Extract<PlanFlowState, { kind: "awaiting_action" }>): boolean => {
       const submitTiming = createPromptRunTiming();
       setPlanFlow(approvePlanExecution(state));
       const started = startPromptRun(
@@ -227,7 +236,7 @@ export function usePlanFlow(context: UsePlanFlowContext) {
 
       if (!started) {
         setPlanFlow(state);
-        return;
+        return false;
       }
 
       // Approving the plan ends plan mode for the session, not just for this
@@ -245,6 +254,7 @@ export function usePlanFlow(context: UsePlanFlowContext) {
         "Plan mode",
         `Plan approved. Plan mode off · ${formatModeLabel("auto-edit")}.`,
       );
+      return true;
     },
     [appendEvent, startPromptRun, updateRuntimeConfig],
   );
@@ -264,7 +274,11 @@ export function usePlanFlow(context: UsePlanFlowContext) {
 
       switch (action) {
         case "implement":
-          startApprovedPlanExecution(planFlow);
+          // A rejected start (e.g. a gate) restores the same planFlow object, so
+          // the reset effect never runs; release the guard here instead.
+          if (!startApprovedPlanExecution(planFlow)) {
+            planActionInFlightRef.current = false;
+          }
           return;
         case "revise": {
           const feedback =

@@ -289,7 +289,9 @@ export function createCodexJsonStreamParser(handlers: CodexJsonStreamHandlers) {
         emitProgress(item.id, "activity", summarizeFileChange(item));
         break;
       case "error":
-        failureMessage = item.message;
+        // Error items are non-fatal diagnostics. Only turn.failed and a
+        // top-level stream error establish a failed run.
+        emitProgress(item.id, "stderr", item.message);
         break;
     }
   };

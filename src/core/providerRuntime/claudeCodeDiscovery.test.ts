@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { withEnvironment } from "../../test/environment.js";
+import { normalizeReasoningForModelCapabilities } from "../models/codexModelCapabilities.js";
 import type { CommandResult, runCommand } from "../process/commandRunner.js";
 import {
   claudeCodeModelsToProviderModels,
@@ -14,7 +16,11 @@ import {
   parseClaudeAuthStatus,
   parseClaudeEffortLevelsFromHelp,
 } from "./claudeCodeDiscovery.js";
-import { ANTHROPIC_FALLBACK_MODELS } from "./models.js";
+import {
+  ANTHROPIC_FALLBACK_MODELS,
+  getKnownClaudeCodeEffort,
+  providerModelsToCodexCapabilities,
+} from "./models.js";
 
 function commandResult(overrides: Partial<CommandResult>): CommandResult {
   return {
@@ -374,7 +380,7 @@ test("discoverClaudeCodeCapabilities: applies CLI effort truth and settings defa
         if (args[0] === "model" && args[1] === "list")
           return commandResult({
             stdout: JSON.stringify([
-              { value: "sonnet", family: "sonnet" },
+              { value: "claude-sonnet-5", family: "sonnet" },
               {
                 value: "haiku",
                 family: "haiku",
@@ -386,7 +392,7 @@ test("discoverClaudeCodeCapabilities: applies CLI effort truth and settings defa
         return commandResult({ exitCode: 1 });
       }),
     });
-    const sonnet = discovery.models.find((model) => model.value === "sonnet");
+    const sonnet = discovery.models.find((model) => model.value === "claude-sonnet-5");
     assert.deepEqual(sonnet?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
     assert.equal(sonnet?.defaultEffort, "xhigh");
     assert.equal(sonnet?.effortSource, "claude-code-command");
@@ -856,5 +862,201 @@ test("ANTHROPIC_FALLBACK_MODELS leaves unsupported effort metadata unknown", () 
   for (const model of ANTHROPIC_FALLBACK_MODELS) {
     assert.deepEqual(model.supportedReasoningLevels, null);
     assert.equal(model.effortVerified, false);
+  }
+});
+
+const wrappedEffortHelp = [
+  "  --effort <level>                      Effort level for the current session",
+  "                                        (low, medium, high, xhigh, max)",
+  "  --output-format <format>              Output (text, json, stream-json)",
+].join("\n");
+
+async function effortDiscovery(
+  rawModels: unknown[],
+  help = wrappedEffortHelp,
+  settingsPath: string | null = null,
+  metadataPaths: string[] = [],
+) {
+  return discoverClaudeCodeCapabilities({
+    cwd: process.cwd(),
+    settingsPath,
+    metadataPaths,
+    runCommandImpl: mockRunCommand((_exe, args) => {
+      if (args[0] === "auth")
+        return commandResult({ stdout: '{"loggedIn":true,"apiProvider":"anthropic"}' });
+      if (args[0] === "--help") return commandResult({ stdout: help });
+      if (args[0] === "model" && args[1] === "list")
+        return commandResult({ stdout: JSON.stringify(rawModels) });
+      return commandResult({ exitCode: 1 });
+    }),
+  });
+}
+
+test("Claude effort help supports wrapping and CRLF without reading another option's choices", () => {
+  const all = ["low", "medium", "high", "xhigh", "max"];
+  assert.deepEqual(parseClaudeEffortLevelsFromHelp(wrappedEffortHelp), all);
+  assert.deepEqual(
+    parseClaudeEffortLevelsFromHelp(wrappedEffortHelp.replaceAll("\n", "\r\n")),
+    all,
+  );
+  assert.equal(
+    parseClaudeEffortLevelsFromHelp(
+      "  --effort <level> Set effort\n  --format <value> (text, json)",
+    ),
+    null,
+  );
+});
+
+const claudeEffortMatrix = [
+  ["claude-fable-5", true],
+  ["claude-fable-5-1", true],
+  ["claude-opus-4-7", true],
+  ["claude-opus-4-8", true],
+  ["claude-opus-5", true],
+  ["claude-opus-5-5", true],
+  ["claude-sonnet-5", true],
+  ["claude-sonnet-5-5", true],
+  ["claude-haiku-5-5", true],
+  ["claude-opus-4-6", false],
+  ["claude-sonnet-4-6", false],
+] as const;
+for (const [id, xhigh] of claudeEffortMatrix) {
+  test(`Claude discovery exposes exact supported efforts for ${id}`, async () => {
+    const result = await effortDiscovery([id]);
+    const model = claudeCodeModelsToProviderModels(result.models)[0]!;
+    assert.deepEqual(
+      model.supportedReasoningLevels?.map((level) => level.id),
+      ["low", "medium", "high", ...(xhigh ? ["xhigh"] : []), "max"],
+    );
+    assert.equal(model.reasoningControl?.kind, "levels");
+    assert.equal(model.effortVerified, true);
+    const capabilities = providerModelsToCodexCapabilities([model], id);
+    assert.equal(normalizeReasoningForModelCapabilities(id, "max", capabilities), "max");
+    if (xhigh)
+      assert.equal(normalizeReasoningForModelCapabilities(id, "xhigh", capabilities), "xhigh");
+  });
+}
+
+test("Claude model lookup never inherits newer alias capabilities for an older or unknown version", async () => {
+  const result = await effortDiscovery([
+    "claude-opus-5-5",
+    "claude-opus-4-6",
+    "claude-haiku-4-5",
+    "claude-sonnet-99-1",
+    "sonnet",
+  ]);
+  const models = claudeCodeModelsToProviderModels(result.models);
+  assert.equal(modelSupportsClaudeEffort("claude-opus-4-6", "xhigh", models), false);
+  assert.equal(modelSupportsClaudeEffort("claude-opus-4-6", "max", models), true);
+  assert.equal(modelSupportsClaudeEffort("claude-opus-4-5", "max", models), false);
+  assert.equal(models[2]?.reasoningControl?.kind, "unsupported");
+  assert.equal(models[3]?.reasoningControl?.kind, "unknown");
+  assert.equal(models[4]?.reasoningControl?.kind, "unknown");
+  assert.equal(getKnownClaudeCodeEffort("claude-opus-55-1"), null);
+  assert.deepEqual(getKnownClaudeCodeEffort("us.anthropic.claude-opus-4-6-v1:0")?.levels, [
+    "low",
+    "medium",
+    "high",
+    "max",
+  ]);
+  assert.equal(getKnownClaudeCodeEffort("claude-haiku-4-5-20251001")?.levels.length, 0);
+});
+
+test("Claude requires CLI transport support and intersects known model levels with older CLIs", async () => {
+  const result = await effortDiscovery(
+    ["claude-opus-4-7"],
+    "  --effort <level> Set effort (low, medium, high)",
+  );
+  assert.deepEqual(result.models[0]?.effortLevels, ["low", "medium", "high"]);
+  const noFlag = await effortDiscovery(["claude-opus-5-5"], "Usage: claude");
+  assert.deepEqual(noFlag.models[0]?.effortLevels, []);
+  assert.equal(noFlag.models[0]?.effortVerified, false);
+});
+
+test("Claude preserves explicit empty, fixed and single-level controls", async () => {
+  const result = await effortDiscovery([
+    { id: "claude-opus-5-5", effortLevels: [] },
+    {
+      id: "claude-sonnet-5",
+      effortLevels: ["high"],
+      reasoningControl: { kind: "fixed", label: "Always High" },
+    },
+    { id: "custom-model", effortLevels: ["max"], defaultEffort: "max" },
+  ]);
+  const models = claudeCodeModelsToProviderModels(result.models);
+  assert.equal(models[0]?.reasoningControl?.kind, "unsupported");
+  assert.equal(models[0]?.defaultReasoningLevel, null);
+  assert.deepEqual(models[1]?.reasoningControl, { kind: "fixed", label: "Always High" });
+  assert.equal(modelSupportsClaudeEffort(models[1]!.modelId, "high", models), false);
+  assert.deepEqual(models[1]?.supportedReasoningLevels, []);
+  assert.equal(modelSupportsClaudeEffort("custom-model", "max", models), true);
+});
+
+test("Claude package alias resolution preserves model effort restrictions and honors pins", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-effort-alias-"));
+  const metadata = join(root, "claude.bin");
+  writeFileSync(metadata, "claude-opus-4-6 claude-opus-5-5 claude-sonnet-5-5");
+  try {
+    const explicit = await effortDiscovery(
+      [{ id: "opus", effortLevels: ["low", "max"], defaultEffort: "max" }],
+      wrappedEffortHelp,
+      null,
+      [metadata],
+    );
+    assert.equal(explicit.models[0]?.canonicalId, "claude-opus-5-5");
+    assert.deepEqual(explicit.models[0]?.effortLevels, ["low", "max"]);
+    await withEnvironment({ ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-6" }, async () => {
+      const pinned = await effortDiscovery(["opus"], wrappedEffortHelp, null, [metadata]);
+      assert.equal(pinned.models[0]?.canonicalId, "claude-opus-4-6");
+      assert.deepEqual(pinned.models[0]?.effortLevels, ["low", "medium", "high", "max"]);
+    });
+    const unknown = await effortDiscovery(["opus"]);
+    assert.deepEqual(unknown.models[0]?.effortLevels, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Claude settings defaults and effort caps do not fabricate support", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-effort-settings-"));
+  const path = join(root, "settings.json");
+  try {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        effortLevel: "high",
+        modelSettings: { "claude-opus-5-5": { effortLevel: "max" } },
+      }),
+    );
+    const result = await effortDiscovery(
+      ["claude-opus-5-5", "claude-sonnet-4-6"],
+      wrappedEffortHelp,
+      path,
+    );
+    assert.equal(result.models[0]?.defaultEffort, "max");
+    assert.equal(result.models[1]?.defaultEffort, "high");
+    writeFileSync(path, JSON.stringify({ effortLevel: "max", maxEffortLevel: "high" }));
+    const capped = await effortDiscovery(["claude-opus-5-5"], wrappedEffortHelp, path);
+    assert.deepEqual(capped.models[0]?.effortLevels, ["low", "medium", "high"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("native canonical IDs take precedence over the latest package alias", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-canonical-"));
+  const metadata = join(root, "metadata");
+  writeFileSync(metadata, "claude-opus-5-5");
+  try {
+    const result = await effortDiscovery(
+      [{ id: "opus", canonicalId: "claude-opus-4-6" }],
+      wrappedEffortHelp,
+      null,
+      [metadata],
+    );
+    assert.equal(result.models[0]?.canonicalId, "claude-opus-4-6");
+    assert.deepEqual(result.models[0]?.effortLevels, ["low", "medium", "high", "max"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

@@ -32,6 +32,7 @@ import type {
 } from "../workspace/conversationStore.js";
 import { anthropicRuntime } from "./anthropic.js";
 import { antigravityRuntime, getAgyModelSelector } from "./antigravity.js";
+import { modelSupportsClaudeEffort } from "./claudeCodeDiscovery.js";
 import { CODEXA_NATIVE_MODEL_ID, codexaCupyRuntime, codexaNativeRuntime } from "./codexaNative.js";
 import { classifyProviderFailure, isModelFailure, type ProviderFailure } from "./failures.js";
 import { localRuntime } from "./local.js";
@@ -504,8 +505,18 @@ export function createRoutedProvider(
           }
           const requested =
             route.reasoning ?? override?.models?.[route.modelId]?.reasoningPreference ?? "";
+          if (
+            route.providerId === "anthropic" &&
+            requested &&
+            !modelSupportsClaudeEffort(route.modelId, requested, descriptor ? [descriptor] : [])
+          ) {
+            handlers.onError(
+              `Claude model ${route.modelId} does not advertise effort "${requested}". Refresh models and select a supported effort or provider-managed reasoning.`,
+            );
+            return () => undefined;
+          }
           const effectiveReasoning =
-            route.providerId === "google"
+            route.providerId === "google" || route.providerId === "anthropic"
               ? requested
               : descriptor?.reasoningControl
                 ? reconcileReasoning(descriptor.reasoningControl, requested)

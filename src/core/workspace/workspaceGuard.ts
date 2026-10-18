@@ -1,6 +1,7 @@
 /**
  * Normalizes diagnostic paths, blocks or explains paths and commands outside the active
- * workspace, and classifies destructive shell commands.
+ * workspace (strict for shell commands, context-classified for prompt text), and classifies
+ * destructive shell commands.
  */
 
 import { posix, win32 } from "path";
@@ -227,33 +228,19 @@ export function isPathInsideAllowedRoots(
   return false;
 }
 
-/**
- * Finds explicit path-like references for the workspace guard; this is a heuristic, not a shell
- * parser.
- */
-export function extractExplicitPathReferences(text: string): string[] {
-  const matches: string[] = [];
-  const seen = new Set<string>();
+interface PathReferenceMatch {
+  path: string;
+  start: number;
+  end: number;
+}
 
-  const addMatch = (candidate: string) => {
-    const cleaned = stripTrailingPunctuation(stripWrappingQuotes(candidate.trim()));
-    if (
-      !cleaned ||
-      (!detectPathStyle(cleaned) &&
-        !isExplicitRelativePath(cleaned) &&
-        !hasRustRelativeDiagnosticShape(cleaned))
-    ) {
-      return;
-    }
+function pathReferenceKey(pathValue: string): string {
+  return detectPathStyle(pathValue) === "posix" ? pathValue : pathValue.toLowerCase();
+}
 
-    const comparisonKey = detectPathStyle(cleaned) === "posix" ? cleaned : cleaned.toLowerCase();
-    if (seen.has(comparisonKey)) {
-      return;
-    }
-
-    seen.add(comparisonKey);
-    matches.push(cleaned);
-  };
+/** Collects every path-like occurrence with its offsets so callers can inspect its context. */
+function collectPathReferenceMatches(text: string): PathReferenceMatch[] {
+  const matches: PathReferenceMatch[] = [];
 
   for (const pattern of [
     QUOTED_ABSOLUTE_PATH_PATTERN,
@@ -267,12 +254,146 @@ export function extractExplicitPathReferences(text: string): string[] {
     pattern.lastIndex = 0;
     let match = pattern.exec(text);
     while (match) {
-      addMatch(match[2] ?? match[1] ?? "");
+      const candidate = match[2] ?? match[1] ?? "";
+      const cleaned = stripTrailingPunctuation(stripWrappingQuotes(candidate.trim()));
+      if (
+        cleaned &&
+        (detectPathStyle(cleaned) ||
+          isExplicitRelativePath(cleaned) ||
+          hasRustRelativeDiagnosticShape(cleaned))
+      ) {
+        // Offsets cover the cleaned path only, so trailing punctuation such as `;` stays a
+        // clause boundary for the context checks.
+        const start =
+          match.index +
+          Math.max(match[0].indexOf(candidate), 0) +
+          Math.max(candidate.indexOf(cleaned), 0);
+        matches.push({ path: cleaned, start, end: start + cleaned.length });
+      }
       match = pattern.exec(text);
     }
   }
 
   return matches;
+}
+
+/**
+ * Finds explicit path-like references for the workspace guard; this is a heuristic, not a shell
+ * parser.
+ */
+export function extractExplicitPathReferences(text: string): string[] {
+  const matches: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { path: pathValue } of collectPathReferenceMatches(text)) {
+    const comparisonKey = pathReferenceKey(pathValue);
+    if (seen.has(comparisonKey)) {
+      continue;
+    }
+
+    seen.add(comparisonKey);
+    matches.push(pathValue);
+  }
+
+  return matches;
+}
+
+/**
+ * Where guarded text came from. Shell commands are checked strictly: every path-like token is a
+ * potential target. Prompt prose (user prompts, generated plans embedded in execution prompts)
+ * also mentions paths in explanations, examples and API documentation, so each absolute
+ * occurrence there is classified before it counts as a violation.
+ */
+export type PathReferenceContext = "shell" | "prompt";
+
+// Base-form filesystem actions and shell commands. A clause containing one of these targets the
+// path it mentions, so the occurrence stays a violation regardless of other context. Past-tense
+// forms ("was created") are deliberately absent: they describe history rather than request work.
+const FILESYSTEM_OPERATION_PATTERN =
+  /\b(?:re)?(?:create|write|edit|modify|update|change|fix|patch|replace|add|append|delete|remove|rm|rmdir|move|mv|copy|cp|rename|read|open|cat|type|load|save|store|put|output|overwrite|touch|mkdir|chmod|chown|ln|symlink|link|extract|unzip|untar|import|use|run|execute|exec|source|install|cd|navigate|list|ls|access|inspect|view|show|see|check|look|scan|search|grep|find|print|display|dump|download|upload|generate|scaffold|clean|purge|wipe|truncate|format|mount|sync|send|attach|commit|push|deploy)\b/i;
+// Wording that marks a clause as describing past or example state rather than requesting work.
+const EXPLANATORY_MARKER_PATTERN =
+  /\b(?:was|were|previously|originally|formerly|historical|historically|legacy|old|older|outdated|deprecated|used to|for example|for instance|such as)\b/i;
+// Wording that marks a path-shaped token as an HTTP route rather than a filesystem location.
+const HTTP_CONTEXT_PATTERN = /\b(?:endpoints?|routes?|api|urls?|https?|webhooks?)\b/i;
+const HTTP_METHOD_BEFORE_PATH_PATTERN = /\b(?:GET|POST|PUT|PATCH|HEAD|OPTIONS)\s+$/;
+// Route template segments such as `{ig-user-id}` or `:id`. A single identifier only, so shell
+// brace expansion (`/etc/{passwd,shadow}`) is never mistaken for a template.
+const ROUTE_PLACEHOLDER_SEGMENT_PATTERN = /^(?:\{[A-Za-z_][\w-]*\}|:[A-Za-z_][\w-]*)$/;
+const ROUTE_QUERY_PATTERN = /\?[A-Za-z_][\w.-]*=/;
+
+function isRouteTemplate(pathValue: string): boolean {
+  const [routePath = ""] = pathValue.split("?");
+  return (
+    ROUTE_QUERY_PATTERN.test(pathValue) ||
+    routePath.split("/").some((segment) => ROUTE_PLACEHOLDER_SEGMENT_PATTERN.test(segment))
+  );
+}
+
+function isClauseBoundary(text: string, index: number): boolean {
+  const char = text[index];
+  return (
+    char === "\n" ||
+    char === ";" ||
+    char === "!" ||
+    char === "?" ||
+    (char === "." && /\s/.test(text[index + 1] ?? ""))
+  );
+}
+
+/** Returns the clause around an occurrence, excluding the path text itself. */
+function surroundingClause(
+  text: string,
+  start: number,
+  end: number,
+): { before: string; after: string } {
+  let clauseStart = start;
+  while (clauseStart > 0 && !isClauseBoundary(text, clauseStart - 1)) {
+    clauseStart--;
+  }
+  let clauseEnd = end;
+  while (clauseEnd < text.length && !isClauseBoundary(text, clauseEnd)) {
+    clauseEnd++;
+  }
+  return { before: text.slice(clauseStart, start), after: text.slice(end, clauseEnd) };
+}
+
+/**
+ * Decides whether a prompt occurrence is an incidental mention rather than an operation target.
+ * Defaults to "target": only positive evidence makes a mention incidental. Explicit relative
+ * paths (including `../` traversal) are never reclassified.
+ */
+function isIncidentalPromptReference(
+  text: string,
+  reference: PathReferenceMatch,
+  workspaceStyle: PathStyle,
+): boolean {
+  const style = detectPathStyle(reference.path);
+  if (!style) {
+    return false;
+  }
+
+  // A POSIX host cannot address drive-letter or UNC paths; writing one creates a literal file
+  // in the working directory. The reverse does not hold: `/etc/x` resolves on Windows.
+  if (style === "windows" && workspaceStyle === "posix") {
+    return true;
+  }
+
+  if (style === "posix" && isRouteTemplate(reference.path)) {
+    return true;
+  }
+
+  const { before, after } = surroundingClause(text, reference.start, reference.end);
+  const clause = `${before} ${after}`;
+  if (FILESYSTEM_OPERATION_PATTERN.test(clause)) {
+    return false;
+  }
+
+  return (
+    EXPLANATORY_MARKER_PATTERN.test(clause) ||
+    HTTP_CONTEXT_PATTERN.test(clause) ||
+    HTTP_METHOD_BEFORE_PATH_PATTERN.test(before.replace(/[`"']+$/, ""))
+  );
 }
 
 /** Formats a dependency/cache diagnostic path without importing it. */
@@ -301,13 +422,33 @@ export function findOutsideWorkspacePaths(
   text: string,
   workspaceRoot: string,
   allowedRoots: readonly string[] = [],
+  options: { context?: PathReferenceContext } = {},
 ): { violations: WorkspacePathViolation[]; skippedExternalPaths: string[] } {
   const violations: WorkspacePathViolation[] = [];
   const skippedExternalPaths: string[] = [];
   const seen = new Set<string>();
   const workspaceStyle = detectPathStyle(workspaceRoot) ?? "windows";
+  const context = options.context ?? "shell";
 
-  for (const rawPath of extractExplicitPathReferences(text)) {
+  // A path counts once; it is incidental only when every one of its occurrences is.
+  const references = new Map<string, { path: string; incidental: boolean }>();
+  for (const reference of collectPathReferenceMatches(text)) {
+    const incidental =
+      context === "prompt" && isIncidentalPromptReference(text, reference, workspaceStyle);
+    const key = pathReferenceKey(reference.path);
+    const existing = references.get(key);
+    if (existing) {
+      existing.incidental &&= incidental;
+    } else {
+      references.set(key, { path: reference.path, incidental });
+    }
+  }
+
+  for (const { path: rawPath, incidental } of references.values()) {
+    if (incidental) {
+      continue;
+    }
+
     const cleanPath = normalizeDiagnosticPath(rawPath);
     if (isSkippedExternalDependencyPath(cleanPath)) {
       skippedExternalPaths.push(cleanPath);
@@ -382,14 +523,19 @@ function formatOutsidePathBlockMessage(
 }
 
 /**
- * Explains explicit outside-workspace prompt references, or returns null when no guard applies.
+ * Explains outside-workspace prompt references, or returns null when no guard applies. Mentions
+ * classified as incidental (unreachable foreign-platform paths, HTTP route templates, and
+ * explanatory clauses without a filesystem action) do not block; this is a pre-flight heuristic,
+ * and tool-call/sandbox enforcement still applies during the run.
  */
 export function getPromptWorkspaceGuardMessage(
   prompt: string,
   workspaceRoot: string,
   allowedRoots: readonly string[] = [],
 ): string | null {
-  const { violations } = findOutsideWorkspacePaths(prompt, workspaceRoot, allowedRoots);
+  const { violations } = findOutsideWorkspacePaths(prompt, workspaceRoot, allowedRoots, {
+    context: "prompt",
+  });
   if (violations.length === 0) {
     return null;
   }

@@ -277,6 +277,7 @@ export function interceptOutsideWorkspacePaths(
     providerValue,
     ctx.workspaceRoot,
     ctx.allowedWritableRoots,
+    { context: "prompt" },
   );
   for (const skipped of skippedExternalPaths) {
     ctx.appendEvent(

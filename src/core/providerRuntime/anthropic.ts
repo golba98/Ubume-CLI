@@ -26,7 +26,7 @@ import {
   type ClaudeCodeCapabilityDiscovery,
   claudeCodeModelsToProviderModels,
   discoverClaudeCodeCapabilities,
-  getClaudeModelDefaultEffort,
+  findClaudeModel,
   modelSupportsClaudeEffort,
 } from "./claudeCodeDiscovery.js";
 import { apiRequestError, failureFromError, retryAfterDelay } from "./failures.js";
@@ -101,6 +101,10 @@ function buildClaudeCodeBaseArgs(request: ProviderChatRequest): string[] {
   const models = request.modelDescriptor ? [request.modelDescriptor] : getActiveAnthropicModels();
   const supportedEffort =
     effort && modelSupportsClaudeEffort(request.route.modelId, effort, models) ? effort : null;
+  if (effort && !supportedEffort)
+    throw new Error(
+      `Claude model ${request.route.modelId} does not advertise effort "${effort}". Refresh Claude models and select a supported effort or provider-managed reasoning.`,
+    );
   return [
     ...(request.route.modelId ? ["--model", mapModelIdToClaudeArg(request.route.modelId)] : []),
     ...(supportedEffort ? ["--effort", supportedEffort] : []),
@@ -342,29 +346,16 @@ function isClaudeInvalidEffortError(result: CommandResult): boolean {
   );
 }
 
-function withClaudeEffort(request: ProviderChatRequest, effort: string): ProviderChatRequest {
-  return {
-    ...request,
-    route: {
-      ...request.route,
-      reasoning: effort,
-    },
-  };
-}
-
 function disableClaudeEffortForSession(
   modelId: string,
   effort: string,
   expected?: ProviderModel,
 ): void {
   const models = getActiveAnthropicModels();
+  const target = findClaudeModel(modelId, models);
   const disable = (model: ProviderModel): ProviderModel => {
-    const isTarget =
-      model.modelId === modelId ||
-      model.id === modelId ||
-      model.family === modelId ||
-      model.canonicalId === modelId;
-    if (!isTarget || !model.supportedReasoningLevels) return model;
+    if (model.modelId !== (expected?.modelId ?? target?.modelId) || !model.supportedReasoningLevels)
+      return model;
     const levels = model.supportedReasoningLevels.filter((level) => level.id !== effort);
     const preferred = levels.some((level) => level.id === model.defaultReasoningLevel)
       ? model.defaultReasoningLevel
@@ -379,7 +370,8 @@ function disableClaudeEffortForSession(
       description: `${model.description ?? model.label} - ${effort} disabled after Claude Code rejection this session`,
     };
   };
-  discoveredAnthropicModels = models.map(disable);
+  // A late rejection must not amend a replacement discovery descriptor.
+  if (!expected || target === expected) discoveredAnthropicModels = models.map(disable);
   providerCatalog.amendModel("anthropic", expected?.modelId ?? modelId, disable, expected);
 }
 
@@ -409,12 +401,18 @@ export function runClaudeCodeWithRunner(
   const runAttempt = (
     mode: "stream-json" | "plain-text",
     attemptRequest: ProviderChatRequest = request,
-    effortFallbackUsed = false,
   ) => {
-    const args =
-      mode === "stream-json"
-        ? buildClaudeCodeArgs(attemptRequest)
-        : buildClaudeCodePlainTextArgs(attemptRequest);
+    let args: string[];
+    try {
+      args =
+        mode === "stream-json"
+          ? buildClaudeCodeArgs(attemptRequest)
+          : buildClaudeCodePlainTextArgs(attemptRequest);
+    } catch (error) {
+      control.finish();
+      handlers.onError(errorMessage(error));
+      return;
+    }
     const spawnSpec = buildClaudeSpawnSpec(executable, args);
 
     let accumulatedText = "";
@@ -428,6 +426,9 @@ export function runClaudeCodeWithRunner(
         args: spawnSpec.args,
         cwd: request.workspaceRoot,
         timeoutMs: ANTHROPIC_TIMEOUT_MS,
+        ...(attemptRequest.route.reasoning
+          ? { env: { ...process.env, CLAUDE_CODE_EFFORT_LEVEL: attemptRequest.route.reasoning } }
+          : {}),
       },
       {
         onStdout: (chunk) => {
@@ -487,10 +488,6 @@ export function runClaudeCodeWithRunner(
           }
 
           const requestedEffort = mapReasoningToEffort(attemptRequest.route.reasoning ?? null);
-          const fallbackEffort = getClaudeModelDefaultEffort(
-            attemptRequest.route.modelId,
-            getActiveAnthropicModels(),
-          );
           if (requestedEffort && isClaudeInvalidEffortError(result)) {
             disableClaudeEffortForSession(
               attemptRequest.route.modelId,
@@ -498,36 +495,10 @@ export function runClaudeCodeWithRunner(
               attemptRequest.modelDescriptor,
             );
           }
-          if (
-            !effortFallbackUsed &&
-            requestedEffort &&
-            requestedEffort !== fallbackEffort &&
-            isClaudeInvalidEffortError(result)
-          ) {
-            const fallbackRequest = withClaudeEffort(attemptRequest, fallbackEffort);
-            const fallbackArgs =
-              mode === "stream-json"
-                ? buildClaudeCodeArgs(fallbackRequest)
-                : buildClaudeCodePlainTextArgs(fallbackRequest);
-            const fallbackSpawnSpec = buildClaudeSpawnSpec(executable, fallbackArgs);
-            handlers.onProgress?.({
-              id: "anthropic-claude-effort-fallback",
-              source: "stderr",
-              text: [
-                `${diagnostic}`,
-                `Claude Code rejected effort "${requestedEffort}" for ${request.route.modelId}; retrying once with --effort ${fallbackEffort}.`,
-                formatClaudeCommandDiagnostic(
-                  fallbackSpawnSpec.executable,
-                  fallbackSpawnSpec.args,
-                  request.prompt,
-                ),
-              ].join("\n"),
-            });
-            runAttempt(mode, fallbackRequest, true);
-            return;
-          }
-
-          const message = result.userMessage || result.stderr || "Claude Code execution failed.";
+          const message =
+            requestedEffort && isClaudeInvalidEffortError(result)
+              ? `${result.userMessage || result.stderr}\nClaude Code rejected effort "${requestedEffort}". Refresh models and choose a supported effort; Ubume did not retry at a lower level.`
+              : result.userMessage || result.stderr || "Claude Code execution failed.";
           control.finish();
           handlers.onError(message, diagnostic);
           return;

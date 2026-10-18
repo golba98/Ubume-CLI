@@ -412,12 +412,17 @@ export async function runSavedExec(
         providerId: options.providerId,
         saved: record,
       });
-    // Mistral's model list comes from the Vibe CLI. Refresh it so that the routed model
-    // is validated against what the installed CLI actually offers.
-    if (!options.context && context.route.providerId === "mistral") {
-      await refreshProviderModels("mistral", {
+    // Resolve current capabilities before validating an explicit Claude effort;
+    // disk seeds may predate CLI updates. Keep Vibe's existing model refresh.
+    if (
+      !options.context &&
+      (context.route.providerId === "mistral" ||
+        (context.route.providerId === "anthropic" && context.route.reasoning))
+    ) {
+      await refreshProviderModels(context.route.providerId, {
         cwd: workspace,
-        providerConfig: context.config.providers?.mistral,
+        providerConfig: context.config.providers?.[context.route.providerId],
+        forceRefresh: context.route.providerId === "anthropic",
       });
     }
 
