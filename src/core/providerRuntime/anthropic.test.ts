@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { normalizeRuntimeConfig, resolveRuntimeConfig } from "../../config/runtimeConfig.js";
 import { withEnvironment } from "../../test/environment.js";
+import { sendJson, startLoopbackServer } from "../../test/loopbackServer.js";
 import { buildClaudeSpawnSpec } from "../executables/executableResolver.js";
 import type { CommandResult, runCommand } from "../process/commandRunner.js";
 import {
@@ -15,6 +16,8 @@ import {
 import { resolveUsageTarget } from "../usage/registry.js";
 import {
   anthropicRuntime,
+  anthropicApiTimeoutMs,
+  ANTHROPIC_API_TIMEOUT_MS,
   buildClaudeCodeArgs,
   buildClaudeCodePlainTextArgs,
   createClaudeToolParser,
@@ -28,6 +31,7 @@ import {
   validateAnthropicRoute,
 } from "./anthropic.js";
 import { discoverClaudeCodeCapabilities } from "./claudeCodeDiscovery.js";
+import type { ProviderFailure } from "./failures.js";
 import type { ProviderChatRequest, ProviderModel } from "./types.js";
 
 const VERIFIED_EFFORT_FIXTURE: ProviderModel[] = ["sonnet", "opus", "claude-sonnet-4-20250514"].map(
@@ -190,6 +194,135 @@ test("Anthropic runtime sends prompts through the Messages API", async () => {
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+type ApiOutcome =
+  | { kind: "response"; text: string }
+  | { kind: "error"; message: string; failure?: ProviderFailure };
+
+/** Runs one direct-API request against a loopback server; nothing leaves the machine. */
+async function runAgainstLoopback(
+  handler: Parameters<typeof startLoopbackServer>[0],
+  providerConfig: { apiTimeoutMs?: number } = {},
+): Promise<{ outcome: ApiOutcome; requests: number }> {
+  let requests = 0;
+  const server = await startLoopbackServer((request, response) => {
+    requests += 1;
+    handler(request, response);
+  });
+  try {
+    const outcome = await withAnthropicEnv(
+      { CLAUDE_EXECUTABLE: "/missing/claude" },
+      () =>
+        new Promise<ApiOutcome>((resolve) => {
+          anthropicRuntime.run?.(
+            buildRequest({
+              providerConfig: {
+                apiKey: "test-anthropic-key",
+                baseUrl: server.url,
+                ...providerConfig,
+              },
+            }),
+            {
+              onResponse: (text) => resolve({ kind: "response", text }),
+              onError: (message, _raw, failure) => resolve({ kind: "error", message, failure }),
+            },
+          );
+        }),
+    );
+    return { outcome, requests };
+  } finally {
+    await server.close();
+  }
+}
+
+test("Anthropic API deadline covers a server that never sends response headers", async () => {
+  const started = Date.now();
+  const { outcome, requests } = await runAgainstLoopback(() => undefined, { apiTimeoutMs: 150 });
+  assert.equal(outcome.kind, "error");
+  assert.match(outcome.kind === "error" ? outcome.message : "", /timed out after 0\.15s/);
+  assert.equal(outcome.kind === "error" ? outcome.failure?.kind : undefined, "network");
+  assert.equal(requests, 1, "a timed-out POST is never retried");
+  assert.ok(Date.now() - started < 5000);
+});
+
+test("Anthropic API deadline also covers a response body that stops streaming", async () => {
+  const { outcome } = await runAgainstLoopback(
+    (_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"content":[');
+    },
+    { apiTimeoutMs: 150 },
+  );
+  assert.equal(outcome.kind, "error");
+  assert.match(outcome.kind === "error" ? outcome.message : "", /timed out/);
+});
+
+test("Anthropic API classifies authentication, rate-limit, server and malformed responses", async () => {
+  const failureOf = ({ outcome }: { outcome: ApiOutcome }) =>
+    outcome.kind === "error" ? outcome.failure : undefined;
+  const auth = await runAgainstLoopback((_request, response) =>
+    sendJson(response, 401, {
+      error: { type: "authentication_error", message: "invalid x-api-key" },
+    }),
+  );
+  assert.equal(failureOf(auth)?.kind, "authentication");
+
+  const limited = await runAgainstLoopback((_request, response) =>
+    sendJson(
+      response,
+      429,
+      { error: { type: "rate_limit_error", message: "slow down" } },
+      { "retry-after": "7" },
+    ),
+  );
+  assert.equal(failureOf(limited)?.kind, "rate-limit");
+  assert.equal(failureOf(limited)?.retryAfterMs, 7000);
+  assert.equal(limited.requests, 1);
+
+  const unavailable = await runAgainstLoopback((_request, response) => {
+    response.writeHead(503);
+    response.end("upstream down");
+  });
+  assert.equal(failureOf(unavailable)?.kind, "temporary");
+
+  const garbage = await runAgainstLoopback((_request, response) => {
+    response.writeHead(200);
+    response.end("<html>gateway</html>");
+  });
+  assert.equal(garbage.outcome.kind, "error");
+  assert.match(
+    garbage.outcome.kind === "error" ? garbage.outcome.message : "",
+    /invalid response body/i,
+  );
+});
+
+test("Anthropic API cancellation stops the request without reporting an outcome", async () => {
+  let aborted = false;
+  const server = await startLoopbackServer((request) => {
+    request.socket.once("close", () => {
+      aborted = true;
+    });
+  });
+  try {
+    await withAnthropicEnv({ CLAUDE_EXECUTABLE: "/missing/claude" }, async () => {
+      const outcomes: string[] = [];
+      const cancel = anthropicRuntime.run?.(
+        buildRequest({ providerConfig: { apiKey: "test-anthropic-key", baseUrl: server.url } }),
+        {
+          onResponse: () => outcomes.push("response"),
+          onError: () => outcomes.push("error"),
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      cancel?.();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(outcomes, []);
+    });
+    assert.equal(aborted, true, "the in-flight request is aborted, not left running");
+  } finally {
+    await server.close();
+  }
 });
 
 test("Anthropic API responses record rate-limit headers for /usage without extra requests", async () => {
@@ -1526,4 +1659,11 @@ test("a late Claude effort rejection cannot amend replacement model metadata", a
     replacement.supportedReasoningLevels?.some((level) => level.id === "max"),
     true,
   );
+});
+
+test("direct API deadlines validate programmatic config before creating a timer", () => {
+  for (const apiTimeoutMs of [NaN, Infinity, 0, -1, 1.5, 2_147_483_648]) {
+    assert.equal(anthropicApiTimeoutMs({ apiTimeoutMs }), ANTHROPIC_API_TIMEOUT_MS);
+  }
+  assert.equal(anthropicApiTimeoutMs({ apiTimeoutMs: 45000 }), 45000);
 });

@@ -578,6 +578,23 @@ test("Codex codexCommandPath round-trips through serialize/parse", () => {
   });
 });
 
+test("Anthropic apiTimeoutMs round-trips and ignores invalid values", () => {
+  const config = parseProviderWorkspaceConfig({
+    providers: { anthropic: { api_timeout_ms: 45000 }, openai: { apiTimeoutMs: -1 } },
+  });
+  assert.equal(config.providers?.anthropic?.apiTimeoutMs, 45000);
+  assert.equal(config.providers?.openai?.apiTimeoutMs, undefined);
+  const serialized = serializeProviderWorkspaceConfig(config).providers as Record<string, unknown>;
+  assert.deepEqual(serialized.anthropic, {
+    api_timeout_ms: 45000,
+  });
+  assert.equal(
+    parseProviderWorkspaceConfig({ providers: { anthropic: { apiTimeoutMs: 1.5 } } }).providers
+      ?.anthropic?.apiTimeoutMs,
+    undefined,
+  );
+});
+
 test("Local OpenAI-compatible config round-trips through serialize/parse", () => {
   const config = parseProviderWorkspaceConfig({
     providers: {
@@ -878,5 +895,15 @@ test("read-only provider inspection finds legacy app data when Ubume already exi
   } finally {
     rmSync(legacy, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("API deadline configuration rejects nonfinite and overflowing timer values", () => {
+  for (const apiTimeoutMs of [NaN, Infinity, 0, -1, 1.5, 2_147_483_648]) {
+    assert.equal(
+      parseProviderWorkspaceConfig({ providers: { anthropic: { apiTimeoutMs } } }).providers
+        ?.anthropic?.apiTimeoutMs,
+      undefined,
+    );
   }
 });

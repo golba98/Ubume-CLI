@@ -27,6 +27,7 @@ import {
 import { isKnownProviderId } from "../core/providerLauncher/registry.js";
 import type { ProviderId, ProviderWorkspaceConfig } from "../core/providerLauncher/types.js";
 import { loadProviderWorkspaceConfig } from "../core/providerLauncher/workspaceConfig.js";
+import { resolveAnthropicExecutionBackend } from "../core/providerRuntime/anthropic.js";
 import {
   createRoutedProvider,
   effectiveProviderRuntime,
@@ -161,11 +162,13 @@ function buildProviderRoute(
 
 /**
  * Fails fast if the provider CLI is missing, so the user sees an actionable message
- * instead of a spawn error mid-run. Claude Code may run from `ANTHROPIC_API_KEY` alone,
- * without the executable.
+ * instead of a spawn error mid-run. An Anthropic route that will execute through the
+ * Messages API (a configured `apiKey` or `ANTHROPIC_API_KEY`) needs no Claude executable;
+ * readiness follows the same transport choice as `run()`.
  */
 function assertExecutableAvailable(
   selectedId: ProviderId,
+  route: ProviderRoute,
   runtime: ResolvedRuntimeConfig,
   config: ProviderWorkspaceConfig,
   workspaceRoot: string,
@@ -176,7 +179,11 @@ function assertExecutableAvailable(
       ? (runtime.codexCommandPath ?? providerExecutable(selectedId, config))
       : providerExecutable(selectedId, config);
   if (!command || findExecutable(command, workspaceRoot)) return;
-  if (selectedId === "anthropic" && process.env.ANTHROPIC_API_KEY?.trim()) return;
+  if (
+    selectedId === "anthropic" &&
+    resolveAnthropicExecutionBackend(route, config.providers?.anthropic) === "anthropic-api-key"
+  )
+    return;
   throw new CommandError(
     `${label} executable is unavailable: ${command}. Install it or configure its explicit path.`,
   );
@@ -265,7 +272,7 @@ export function resolveExecutionContext(
   );
   const runtime = effectiveProviderRuntime(base, config, route);
   if (!inspect) {
-    assertExecutableAvailable(selectedId, runtime, config, workspaceRoot, provider.label);
+    assertExecutableAvailable(selectedId, route, runtime, config, workspaceRoot, provider.label);
   }
 
   return {
