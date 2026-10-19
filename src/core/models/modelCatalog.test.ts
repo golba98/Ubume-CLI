@@ -313,3 +313,18 @@ test("Claude alias pin changes invalidate only Claude capability identity", asyn
     expect(catalogContextKey("google", context)).toBe(google);
   });
 });
+
+test("completed discoveries detach their abort listener even when an adapter retains the signal", async () => {
+  const { getEventListeners } = await import("node:events");
+  const signals: AbortSignal[] = [];
+  const catalog = new ModelCatalog();
+  const provider = runtime(async ({ signal }) => {
+    signals.push(signal!);
+    return ready();
+  });
+  for (let i = 0; i < 100; i++) {
+    await catalog.refresh(provider, { ...context, forceRefresh: true });
+  }
+  for (const signal of signals) expect(getEventListeners(signal, "abort").length).toBe(0);
+  catalog.dispose();
+});

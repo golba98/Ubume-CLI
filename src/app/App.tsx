@@ -719,6 +719,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   const { updateRuntimeConfig } = runtimeSettings;
   const { routeChoiceRequiredRef } = appState;
   const { refreshModelCapabilities, ensureProviderModels, refreshAuthStatus } = useModelCatalog({
+    runtimeConfig,
     ...appState,
     ...runtimeSettings,
     providerOverride,
@@ -738,7 +739,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     ...appState,
     updateCheckResult,
     setUpdateCheckResult,
-    returnFromUpdateOverlay,
   });
 
   const { repaintCommittedTheme } = useThemeCommit({

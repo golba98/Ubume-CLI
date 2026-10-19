@@ -36,11 +36,16 @@ export function saveConversationRecord(
     deduplicate?: boolean;
     rememberError?: boolean;
     clearOnSuccess?: boolean;
+    /** `next.session` was just built from `snapshotRef`; do not build it again. */
+    sessionIsCurrent?: boolean;
   },
 ): void {
   const { conversationStore, snapshotRef, lastSaveErrorRef, appendEvent } = context;
   try {
-    conversationStore.save({ ...next, session: snapshotRef.current?.() });
+    conversationStore.save({
+      ...next,
+      session: options.sessionIsCurrent ? next.session : snapshotRef.current?.(),
+    });
     if (options.clearOnSuccess) {
       lastSaveErrorRef.current = null;
     }

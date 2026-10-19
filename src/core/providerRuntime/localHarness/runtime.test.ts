@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
+import { waitFor } from "../../../test/async.js";
 import type { BackendRunHandlers } from "../../providers/types.js";
 import { localRuntime } from "../local.js";
 import { getProviderRuntime } from "../registry.js";
@@ -484,9 +485,31 @@ require("node:readline").createInterface({input:process.stdin}).on("line", line 
       onResponse: () => undefined,
       onError: () => undefined,
     });
-    await Promise.resolve();
+    // The runtime module loads lazily on the first Local run; cancel once the request is active.
+    await waitFor(() => observed.signal !== undefined, { label: "Harness request started" });
     stop();
     assert.equal(observed.signal?.aborted, true);
+  });
+
+  test("a run cancelled before the Harness starts never reaches the Harness", async () => {
+    let started = false;
+    resetLocalHarnessProcessForTests({
+      run: () => {
+        started = true;
+        return new Promise(() => undefined);
+      },
+      shutdown: async () => undefined,
+      terminate: () => undefined,
+    });
+    const outcomes: string[] = [];
+    const stop = localRuntime.run!(request("Qwen"), {
+      onResponse: () => outcomes.push("response"),
+      onError: () => outcomes.push("error"),
+    });
+    stop();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(started, false);
+    assert.deepEqual(outcomes, []);
   });
 });
 

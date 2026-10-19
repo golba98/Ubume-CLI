@@ -192,10 +192,15 @@ export function buildNativeTranscriptParts(
       continue;
     }
 
-    output.staticItems.push({
-      key: item.key,
-      rows: buildTimelineSnapshot([item], options).rows,
-    });
+    const rows = buildTimelineSnapshot([item], options).rows;
+    // A running shell event changes when it finishes. Ink's <Static> prints an item once and
+    // never redraws it, so printing the running event there would leave "Executing shell" in
+    // scrollback forever; it stays live until FINALIZE_SHELL moves the result to static.
+    if (item.type === "event" && item.event.type === "shell" && item.event.status === "running") {
+      output.liveRows.push(...rows);
+      continue;
+    }
+    output.staticItems.push({ key: item.key, rows });
   }
 
   return output;

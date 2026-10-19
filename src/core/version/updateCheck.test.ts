@@ -11,6 +11,7 @@ import {
   isValidSemver,
   type NpmDistTags,
   normalizeVersion,
+  resolveDistTagsUrl,
   shouldRunStartupUpdateCheck,
   UBUME_NPM_DIST_TAGS_URL,
   UBUME_UPDATE_COMMAND,
@@ -566,4 +567,16 @@ test("shows prompt again when npm latest is newer than skipped version", () => {
   // Different versions means the prompt is shown again
   assert.notEqual(latest, skipped);
   assert.equal(isNewerVersion(latest, skipped), true);
+});
+
+test("the dist-tags URL can be redirected to an http(s) mirror only", () => {
+  assert.equal(resolveDistTagsUrl({}), UBUME_NPM_DIST_TAGS_URL);
+  assert.equal(
+    resolveDistTagsUrl({ UBUME_UPDATE_DIST_TAGS_URL: "http://127.0.0.1:4873/dist-tags" }),
+    "http://127.0.0.1:4873/dist-tags",
+  );
+  assert.equal(
+    resolveDistTagsUrl({ UBUME_UPDATE_DIST_TAGS_URL: "file:///etc/passwd" }),
+    UBUME_NPM_DIST_TAGS_URL,
+  );
 });

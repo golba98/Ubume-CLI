@@ -85,3 +85,34 @@ test("finishAfterLiveFlush defers only after a live flush", async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(order, ["sync", "after-call", "deferred"]);
 });
+
+test("the per-turn runtime keeps the configured Codex executable", () => {
+  const route = {
+    providerId: "openai",
+    modelId: "gpt-test",
+    backendKind: "codex-cli-auth",
+  } as const;
+  // providers.json override (interactive provider route config).
+  const fromWorkspace = preparePromptRun(DEFAULT_RUNTIME_CONFIG, {}, "hello", route, {
+    providers: { openai: { codexCommandPath: "/opt/workspace/codex" } },
+  });
+  assert.equal(fromWorkspace.runtimeForTurn.codexCommandPath, "/opt/workspace/codex");
+  // Layered TOML value carried on the runtime config, when providers.json has none.
+  const fromToml = preparePromptRun(
+    { ...DEFAULT_RUNTIME_CONFIG, codexCommandPath: "/opt/toml/codex" },
+    {},
+    "hello",
+    route,
+    {},
+  );
+  assert.equal(fromToml.runtimeForTurn.codexCommandPath, "/opt/toml/codex");
+  // The cleanup fast path re-resolves the runtime and must keep it too.
+  const cleanup = preparePromptRun(
+    { ...DEFAULT_RUNTIME_CONFIG, mode: "auto-edit", reasoningLevel: "high" },
+    {},
+    "Delete generated temporary files",
+    route,
+    { providers: { openai: { codexCommandPath: "/opt/workspace/codex" } } },
+  );
+  assert.equal(cleanup.runtimeForTurn.codexCommandPath, "/opt/workspace/codex");
+});

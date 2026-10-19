@@ -785,6 +785,22 @@ export function OverlayPanels(props: OverlayPanelsProps) {
             onRestart={exit}
           />
         )}
+      {screen === "update-prompt" &&
+        updateCheckResult !== null &&
+        updateCheckResult.status !== "update-available" && (
+          <SelectionPanel
+            focusId={FOCUS_IDS.updatePrompt}
+            title={
+              updateCheckResult.status === "up-to-date"
+                ? "Ubume is up to date"
+                : "Update check unavailable"
+            }
+            subtitle=""
+            items={[{ label: "Return to chat", value: "close" }]}
+            onSelect={handleSkipUpdateForSession}
+            onCancel={handleSkipUpdateForSession}
+          />
+        )}
       {screen === "update-prompt" && updateCheckResult === null && (
         <Box
           borderStyle="round"

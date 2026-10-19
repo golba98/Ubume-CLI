@@ -30,6 +30,7 @@ assert(
       "plan-warning-save",
       "plan-warning-resume",
       "usage-during-run",
+      "shell-complete",
     ].includes(scenario),
   `Unknown workbench scenario: ${scenario}`,
 );
@@ -436,7 +437,20 @@ async function resumeConversation(): Promise<void> {
   await terminal.dispose();
   return;
 }
+/** `!shell` output reaches scrollback as a completed event, not a stuck "Executing" line. */
+async function completeShellCommand(): Promise<void> {
+  terminal.stdin.write("!printf 'one\\ntwo\\n'");
+  await delay();
+  terminal.stdin.write("\r");
+  await until(
+    () => terminal.output().includes("Executed shell") && terminal.output().includes("2 lines"),
+    "completed shell event with its summary",
+  );
+  assert(terminal.lastFrame().includes("Ask Ubume"), "composer is usable again");
+}
+
 const runScenario = {
+  "shell-complete": completeShellCommand,
   "plan-actions": runPlanActions,
   "plan-warning-save": savePlanAfterWarning,
   "plan-warning-resume": resumePlanAfterWarning,

@@ -5,6 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import * as benchTrace from "../perf/benchTrace.js";
 import { resolveUbumeDebugLogPath } from "../workspace/appData.js";
 import { isTerminalResizing } from "./terminalControl.js";
 
@@ -19,6 +20,12 @@ interface FrameLockOptions<T extends FrameWritable> {
 }
 
 const resizeFrameCacheResetters = new WeakMap<object, () => void>();
+const frameLockReleases = new WeakMap<object, () => void>();
+
+/** Restores the original writer and releases debug/frame buffers after the app exits. */
+export function releaseFrameLock(stdout: object): void {
+  frameLockReleases.get(stdout)?.();
+}
 
 /**
  * Invalidates the wrapped stream's last-frame cache so identical content can repaint at new
@@ -36,6 +43,7 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
   stdout,
   env,
 }: FrameLockOptions<T>): T {
+  releaseFrameLock(stdout);
   let lastFrame = "";
   let isFlushing = false;
   let debugLogStream: fs.WriteStream | null = null;
@@ -60,7 +68,9 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
     }
   };
 
-  const originalWrite = stdout.write.bind(stdout);
+  const previousWrite = stdout.write;
+  const originalWrite = previousWrite.bind(stdout);
+  let firstFrameMarked = false;
 
   // A terminal resize can make an otherwise identical Ink frame meaningful:
   // rows reflow at a new width and height-driven spacer/layout changes must be
@@ -112,6 +122,19 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
     isFlushing = true;
     try {
       lastFrame = chunk;
+      // Negotiation, cursor and mode-control writes are not rendered content.
+      const hasVisibleText =
+        !firstFrameMarked &&
+        /[^\s]/.test(
+          chunk
+            .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+            .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, ""),
+        );
+      if (!firstFrameMarked && !isControlSequence && hasVisibleText) {
+        firstFrameMarked = true;
+        benchTrace.startupMark("first-frame-write", { bytes: processed.length });
+      }
+      benchTrace.traceFrameTokens(chunk);
       const resizing = isTerminalResizing();
       logDebug(
         `Frame written: length=${processed.length} original=${chunk.length} resizing=${resizing}`,
@@ -122,5 +145,14 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
     }
   };
 
+  const wrappedWrite = target.write;
+  frameLockReleases.set(stdout, () => {
+    if (target.write === wrappedWrite) target.write = previousWrite;
+    lastFrame = "";
+    debugLogStream?.end();
+    debugLogStream = null;
+    resizeFrameCacheResetters.delete(stdout);
+    frameLockReleases.delete(stdout);
+  });
   return stdout;
 }
