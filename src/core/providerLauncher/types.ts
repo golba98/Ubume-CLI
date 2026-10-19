@@ -103,6 +103,8 @@ export interface ProviderWorkspaceOverride {
   claudeCommandPath?: string;
   codexCommandPath?: string;
   antigravityCommandPath?: string;
+  /** Anthropic direct-API request deadline in milliseconds (connection through body). */
+  apiTimeoutMs?: number;
 }
 
 export interface ProviderModelWorkspaceOverride {
