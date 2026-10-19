@@ -183,6 +183,16 @@ function parseProviderOverride(value: unknown): ProviderWorkspaceOverride | unde
     override.codexCommandPath = codexCommandPath.trim();
   }
 
+  const apiTimeoutMs = value.apiTimeoutMs ?? value.api_timeout_ms;
+  if (
+    typeof apiTimeoutMs === "number" &&
+    Number.isSafeInteger(apiTimeoutMs) &&
+    apiTimeoutMs > 0 &&
+    apiTimeoutMs <= 2_147_483_647
+  ) {
+    override.apiTimeoutMs = apiTimeoutMs;
+  }
+
   return override;
 }
 
@@ -396,6 +406,7 @@ export function serializeProviderWorkspaceConfig(
         ...(override.codexCommandPath !== undefined
           ? { codex_command_path: override.codexCommandPath }
           : {}),
+        ...(override.apiTimeoutMs !== undefined ? { api_timeout_ms: override.apiTimeoutMs } : {}),
       },
     ]),
   );

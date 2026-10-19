@@ -771,3 +771,57 @@ test("models --refresh is cancelled by SIGINT and stops the discovery process", 
     f.close();
   }
 });
+
+test("a configured Anthropic API key runs without an installed Claude CLI", async () => {
+  const f = fixture();
+  const server = await startLoopbackServer((request, response) =>
+    request.url?.startsWith("/v1/messages")
+      ? sendJson(response, 200, { content: [{ type: "text", text: "api fixture answer" }] })
+      : sendJson(response, 200, {
+          data: [{ id: "claude-fixture-1", type: "model" }],
+          has_more: false,
+        }),
+  );
+  try {
+    f.env.ANTHROPIC_API_KEY = "";
+    writeFileSync(
+      join(f.dataRoot, "providers.json"),
+      JSON.stringify({
+        activeRoute: {
+          providerId: "anthropic",
+          modelId: "claude-fixture-1",
+          backendKind: "anthropic-api-key",
+        },
+        providers: {
+          anthropic: {
+            apiKey: "fixture-anthropic-key",
+            baseUrl: server.url,
+            claudeCommandPath: join(f.root, "missing-claude"),
+          },
+        },
+      }),
+    );
+    const result = await runAsync(f, ["exec", "--no-save", "hello", "--json"]).done;
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).data.text, "api fixture answer");
+
+    // Without any key, a missing Claude CLI is still reported before the run.
+    writeFileSync(
+      join(f.dataRoot, "providers.json"),
+      JSON.stringify({
+        activeRoute: {
+          providerId: "anthropic",
+          modelId: "sonnet",
+          backendKind: "claude-code-auth",
+        },
+        providers: { anthropic: { claudeCommandPath: join(f.root, "missing-claude") } },
+      }),
+    );
+    const missing = await runAsync(f, ["exec", "--no-save", "hello", "--json"]).done;
+    assert.notEqual(missing.code, 0);
+    assert.match(JSON.parse(missing.stdout).error.message, /executable is unavailable/);
+  } finally {
+    await server.close();
+    f.close();
+  }
+});
