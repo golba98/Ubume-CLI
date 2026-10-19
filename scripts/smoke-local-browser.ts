@@ -22,7 +22,6 @@ const manager = new BrowserManager(capability);
 let id = 0;
 async function run(tool: BrowserToolName, args: Record<string, unknown> = {}): Promise<ComputerUseValue> {
   const result = await manager.execute({ sessionId: "smoke", callId: String(++id), tool, arguments: args }, { dshHome: home, networkAccess: false, signal: new AbortController().signal });
-  assert.equal(result.ok, true, JSON.stringify(result));
   if (!result.ok) throw new Error(result.error.message);
   console.log(`${tool}: ${result.value.summary}`);
   return result.value;
