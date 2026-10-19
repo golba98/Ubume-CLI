@@ -8,8 +8,8 @@ Before running a script, check its class. Offline scripts use local fixtures, te
 
 | Class | Meaning | Scripts |
 | --- | --- | --- |
-| Offline-safe | No network, no provider, no user state touched. | `audit-ubume-capabilities.mjs`, `gen-build-info.mjs`, `smoke-workbench.py`, `workbench-terminal-smoke.tsx`, `record-resume-picker.tsx`, `sync-npm-lock.ts` (writes lockfiles only) |
-| Local machine only | Reads/writes this machine's installed tools or repositories. | `install-local-dev-bin.mjs` (writes local executable shims), `run-local-dev.mjs` (launches the local app), `claudeCodeDiscoveryDebug.ts` (inspects the local Claude CLI), `configure-codexa-native.mjs` (reads a local model inventory; refuses overwrites), `smoke-local-browser.ts` (localhost browser flow, needs Chromium) |
+| Offline-safe | No intended external requests or provider/account state; may write generated project files. | `audit-ubume-capabilities.mjs`, `gen-build-info.mjs`, `record-resume-picker.tsx`, `sync-npm-lock.ts` (writes lockfiles only) |
+| Local environment | May read configured tools or user settings; isolate App-based smokes. | `smoke-workbench.py` / `workbench-terminal-smoke.tsx` (deterministic provider; inherits settings unless isolated), `install-local-dev-bin.mjs` (writes local executable shims), `run-local-dev.mjs` (launches the local app), `claudeCodeDiscoveryDebug.ts` (inspects the local Claude CLI), `configure-codexa-native.mjs` (reads a local model inventory; refuses overwrites), `smoke-local-browser.ts` (localhost browser flow, needs Chromium) |
 | May invoke a real model | Local model checkpoints run in-process. | `smoke-codexa-native.ts` (local PyTorch, bounded by a 10-minute deadline) |
 | Real provider / external | Submits real prompts, consumes quota, contacts external services. | `smoke-terminal-bench.mjs`, anything via `--headless-benchmark`, `run-local-dev.mjs` with a configured provider |
 | Release/publishing | Part of the npm release path. Never run casually. | `sync-npm-lock.ts` (via `prepublishOnly`), `gen-build-info.mjs` (via `prepublishOnly`/`build`) |
