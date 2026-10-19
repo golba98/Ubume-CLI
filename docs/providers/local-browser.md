@@ -1,4 +1,4 @@
-# Browser computer use with Local models
+# Local browser computer use
 
 Ubume's Local provider uses the DeepSeek Harness as its generic agent runtime for compatible OpenAI endpoints, including LM Studio, Ollama and Unsloth. Browser support uses that same tool registry, agent loop, permission decisions, tool-result messages, reasoning transitions and session persistence. It does not depend on a DeepSeek model name or a search service.
 

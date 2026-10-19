@@ -1,4 +1,4 @@
-# Codexa Native in Ubume Dev
+# Codexa Native (development channel)
 
 Codexa Native runs the existing local PyTorch model. It has no cloud transport, shell tools, repository editing, or artificial answer correction. The five 934M candidates are experimental; availability is not a conversational-quality endorsement.
 

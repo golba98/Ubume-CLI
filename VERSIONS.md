@@ -9,7 +9,7 @@ Failed model selections now leave provider and model controls usable. Older vali
 
 Codexa Native can run five experimental local 934M checkpoint variants through a managed Python worker. Generation settings, unload and replay controls are available in the TUI. The model files, tokenizer and Python environment must be configured separately; they are not included in the npm package.
 
-The interactive app is organized into domain hooks, and `/status`, `/runtime`, `/workspace` and `/help` output is restored. See [the verification report](docs/RELEASE_0.1.18_VERIFICATION.md).
+The interactive app is organized into domain hooks, and `/status`, `/runtime`, `/workspace` and `/help` output is restored.
 
 This version is prepared for review and has not been published by this release preparation.
 
@@ -31,7 +31,7 @@ Mistral Vibe's configured models stay separate from API-discovered custom models
 
 "Vibe current/default" follows Vibe's saved selection and inherited environment overrides. Custom API entries say "request unverified." No live Mistral Large 4 completion was sent, so successful inference remains unverified.
 
-Local verification passed 1,986 tests, TypeScript, Biome, build, the capability audit and package/version checks. See [the verification report](docs/RELEASE_0.1.16_VERIFICATION.md).
+Local verification passed 1,986 tests, TypeScript, Biome, build, the capability audit and package/version checks.
 
 The public npm registry confirms that this version is published (verified 2026-10-09).
 

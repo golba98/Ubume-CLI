@@ -1,4 +1,4 @@
-# Terminal commands
+# Headless terminal commands
 
 Ubume can diagnose setup, inspect saved sessions, and run prompts without opening
 the interactive UI. Bun is required. Run `ubume --help` or `ubume exec --help`
