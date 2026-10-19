@@ -20,9 +20,10 @@
     "audit:ubume-gap": "node scripts/audit-ubume-capabilities.mjs",
     "smoke:terminal-bench": "node scripts/smoke-terminal-bench.mjs",
     "gen-build-info": "node scripts/gen-build-info.mjs",
-    "build": "bun run gen-build-info && bun run typecheck && bun run check",
-    "prepublishOnly": "npm run sync:npm-lock && npm run gen-build-info && npm run typecheck && npm run check && bun test --max-concurrency=1",
-    "sync:npm-lock": "bun scripts/sync-npm-lock.ts"
+    "build": "bun run gen-build-info && bun run typecheck && bun run typecheck:utilities && bun run check",
+    "prepublishOnly": "npm run sync:npm-lock && npm run gen-build-info && npm run typecheck && npm run typecheck:utilities && npm run check && bun test --max-concurrency=1",
+    "sync:npm-lock": "bun scripts/sync-npm-lock.ts",
+    "typecheck:utilities": "tsc --noEmit -p scripts/tsconfig.json"
   },
   "dependencies": {
     "playwright": "1.63.0",

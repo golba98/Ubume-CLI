@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "types": ["node", "bun-types"] },
+  "include": [],
+  "files": [
+    "smoke-codexa-native.ts",
+    "smoke-local-browser.ts",
+    "smoke-packaged-harness.ts",
+    "sync-npm-lock.ts",
+    "record-resume-picker.tsx",
+    "configure-codexa-native.test.ts"
+  ]
+}
