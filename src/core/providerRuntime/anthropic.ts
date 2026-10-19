@@ -29,7 +29,13 @@ import {
   findClaudeModel,
   modelSupportsClaudeEffort,
 } from "./claudeCodeDiscovery.js";
-import { apiRequestError, failureFromError, retryAfterDelay } from "./failures.js";
+import {
+  apiRequestError,
+  classifyProviderFailure,
+  failureFromError,
+  ProviderRequestError,
+  retryAfterDelay,
+} from "./failures.js";
 import { ANTHROPIC_FALLBACK_MODELS } from "./models.js";
 import type {
   ProviderBackendKind,
@@ -43,6 +49,13 @@ import type {
 const ANTHROPIC_VERSION = "2023-06-01";
 const ANTHROPIC_MAX_TOKENS = 1024;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
+/**
+ * Default deadline for one direct Messages API request, covering connection, response
+ * headers and the full body. Override with `providers.anthropic.apiTimeoutMs`. A request
+ * that exceeds it fails as a network timeout and is never retried automatically, since a
+ * retried POST could repeat a paid generation.
+ */
+export const ANTHROPIC_API_TIMEOUT_MS = 120_000;
 const ANTHROPIC_ROUTE_VALIDATION_TIMEOUT_MS = 15_000;
 const DISCOVERY_FAILURE_MESSAGE =
   "Claude Code model version discovery failed; using fallback aliases with unknown versions.";
@@ -254,6 +267,17 @@ export function createClaudeToolParser(handlers: BackendRunHandlers): (line: str
 // Anthropic Messages API
 // ---------------------------------------------------------------------------
 
+/** Effective direct-API deadline: a positive configured `apiTimeoutMs`, else the default. */
+export function anthropicApiTimeoutMs(providerConfig?: ProviderWorkspaceOverride): number {
+  const configured = providerConfig?.apiTimeoutMs;
+  return typeof configured === "number" &&
+    Number.isSafeInteger(configured) &&
+    configured > 0 &&
+    configured <= 2_147_483_647
+    ? configured
+    : ANTHROPIC_API_TIMEOUT_MS;
+}
+
 async function runAnthropicApi(
   request: ProviderChatRequest,
   signal?: AbortSignal,
@@ -263,6 +287,28 @@ async function runAnthropicApi(
     throw new Error(ANTHROPIC_ROUTE_SETUP_MESSAGE);
   }
 
+  const timeoutMs = anthropicApiTimeoutMs(request.providerConfig);
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  try {
+    return await requestAnthropicMessage(request, apiKey, requestSignal);
+  } catch (error) {
+    // User cancellation propagates unchanged; the caller already ignores it.
+    if (deadline.aborted && !signal?.aborted) {
+      const seconds = Number((timeoutMs / 1000).toFixed(3));
+      throw new ProviderRequestError(
+        classifyProviderFailure(`Anthropic API request timed out after ${seconds}s.`),
+      );
+    }
+    throw error;
+  }
+}
+
+async function requestAnthropicMessage(
+  request: ProviderChatRequest,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<string> {
   const response = await fetch(`${anthropicApiBase(request.providerConfig)}/messages`, {
     method: "POST",
     signal,
@@ -313,9 +359,14 @@ async function runAnthropicApi(
     );
   }
 
-  const parsed = JSON.parse(body) as {
-    content?: Array<{ type?: string; text?: string }>;
-  };
+  let parsed: { content?: Array<{ type?: string; text?: string }> };
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(
+      `Anthropic API returned an invalid response body (HTTP ${response.status}, not JSON).`,
+    );
+  }
   const text = parsed.content
     ?.filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text ?? "")

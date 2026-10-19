@@ -12,7 +12,10 @@ npm install -g ubume
 ubume
 ```
 
-Requires Node.js and one supported provider CLI, unless you use a local model.
+Requires Node.js (runs the `ubume` launcher) and [Bun](https://bun.sh) on `PATH` (runs the
+application; set `UBUME_BUN_EXECUTABLE` to use a specific Bun binary), plus one supported provider
+CLI unless you use a local model or an Anthropic API key. Current releases are tested with
+Node.js 22 and Bun 1.3.
 
 Update Ubume with:
 
@@ -28,13 +31,19 @@ Ubume can use these routes:
 | Provider | Setup |
 | --- | --- |
 | OpenAI / Codex | Install and authenticate the `codex` CLI. |
-| Anthropic / Claude | Install and authenticate the `claude` CLI. |
+| Anthropic / Claude | Install and authenticate the `claude` CLI, or set an API key (`ANTHROPIC_API_KEY` or `providers.anthropic.apiKey`) for the direct Messages API. |
 | Google | Install and authenticate the Antigravity CLI (`agy`). |
 | Mistral Vibe | Install and authenticate the `vibe` CLI. |
 | Local model | Open Local, choose LM Studio or Unsloth, and use a model loaded in that server. |
 | Codexa Native | Available only from the local `ubume-dev` channel. |
 
-Credentials remain with the provider CLI or local server.
+CLI credentials remain with the provider CLI. Direct API keys are read from the environment
+or Ubume's private provider configuration.
+
+The direct Anthropic API route returns text only (no tool loop) and needs no Claude CLI. Each
+request has a 120-second deadline covering connection and the full response; set
+`providers.anthropic.apiTimeoutMs` (or `api_timeout_ms`) in the workspace's `providers.json` (kept in
+Ubume's app data) to change it (integer milliseconds from 1 to 2,147,483,647; invalid values use the default). A timed-out request fails as a network timeout and is not retried automatically.
 
 Mistral's picker separates configured Vibe models from API-discovered custom models. Configured routes retain their model settings and provider; API custom routes require a verified catalogue refresh and say "Custom via Vibe (request unverified)." "Vibe current/default" follows Vibe's saved active/default selection and inherited environment overrides. Catalogue availability does not prove successful inference; Mistral Large 4 execution remains unverified.
 
