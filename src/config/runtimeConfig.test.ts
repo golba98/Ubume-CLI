@@ -227,3 +227,19 @@ test("formats runtime status with missing project instructions", () => {
 
   assert.match(status, /Project instructions: none/);
 });
+
+test("executable paths survive normalize, merge, diff and resolve", () => {
+  const base = normalizeRuntimeConfig({
+    codexCommandPath: " /opt/codex ",
+    antigravityCommandPath: "/opt/agy",
+  });
+  assert.equal(base.codexCommandPath, "/opt/codex");
+  assert.equal(mergeRuntimeConfig(base, { model: "gpt-x" }).codexCommandPath, "/opt/codex");
+  assert.equal(resolveRuntimeConfig(base).codexCommandPath, "/opt/codex");
+  assert.equal(resolveRuntimeConfig(base).antigravityCommandPath, "/opt/agy");
+  assert.deepEqual(
+    diffRuntimeConfig(base, mergeRuntimeConfig(base, { codexCommandPath: "/opt/other" })),
+    { codexCommandPath: "/opt/other" },
+  );
+  assert.equal(normalizeRuntimeConfig({ codexCommandPath: "   " }).codexCommandPath, undefined);
+});

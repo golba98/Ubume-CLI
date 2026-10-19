@@ -4,6 +4,7 @@
  */
 
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
+import { resolveCodexExecutable } from "../executables/codexExecutable.js";
 import {
   getCodexModelCapabilities,
   isVerifiedCodexModelCapabilities,
@@ -60,10 +61,14 @@ const openAiRuntime: ProviderRuntime = {
     backendKind: "codex-cli-auth",
     models: loadSeededOpenAiModels()?.models ?? [],
   }),
-  refreshModels: async ({ providerConfig, signal }) => {
+  refreshModels: async ({ providerConfig, signal, cwd }) => {
     const capabilities = await getCodexModelCapabilities({
       forceRefresh: true,
-      executable: providerConfig?.codexCommandPath,
+      executable: await resolveCodexExecutable({
+        configuredPath: providerConfig?.codexCommandPath,
+        cwd,
+      }),
+      cwd,
       signal,
     });
     const verified = isVerifiedCodexModelCapabilities(capabilities);

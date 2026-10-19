@@ -288,6 +288,11 @@ export function normalizeRuntimeConfig(
     ...(typeof input?.antigravityCommandPath === "string" && input.antigravityCommandPath.trim()
       ? { antigravityCommandPath: input.antigravityCommandPath.trim() }
       : {}),
+    // Executable paths must survive normalization; dropping one makes the adapter fall back
+    // to CODEX_EXECUTABLE/PATH and silently run a different binary than configured.
+    ...(typeof input?.codexCommandPath === "string" && input.codexCommandPath.trim()
+      ? { codexCommandPath: input.codexCommandPath.trim() }
+      : {}),
     reasoningLevel: reasoningInput || DEFAULT_REASONING_LEVEL,
     policy: normalizeRuntimePolicy(input?.policy),
   };
@@ -372,6 +377,9 @@ export function diffRuntimeConfig(
     ...(normalizedBase.antigravityCommandPath !== normalizedTarget.antigravityCommandPath
       ? { antigravityCommandPath: normalizedTarget.antigravityCommandPath }
       : {}),
+    ...(normalizedBase.codexCommandPath !== normalizedTarget.codexCommandPath
+      ? { codexCommandPath: normalizedTarget.codexCommandPath }
+      : {}),
     ...(Object.keys(policyPatch).length > 0 ? { policy: policyPatch } : {}),
   };
 }
@@ -422,6 +430,7 @@ export function resolveRuntimeConfig(config: RuntimeConfig): ResolvedRuntimeConf
     ...(normalized.antigravityCommandPath
       ? { antigravityCommandPath: normalized.antigravityCommandPath }
       : {}),
+    ...(normalized.codexCommandPath ? { codexCommandPath: normalized.codexCommandPath } : {}),
     reasoningLevel: normalized.reasoningLevel || DEFAULT_REASONING_LEVEL,
     policy: {
       approvalPolicy,

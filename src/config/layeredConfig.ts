@@ -60,6 +60,7 @@ export const RUNTIME_FIELD_PATHS = [
   "mode",
   "planMode",
   "antigravityCommandPath",
+  "codexCommandPath",
   "policy.approvalPolicy",
   "policy.sandboxMode",
   "policy.networkAccess",
@@ -226,6 +227,19 @@ const FIELD_SPECS: readonly FieldSpec[] = [
     },
   },
   {
+    keys: ["codex_command_path", "codexCommandPath"],
+    apply: (data, patch, touchedFields, ignoredEntries, _configFilePath) => {
+      const codexCommandPath = data.codexCommandPath ?? data.codex_command_path;
+      if (codexCommandPath === undefined) return;
+      if (typeof codexCommandPath === "string" && codexCommandPath.trim().length > 0) {
+        patch.codexCommandPath = codexCommandPath.trim();
+        addTouchedField(touchedFields, "codexCommandPath");
+      } else {
+        ignoredEntries.push("codex_command_path");
+      }
+    },
+  },
+  {
     keys: ["approval_policy"],
     apply: (data, patch, touchedFields, ignoredEntries, _configFilePath) => {
       if ("approval_policy" in data) {
@@ -327,6 +341,8 @@ const FIELD_SPECS: readonly FieldSpec[] = [
   {
     keys: ["ubume.backend", "ubume.mode"],
     apply: (data, patch, touchedFields, ignoredEntries, _configFilePath) => {
+      // A pre-rename `[codexa]` table in config.toml is still read until `[ubume]` exists;
+      // saveRuntimeModePreference only ever writes `[ubume]`.
       const ubumeTable = data.ubume ?? data.codexa;
       const tableKey = "ubume" in data ? "ubume" : "codexa" in data ? "codexa" : null;
       if (tableKey) {
@@ -705,6 +721,7 @@ function getTouchedFieldsFromPatch(patch: PartialRuntimeConfig): RuntimeFieldPat
   if (patch.mode !== undefined) touched.add("mode");
   if (patch.planMode !== undefined) touched.add("planMode");
   if (patch.antigravityCommandPath !== undefined) touched.add("antigravityCommandPath");
+  if (patch.codexCommandPath !== undefined) touched.add("codexCommandPath");
   if (patch.policy?.approvalPolicy !== undefined) touched.add("policy.approvalPolicy");
   if (patch.policy?.sandboxMode !== undefined) touched.add("policy.sandboxMode");
   if (patch.policy?.networkAccess !== undefined) touched.add("policy.networkAccess");
@@ -767,6 +784,8 @@ function formatRuntimeFieldValue(runtime: RuntimeConfig, field: RuntimeFieldPath
       return runtime.planMode ? "Enabled" : "Disabled";
     case "antigravityCommandPath":
       return runtime.antigravityCommandPath ?? "none";
+    case "codexCommandPath":
+      return runtime.codexCommandPath ?? "none";
     case "policy.approvalPolicy":
       return formatApprovalPolicyLabel(runtime.policy.approvalPolicy);
     case "policy.sandboxMode":
