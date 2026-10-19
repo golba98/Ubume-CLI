@@ -36,6 +36,22 @@ Do not add provider-dependent commands to the default unit-test path, and do not
 | `workbench-terminal-smoke.tsx` | — | via `smoke-workbench.py` only | Deterministic App fixture driven by the PTY smoke; refuses to run outside its temporary workspace. |
 | `record-resume-picker.tsx` | — | `bun scripts/record-resume-picker.tsx` | Record a deterministic `ResumePicker` session cast with fictional chats (writes `docs/terminal/recordings/`). |
 | `benchmark-terminal-markdown.ts` | — | via `bench:render` | Provider-free markdown parse/layout/memory probe (also usable directly; JSON on stdout). |
+| `bench/startup.ts` | `bun run bench:startup` | `bun scripts/bench/startup.ts` | Offline fresh-process startup timings (launcher, help, headless bootstrap) and module-import attribution. |
+| `bench/interactive-startup.py` | `bun run bench:interactive` | `python3 scripts/bench/interactive-startup.py` | Offline PTY startup: first byte, composer visible, input-ready, submit-ready, idle process-tree PSS. |
+| `bench/startup-timeline.py` | `bun run bench:startup-timeline` | `python3 scripts/bench/startup-timeline.py` | Offline per-stage startup timeline via `UBUME_STARTUP_TRACE`. |
+| `bench/update-startup.py` | `bun run bench:update-startup` | `python3 scripts/bench/update-startup.py` | Offline update-check scenarios against a loopback mock npm endpoint. |
+| `bench/idle-memory.py` | `bun run bench:memory` | `python3 scripts/bench/idle-memory.py` | Offline per-process RSS/PSS attribution plus GC'd JSC heap reports. |
+| `bench/stream.ts` | `bun run bench:stream` | `bun scripts/bench/stream.ts [--large]` | Offline subprocess streaming: runner/Codex-adapter memory, split UTF-8, emit→callback latency, slow-consumer headless output. |
+| `bench/stream-e2e.py` | `bun run bench:stream-e2e` | `python3 scripts/bench/stream-e2e.py` | Offline stream-to-screen latency through a real PTY. |
+| `bench/shell-output.ts` | `bun run bench:shell` | `bun scripts/bench/shell-output.ts [--large] [--timeout-ms N]` | Offline `!shell` output through the real App in an in-memory terminal. |
+| `bench/provider-switch.ts` | `bun run bench:provider-switch` | `bun scripts/bench/provider-switch.ts` | Offline provider-switching stress: memory stability, cleanup, switch latency. |
+| `bench/workspace.ts` | `bun run bench:workspace` | `bun scripts/bench/workspace.ts [--large]` | Offline workspace tracking, event-loop delay, checkpoint capture and conversation saves on synthetic git repos (on disk). |
+| `bench/render.ts` | `bun run bench:render` | `bun scripts/bench/render.ts` | Repeats `benchmark-terminal-markdown.ts` in fresh processes and aggregates its results. |
+| `bench/all.ts` | `bun run bench:all` | `bun scripts/bench/all.ts [--out DIR]` | Runs every offline suite; each writes `<suite>.json` (default `docs/_reports/performance/bench-results/`). |
+| `bench/compare.ts` | `bun run bench:compare` | `bun scripts/bench/compare.ts BEFORE AFTER` | Classifies each metric as improved, regressed or inconclusive. |
+| `bench/ptylib.py`, `bench/stream_validation.py`, `bench/fakeProducer.mjs`, `bench/fixtures/*` | — | — | Shared offline PTY harness, streaming fake producer, and sandboxed app fixtures used by the suites above. |
+| `pty-terminal-check.py` | `bun run check:pty` | `python3 scripts/pty-terminal-check.py` | Opt-in real-PTY check: Unicode/paste input, resize, alternate-screen overlay, Ctrl+C, terminal restoration on exit. |
+| `e2e-offline-workflow.py` | `bun run check:e2e` | `python3 scripts/e2e-offline-workflow.py [--json out.json] [--verbose]` | Opt-in offline end-to-end workflow through the installed launcher in a PTY with fake `codex`/`claude`: provider and model pickers, streamed Markdown and tool activity, save and `--resume`, provider switch, unavailable-model recovery via `/model`, mid-stream cancellation, clean `/exit`. Each step reports PASS/FAIL/GAP; any failure or gap exits nonzero, as does spawning anything but the fakes. |
 | `install-local-dev-bin.test.ts` | `bun test scripts/install-local-dev-bin.test.ts` | — | Protect bin-directory resolution, published-command isolation, shim contents, and local version output. |
 | `run-local-dev.test.ts` | `bun test scripts/run-local-dev.test.ts` | — | Protect interactive/headless entry selection, argument forwarding, and both local shim names. |
 | `audit-ubume-capabilities.test.ts` | `bun test scripts/audit-ubume-capabilities.test.ts` | — | Prevent source moves from silently turning implemented capabilities into false audit failures. |
@@ -161,11 +177,45 @@ This is an integration smoke, not an isolated unit test. It can contact an exter
 - Node ESM with the `#!/usr/bin/env node` shebang when invoked directly; plain TypeScript run through Bun when colocated tests make sense.
 - Prefer a linear top-level flow over a giant `main` only when the script is short; extract named helpers for repeated phases (setup, measure, report) instead of nesting.
 - Keep measurement/parsing logic in functions a test can import; keep process spawning and file writes in the top-level flow so side effects are visible at a glance.
+- Benchmark scripts follow the `bench/` pattern: import shared helpers from `bench/lib.ts` (isolation, stats, reporting), never duplicate isolation logic, and document what each metric measures and why it is safe.
 - Give every check in a validation script an explicit pass/fail exit path; never swallow an error just to keep iterating.
 
 ## Local browser smoke
 
 `UBUME_BROWSER_MODE=headless bun scripts/smoke-local-browser.ts` runs an isolated localhost browser flow using the structured browser backend. Use `headed` to watch on a desktop. It requires installed Chromium, leaves screenshot artifacts in its printed temporary directory, and closes its browser and server on completion. It does not contact a model or external site; the Local Harness integration tests verify model/tool routing separately.
+
+## Offline benchmarks (`scripts/bench/`)
+
+Every suite is offline by construction and safe to run on a developer machine with real
+provider accounts:
+
+- each run uses a temporary `HOME`/data root built with `src/test/environment.ts`, so no user
+  configuration, credentials or sessions are read or written;
+- `PATH` is replaced by a directory holding only `node` and `bun` plus `/usr/bin:/bin`, and the
+  suite refuses to start if `codex`, `claude`, `gemini`, `agy`, `antigravity` or `vibe` is
+  resolvable (a fixture that fails to override an executable must not fall back to a real CLI);
+- subprocess cases use `bench/fakeProducer.mjs` (also installed as a fake `codex`), HTTP goes
+  only to loopback servers, and the interactive suite routes the npm update check to a local
+  proxy that never answers (simulating a stalled network) or disables it.
+
+Results are JSON (`suite`, `environment`, `method`, `metrics[]` with p50/p95/p99/min/max/
+stddev/CV) plus a console table. Wall-clock numbers are noisy; `bench:compare` only reports a
+change when the medians differ by more than 5% and by more than the observed spread, and never
+fails a run. `--large` adds 100 MB / 50k-file stress cases. Workspace roots live in
+`docs/_reports/performance/bench-results/tmp` (on the repository's disk) because `/tmp` is often tmpfs, where fsync and
+traversal are unrealistically cheap. Recorded baselines and comparisons are agent reports and
+live locally under `docs/_reports/performance/` (Git-ignored; see `docs/REPORTING.md`).
+
+`smoke:terminal-bench` and `--headless-benchmark` are **not** part of this suite: both submit a
+real prompt to a configured provider.
+
+The stream-to-screen check requires every token to reach the PTY and verifies delivery and
+saved workbench/assistant/tool order against the fixture emission manifest. A bounded live
+viewport may skip older rows until final history replay; first-observation inversions remain
+in the report as visibility diagnostics. They do not substitute for the strict content/order
+checks. Run their negative-case tests with
+`python3 -m unittest discover -s scripts/bench -p '*_test.py'` and the analyzer tests with
+`python3 -m unittest discover -s perf/phase1_1 -p '*_test.py'`.
 
 ## Type-checking rewritten utilities
 

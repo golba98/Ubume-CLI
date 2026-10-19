@@ -23,7 +23,22 @@
     "build": "bun run gen-build-info && bun run typecheck && bun run typecheck:utilities && bun run check",
     "prepublishOnly": "npm run sync:npm-lock && npm run gen-build-info && npm run typecheck && npm run typecheck:utilities && npm run check && bun test --max-concurrency=1",
     "sync:npm-lock": "bun scripts/sync-npm-lock.ts",
-    "typecheck:utilities": "tsc --noEmit -p scripts/tsconfig.json"
+    "typecheck:utilities": "tsc --noEmit -p scripts/tsconfig.json",
+    "bench:startup": "bun scripts/bench/startup.ts",
+    "bench:interactive": "python3 scripts/bench/interactive-startup.py",
+    "bench:stream": "bun scripts/bench/stream.ts",
+    "bench:workspace": "bun scripts/bench/workspace.ts",
+    "bench:render": "bun scripts/bench/render.ts",
+    "bench:startup-timeline": "python3 scripts/bench/startup-timeline.py",
+    "bench:update-startup": "python3 scripts/bench/update-startup.py",
+    "bench:memory": "python3 scripts/bench/idle-memory.py",
+    "bench:stream-e2e": "python3 scripts/bench/stream-e2e.py",
+    "bench:shell": "bun scripts/bench/shell-output.ts",
+    "bench:provider-switch": "bun scripts/bench/provider-switch.ts",
+    "bench:all": "bun scripts/bench/all.ts",
+    "bench:compare": "bun scripts/bench/compare.ts",
+    "check:pty": "python3 scripts/pty-terminal-check.py",
+    "check:e2e": "python3 scripts/e2e-offline-workflow.py"
   },
   "dependencies": {
     "playwright": "1.63.0",
