@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { expandFileAttachments, FILE_TEXT_LIMIT, listWorkspaceFiles } from "./workspaceFiles.js";
+import {
+  createContainedFileResolver,
+  expandFileAttachments,
+  FILE_TEXT_LIMIT,
+  listWorkspaceFiles,
+} from "./workspaceFiles.js";
 
 test("expanded UTF-8 bytes count every attachment occurrence and original text", async () => {
   const registry = new Map([
@@ -39,6 +44,24 @@ test("non-Git nested negation follows Git ignore precedence", async () => {
     assert(!withoutGit.includes("hidden/inside.log"));
     execFileSync("git", ["init", "-q"], { cwd: root });
     assert.deepEqual(await listWorkspaceFiles(root), withoutGit);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checkpoint path resolution rechecks a directory replaced by a symlink", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ubume-path-recheck-"));
+  try {
+    const workspace = join(root, "workspace");
+    const directory = join(workspace, "nested");
+    const outside = join(root, "outside");
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(outside);
+    const resolveFile = createContainedFileResolver(workspace);
+    assert.equal(await resolveFile("nested/one.txt"), join(directory, "one.txt"));
+    rmSync(directory, { recursive: true });
+    symlinkSync(outside, directory, "dir");
+    await assert.rejects(resolveFile("nested/two.txt"), /Symlink paths are unsupported/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

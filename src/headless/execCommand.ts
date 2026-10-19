@@ -22,7 +22,6 @@ import {
 import { parseHeadlessExecArgs } from "./execArgs.js";
 import type { HeadlessExecIo } from "./execRunner.js";
 import { createHeadlessExecTiming } from "./execTiming.js";
-import { runSavedExec } from "./savedExec.js";
 
 const MAX_STDIN_PROMPT_BYTES = 8 * 1024 * 1024;
 
@@ -111,6 +110,8 @@ export async function runExecCommand(
     : args.prompt;
   const workspace = commandWorkspace(args.cwd);
 
+  // Provider runtimes load only after argument and help handling.
+  const { runSavedExec } = await import("./savedExec.js");
   const result = await runSavedExec(
     {
       prompt,

@@ -165,6 +165,7 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | File | Purpose |
 | --- | --- |
 | `src/core/perf/debugLog.ts` | Emits environment-gated stdin, focus, paste, and terminal-input diagnostics. Emits privacy-aware Local streaming diagnostics when explicitly enabled. Emits environment-gated model/provider state snapshots for picker and routing diagnosis. Emits environment-gated update-check scheduling and result diagnostics. |
+| `src/core/perf/benchTrace.ts` | Records opt-in offline startup, stream, frame and memory measurement stages. |
 | `src/core/perf/profiler.ts` | Collects opt-in prompt/run phase timings, counters, and session performance summaries. |
 | `src/core/perf/renderDebug.ts` | Provides opt-in render counts, lifecycle traces, frame diagnostics, and React render instrumentation. |
 
@@ -172,7 +173,8 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 
 | File | Purpose |
 | --- | --- |
-| `src/core/process/commandRunner.ts` | Runs shell commands with streamed output, cancellation, summaries, and platform-aware process cleanup. |
+| `src/core/process/commandRunner.ts` | Runs shell commands with streamed output, cancellation, summaries, and platform-aware process cleanup; `capture` selects full or bounded retention of the result output. |
+| `src/core/process/outputCapture.ts` | Output retention policy: full capture, or a bounded head/tail buffer with an explicit omission marker. |
 | `src/core/process/processValidation.ts` | Validates executable paths and process-launch inputs before spawning commands. |
 
 ### `src/core/providerLauncher/`
@@ -218,6 +220,7 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | `src/core/providerRuntime/localHarness/messages.ts` | Harness route descriptions, redaction, cancellation, hashing, and failure messages. |
 | `src/core/providerRuntime/localHarness/notifications.ts` | Harness event handlers with explicit process and active-run ownership context. |
 | `src/core/providerRuntime/localHarness/profile.ts` | Harness profile YAML and session scratch directory preparation. |
+| `src/core/providerRuntime/localHarness/lazyRuntime.ts` | Lazy entry points (run, shutdown, session close) that load the Harness runtime on the first Local run instead of at startup. |
 | `src/core/providerRuntime/localHarness/runtime.ts` | Owns the persistent Harness child, active runs, durable resume/flush, tool/browser approvals, continuation and cleanup; policy and notifications stay in extracted modules. |
 
 ### `src/core/providers/`
@@ -286,15 +289,15 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | `src/core/workspace/appData.ts` | Resolves platform-specific Ubume data, workspace, conversation, cache, attachment, and debug paths. |
 | `src/core/workspace/legacyDataMigration.ts` | Resumable, non-overwriting legacy artifact import with private staging, receipts and complete conversation records. |
 | `src/core/workspace/attachments.ts` | Imports external attachments into app data, identifies images, and rewrites prompts to safe workspace-visible paths. |
-| `src/core/workspace/checkpoints.ts` | Captures file checkpoints and journals guarded file restore operations. |
+| `src/core/workspace/checkpoints.ts` | Captures file checkpoints (reads/hashes in bounded parallel batches, limits applied in listing order) and journals guarded file restore operations. |
 | `src/core/workspace/conversationStore.ts` | Persists workspace-scoped conversation metadata and canonical messages (with optional per-reply activity summaries) with atomic JSON writes. |
 | `src/core/workspace/launchContext.ts` | Describes installed/dev launch context and builds guarded workspace relaunch commands. |
 | `src/core/workspace/ownership.ts` | Acquires and releases workspace execution and conversation ownership leases. |
 | `src/core/workspace/planStorage.ts` | Normalizes, saves, and reads reviewed plans from Ubume workspace data. |
 | `src/core/workspace/projectInstructions.ts` | Finds and loads AGENTS.md/project instructions with explicit missing, loaded, and error states. |
 | `src/core/workspace/scratchDir.ts` | Describes, lazily creates, removes when unused, and prunes per-session `.ubume/scratch/<session>` folders where the Local agent keeps throwaway test/debug files. |
-| `src/core/workspace/workspaceActivity.ts` | Snapshots workspace files, detects changes, aggregates activity, and tracks modifications during runs. |
-| `src/core/workspace/workspaceFiles.ts` | Resolves, reads, and guards workspace file selections. |
+| `src/core/workspace/workspaceActivity.ts` | Snapshots workspace files (sync and bounded-concurrency async, with a stat-validated content cache), detects changes, aggregates activity, and tracks modifications during runs with non-overlapping adaptive polls. |
+| `src/core/workspace/workspaceFiles.ts` | Resolves, reads, and guards workspace file selections; `createContainedFileResolver` shares root/directory checks across one multi-file operation. |
 | `src/core/workspace/workspaceGuard.ts` | Normalizes diagnostic paths, blocks or explains paths and commands outside the active workspace (strict for shell commands, context-classified for prompt text), and classifies destructive shell commands. |
 | `src/core/workspace/workspaceRoot.ts` | Resolves, normalizes, and compares the active workspace root across platforms and launch modes. |
 

@@ -657,3 +657,43 @@ test("render startup stays in the normal screen buffer", () => {
   assert.doesNotMatch(source, /\x1b\[\?1049h|alternateScreenEnable/);
   assert.match(source, /setAlternateScreen\(false/);
 });
+
+test("repeated app teardown releases process handlers and the stdout wrapper", async () => {
+  const events = ["SIGINT", "SIGTERM", "uncaughtException", "unhandledRejection"] as const;
+  const baseline = events.map((event) => process.listenerCount(event));
+  for (let i = 0; i < 5; i++) {
+    const harness = createSupportedHarness();
+    const originalWrite = harness.stdout.write;
+    startApp(harness.deps);
+    assert.deepEqual(
+      events.map((event) => process.listenerCount(event)),
+      baseline.map((n) => n + 1),
+    );
+    harness.resolveExit();
+    await flushMicrotasks();
+    assert.deepEqual(
+      events.map((event) => process.listenerCount(event)),
+      baseline,
+    );
+    assert.equal(harness.stdout.write, originalWrite);
+  }
+});
+
+test("a synchronous render failure releases registered handlers and terminal modes", () => {
+  const harness = createSupportedHarness();
+  const originalWrite = harness.stdout.write;
+  const before = process.listenerCount("SIGINT");
+  assert.throws(
+    () =>
+      startApp({
+        ...harness.deps,
+        renderApp() {
+          throw new Error("render failed");
+        },
+      }),
+    /render failed/,
+  );
+  assert.equal(process.listenerCount("SIGINT"), before);
+  assert.equal(harness.stdout.write, originalWrite);
+  assert.match(harness.stdout.writes, /\x1b\[\?2004l/);
+});

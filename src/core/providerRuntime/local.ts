@@ -25,7 +25,7 @@ import {
   resolveUnslothConnection,
 } from "./localBackends.js";
 import { resolveDefaultMaxOutputTokens } from "./localHarness/config.js";
-import { runLocalHarness } from "./localHarness/runtime.js";
+import { runLocalHarness } from "./localHarness/lazyRuntime.js";
 import type {
   ProviderChatRequest,
   ProviderModel,
