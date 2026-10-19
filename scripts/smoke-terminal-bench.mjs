@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+/**
+ * NOT OFFLINE-SAFE: integration smoke that runs one real headless request
+ * through the installed launcher (`bin/ubume.js exec ...`), using the current
+ * directory, environment, provider configuration and authentication. It can
+ * contact a real provider and consume quota. Run deliberately from a safe
+ * workspace; never part of `bun test`.
+ */
 
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";

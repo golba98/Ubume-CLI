@@ -1,3 +1,9 @@
+/**
+ * Interactive smoke for the structured browser backend against a loopback
+ * fixture page (requires installed Chromium; screenshots land in a temporary
+ * directory that is printed). Localhost only: no model, no external site.
+ * Run: UBUME_BROWSER_MODE=headless bun scripts/smoke-local-browser.ts
+ */
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +30,11 @@ async function run(tool: BrowserToolName, args: Record<string, unknown> = {}): P
 try {
   await run("browser_open", { url: site.url });
   const page = await run("browser_inspect");
-  const ref = (name: string) => { const element = page.elements?.find((item) => item.name === name)?.element; assert(element); return element; };
+  const ref = (name: string) => {
+    const element = page.elements?.find((item) => item.name === name)?.element;
+    assert(element);
+    return element;
+  };
   await run("browser_click", { element: ref("Click me") });
   await run("browser_type", { element: ref("Email"), text: "browser-smoke" });
   await run("browser_press", { key: "Enter" });
