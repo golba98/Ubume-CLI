@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createTestEnvironment } from "../test/environment.js";
+import { sendJson, startLoopbackServer } from "../test/loopbackServer.js";
 import { runTerminalCommand } from "./commands.js";
 import { redact } from "./diagnostics.js";
 import { parseHeadlessExecArgs } from "./execArgs.js";
@@ -34,7 +35,6 @@ function fixture() {
   writeFileSync(join(workspace, "demo.ts"), "export const result = 0;\n");
   const env: NodeJS.ProcessEnv = createTestEnvironment(root, {
     UBUME_DATA_DIR: join(root, "data"),
-    CODEXA_DATA_DIR: join(root, "legacy"),
     CODEX_EXECUTABLE: provider,
     AGY_EXECUTABLE: join(root, "absent-agy"),
     UBUME_TEST_PROMPT_LOG: join(root, "prompts.jsonl"),
@@ -627,6 +627,146 @@ test("headless Claude discovers explicit high efforts and sends them without dow
     assert.notEqual(invalid.status, 0);
     assert.match(invalid.stderr, /does not advertise effort/);
     assert.equal(readFileSync(f.env.UBUME_TEST_ARGV_LOG!, "utf8"), before);
+  } finally {
+    f.close();
+  }
+});
+
+/** Runs the launcher without blocking this process, so loopback servers keep serving. */
+function runAsync(f: ReturnType<typeof fixture>, args: string[]) {
+  const child = spawn("node", [launcher, ...args], {
+    cwd: f.workspace,
+    env: f.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const done = new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) =>
+    child.once("close", (code) => resolve({ code, stdout, stderr })),
+  );
+  return { child, done };
+}
+
+function fakeCodex(f: ReturnType<typeof fixture>, body: string): { path: string; log: string } {
+  const path = join(f.root, "configured-codex.mjs");
+  const log = join(f.root, "configured-codex.log");
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node\nimport { appendFileSync, writeFileSync } from "node:fs";\n` +
+      `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n${body}\n`,
+    { mode: 0o700 },
+  );
+  return { path, log };
+}
+
+test("models --refresh discovers through the configured Codex executable", async () => {
+  const f = fixture();
+  try {
+    const codex = fakeCodex(f, "process.exit(1);");
+    writeFileSync(
+      join(f.dataRoot, "providers.json"),
+      JSON.stringify({ providers: { openai: { codexCommandPath: codex.path } } }),
+    );
+    const result = await runAsync(f, ["models", "--provider", "openai", "--refresh", "--json"])
+      .done;
+    const invocations = readFileSync(codex.log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.ok(
+      invocations.some((argv: string[]) => argv.includes("app-server")),
+      "refresh must use providers.openai.codexCommandPath, not CODEX_EXECUTABLE",
+    );
+    // A failed refresh keeps the documented contract: exit 3 unless the list is ready.
+    assert.equal(result.code, 3, result.stderr);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.data.freshness, "unverified");
+  } finally {
+    f.close();
+  }
+});
+
+test("models --refresh uses the configured Anthropic endpoint and key, and redacts the key", async () => {
+  const f = fixture();
+  const seen: Array<string | string[] | undefined> = [];
+  const server = await startLoopbackServer((request, response) => {
+    seen.push(request.headers["x-api-key"]);
+    sendJson(response, 200, {
+      data: [{ id: "claude-fixture-1", display_name: "Fixture One", type: "model" }],
+      has_more: false,
+    });
+  });
+  try {
+    f.env.ANTHROPIC_API_KEY = "";
+    writeFileSync(
+      join(f.dataRoot, "providers.json"),
+      JSON.stringify({
+        providers: {
+          anthropic: {
+            apiKey: "fixture-anthropic-key",
+            baseUrl: server.url,
+          },
+        },
+      }),
+    );
+    const result = await runAsync(f, ["models", "--provider", "anthropic", "--refresh", "--json"])
+      .done;
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(seen, ["fixture-anthropic-key"]);
+    const envelope = JSON.parse(result.stdout);
+    assert.ok(
+      envelope.data.models.some(
+        (model: { modelId: string }) => model.modelId === "claude-fixture-1",
+      ),
+    );
+    assert.doesNotMatch(result.stdout + result.stderr, /fixture-anthropic-key/);
+  } finally {
+    await server.close();
+    f.close();
+  }
+});
+
+test("models --refresh is cancelled by SIGINT and stops the discovery process", async () => {
+  const f = fixture();
+  try {
+    const pidFile = join(f.root, "discovery.pid");
+    const codex = fakeCodex(
+      f,
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetInterval(() => {}, 1000);`,
+    );
+    writeFileSync(
+      join(f.dataRoot, "providers.json"),
+      JSON.stringify({ providers: { openai: { codexCommandPath: codex.path } } }),
+    );
+    const run = runAsync(f, ["models", "--provider", "openai", "--refresh", "--json"]);
+    const deadline = Date.now() + 10000;
+    while (!existsSync(pidFile)) {
+      if (Date.now() > deadline) throw new Error("discovery process did not start");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    run.child.kill("SIGINT");
+    const result = await run.done;
+    assert.equal(result.code, 130, result.stderr);
+    assert.equal(JSON.parse(result.stdout).error.code, "INTERRUPTED");
+    const stopDeadline = Date.now() + 5000;
+    while (Date.now() < stopDeadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    process.kill(pid, "SIGKILL");
+    assert.fail("discovery process outlived the interrupted command");
   } finally {
     f.close();
   }

@@ -82,6 +82,7 @@ function createLayeredConfig(): LayeredConfigResult {
         mode: "test",
         planMode: "test",
         antigravityCommandPath: "test",
+        codexCommandPath: "test",
         "policy.approvalPolicy": "test",
         "policy.sandboxMode": "test",
         "policy.networkAccess": "test",

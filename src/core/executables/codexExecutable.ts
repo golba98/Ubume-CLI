@@ -9,8 +9,11 @@ import { buildSpawnSpec, resolveExecutable } from "./executableResolver.js";
 
 type CommandRunner = typeof runCommand;
 
-let cachedExecutable: string | null = null;
-let resolveInFlight: Promise<string> | null = null;
+interface ResolutionCache {
+  key: string;
+  promise: Promise<string>;
+}
+let resolutionCache: ResolutionCache | null = null;
 
 interface SpawnOptions {
   detached?: boolean;
@@ -27,7 +30,7 @@ interface CapturedProcessOutput {
  * Clears the default executable cache for tests without canceling an in-flight resolution.
  */
 export function resetCodexExecutableCacheForTests(): void {
-  cachedExecutable = null;
+  resolutionCache = null;
 }
 
 /**
@@ -39,27 +42,24 @@ export async function resolveCodexExecutable(options?: {
   cwd?: string;
   configuredPath?: string | null;
 }): Promise<string> {
-  if (!options?.configuredPath && !options?.runCommandImpl && cachedExecutable !== null) {
-    return cachedExecutable;
+  if (options?.configuredPath || options?.runCommandImpl) return doResolveCodexExecutable(options);
+  // An environment or workspace change must never reuse a different executable.
+  const key = JSON.stringify([
+    options?.cwd ?? process.cwd(),
+    process.env.CODEX_EXECUTABLE,
+    process.env.PATH,
+    process.env.PATHEXT,
+    process.env.LOCALAPPDATA,
+  ]);
+  if (resolutionCache?.key === key) return resolutionCache.promise;
+  const entry: ResolutionCache = { key, promise: doResolveCodexExecutable(options) };
+  resolutionCache = entry;
+  try {
+    return await entry.promise;
+  } catch (error) {
+    if (resolutionCache === entry) resolutionCache = null;
+    throw error;
   }
-
-  if (!options?.configuredPath && !options?.runCommandImpl) {
-    if (resolveInFlight) return resolveInFlight;
-
-    resolveInFlight = (async () => {
-      const result = await doResolveCodexExecutable(options);
-      cachedExecutable = result;
-      return result;
-    })();
-
-    try {
-      return await resolveInFlight;
-    } finally {
-      resolveInFlight = null;
-    }
-  }
-
-  return doResolveCodexExecutable(options);
 }
 
 async function doResolveCodexExecutable(options?: {

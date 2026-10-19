@@ -52,6 +52,7 @@ export interface CodexModelCapabilities {
 }
 
 interface DiscoverCodexModelCapabilitiesOptions {
+  cwd?: string;
   executable?: string;
   signal?: AbortSignal;
   includeHidden?: boolean;
@@ -272,11 +273,16 @@ function asModelListResponse(value: unknown): ModelListResponse {
 async function requestModelListFromAppServer(
   executable: string,
   options: Required<Pick<DiscoverCodexModelCapabilitiesOptions, "includeHidden" | "timeoutMs">> &
-    Pick<DiscoverCodexModelCapabilitiesOptions, "signal">,
+    Pick<DiscoverCodexModelCapabilitiesOptions, "signal" | "cwd">,
 ): Promise<ModelListResponse[]> {
   return withCodexAppServer(
     executable,
-    { timeoutMs: options.timeoutMs, signal: options.signal, operation: "Codex model discovery" },
+    {
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      cwd: options.cwd,
+      operation: "Codex model discovery",
+    },
     async (client) => {
       const responses: ModelListResponse[] = [];
       let cursor: string | null = null;
@@ -299,13 +305,14 @@ async function requestModelListFromAppServer(
 async function discoverCodexModelCapabilities(
   options: DiscoverCodexModelCapabilitiesOptions = {},
 ): Promise<CodexModelCapabilities> {
-  const executable = options.executable ?? (await resolveCodexExecutable());
+  const executable = options.executable ?? (await resolveCodexExecutable({ cwd: options.cwd }));
   const includeHidden = options.includeHidden ?? false;
   const timeoutMs = options.timeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
   const discoveredAt = options.now?.() ?? Date.now();
   const responses = await requestModelListFromAppServer(executable, {
     includeHidden,
     timeoutMs,
+    cwd: options.cwd,
     signal: options.signal,
   });
 
@@ -352,8 +359,9 @@ export async function getCodexModelCapabilities(
 
   try {
     executable =
-      options.executable ?? (await (options.resolveExecutable ?? resolveCodexExecutable)());
-    const cacheKey = `${executable}|hidden:${options.includeHidden ?? false}|${catalogContextKey("openai", { cwd: process.cwd() })}`;
+      options.executable ??
+      (await (options.resolveExecutable ?? resolveCodexExecutable)({ cwd: options.cwd }));
+    const cacheKey = `${executable}|hidden:${options.includeHidden ?? false}|${catalogContextKey("openai", { cwd: options.cwd ?? process.cwd() })}`;
     const cached = capabilityCache.get(cacheKey);
     if (cached && (cached.pending || (!options.forceRefresh && cached.expiresAt > now))) {
       return cached.promise;
@@ -362,6 +370,7 @@ export async function getCodexModelCapabilities(
     const discover = options.discover ?? discoverCodexModelCapabilities;
     const promise = discover({
       executable,
+      cwd: options.cwd,
       includeHidden: options.includeHidden,
       timeoutMs: options.timeoutMs,
       signal: options.signal,

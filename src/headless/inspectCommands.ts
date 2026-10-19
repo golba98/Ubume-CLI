@@ -4,8 +4,9 @@
  *
  * These commands never submit a model prompt and never write to the workspace or the
  * data dir (stores are opened read-only), so they are safe in CI and alongside a running
- * TUI. Provider route resolution runs in `inspect` mode, so a broken setup can still be
- * inspected.
+ * TUI. The one write is `models --refresh`, which persists a verified inventory to the
+ * shared model cache exactly as an interactive refresh does. Provider route resolution
+ * runs in `inspect` mode, so a broken setup can still be inspected.
  *
  * Every inspection command accepts `--json`, `--cwd DIR` and `--help`. Command-specific
  * options are listed in {@link COMMAND_OPTIONS}. Unknown commands go through the same
@@ -13,9 +14,14 @@
  * arguments have been validated.
  */
 import type { LaunchArgs } from "../config/launchArgs.js";
+import { resolveLocalBackend } from "../core/providerLauncher/localBackend.js";
 import { isKnownProviderId } from "../core/providerLauncher/registry.js";
 import { discoverLocalModels } from "../core/providerRuntime/local.js";
-import { discoverProviderModels, getProviderRuntime } from "../core/providerRuntime/registry.js";
+import {
+  discoverProviderModels,
+  getProviderRuntime,
+  refreshProviderModels,
+} from "../core/providerRuntime/registry.js";
 import { getAppVersion } from "../core/version/channel.js";
 import {
   resolveUbumeConversationDir,
@@ -170,30 +176,47 @@ async function doctorCommand({ workspace, context, args }: InspectionScope) {
 }
 
 /**
- * Lists models for `--provider` (default: the routed provider). `--refresh` asks the
- * runtime to rediscover the list where it supports that. Exits 3 unless the list is ready.
+ * Lists models for `--provider` (default: the routed provider). `--refresh` rediscovers
+ * the list through the shared catalog, with the same provider configuration (executable,
+ * endpoint, key, Local backend), deadline, cancellation and cache persistence as an
+ * interactive refresh. Exits 3 unless the list is ready and, when refreshed, verified.
  */
-async function modelsCommand({ workspace, context, args }: InspectionScope) {
+async function modelsCommand({ workspace, context, args }: InspectionScope, env: CommandEnv) {
   const id = args.values.get("--provider") ?? context.route.providerId;
   if (!isKnownProviderId(id)) throw usageError(`Unknown provider: ${id}`);
 
-  const runtime = getProviderRuntime(id);
   const localConfig = context.config.providers?.local;
+  // The routed Local backend applies only when Local is the routed provider.
+  const localBackend = resolveLocalBackend(
+    context.config,
+    context.route.providerId === "local" ? context.route.localBackend : undefined,
+  );
+  const refresh = args.flags.has("--refresh") && !!getProviderRuntime(id).refreshModels;
   let result: Awaited<ReturnType<typeof discoverProviderModels>>;
-  if (args.flags.has("--refresh") && runtime.refreshModels) {
-    result = await runtime.refreshModels({
+  if (refresh) {
+    result = await refreshProviderModels(id, {
       cwd: workspace,
-      localConfig,
-      localBackend: localConfig?.localBackend,
+      providerConfig:
+        id === "openai"
+          ? {
+              ...context.config.providers?.openai,
+              codexCommandPath:
+                context.config.providers?.openai?.codexCommandPath ??
+                context.runtime.codexCommandPath,
+            }
+          : context.config.providers?.[id],
+      ...(id === "local" ? { localConfig, localBackend } : {}),
+      signal: env.signal,
+      forceRefresh: true,
     });
+    env.signal?.throwIfAborted();
   } else if (id === "local") {
-    result = discoverLocalModels(localConfig, localConfig?.localBackend);
+    result = discoverLocalModels(localConfig, localBackend);
   } else {
     result = discoverProviderModels(id);
   }
-  return resultOutcome(result, {
-    exitCode: result.status === "ready" ? EXIT_CODE.OK : EXIT_CODE.UNAVAILABLE,
-  });
+  const ready = result.status === "ready" && (!refresh || result.freshness === "verified");
+  return resultOutcome(result, { exitCode: ready ? EXIT_CODE.OK : EXIT_CODE.UNAVAILABLE });
 }
 
 /**
@@ -240,7 +263,7 @@ export async function runInspectionCommand(
     case "doctor":
       return doctorCommand(scope);
     case "models":
-      return modelsCommand(scope);
+      return modelsCommand(scope, env);
     default:
       throw usageError(`Unknown command: ${command}`);
   }

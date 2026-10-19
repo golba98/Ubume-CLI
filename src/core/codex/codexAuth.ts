@@ -3,12 +3,9 @@
  * likely-auth-failure classification.
  */
 
-import type { spawn } from "node:child_process";
-import {
-  formatCodexLaunchError,
-  resolveCodexExecutable,
-  spawnCodexProcess,
-} from "../executables/codexExecutable.js";
+import { formatCodexLaunchError, resolveCodexExecutable } from "../executables/codexExecutable.js";
+import { buildSpawnSpec } from "../executables/executableResolver.js";
+import { runCommand } from "../process/commandRunner.js";
 
 export type CodexAuthState = "checking" | "authenticated" | "unauthenticated" | "unknown";
 
@@ -208,7 +205,9 @@ export function isLikelyAuthFailure(message: string): boolean {
  * Tries JSON then text login-status probes with bounded attempts. Missing or failing CLIs yield
  * an unknown state and manual recovery guidance.
  */
-export async function probeCodexAuthStatus(): Promise<CodexAuthProbeResult> {
+export async function probeCodexAuthStatus(
+  options: { codexCommandPath?: string; cwd?: string; signal?: AbortSignal } = {},
+): Promise<CodexAuthProbeResult> {
   const attempts: string[][] = [
     ["login", "status", "--json"],
     ["login", "status"],
@@ -218,7 +217,8 @@ export async function probeCodexAuthStatus(): Promise<CodexAuthProbeResult> {
 
   for (let index = 0; index < attempts.length; index += 1) {
     const args = attempts[index]!;
-    const result = await runCodexCommand(args);
+    if (options.signal?.aborted) break;
+    const result = await runCodexCommand(args, options);
     const summary = summarizeAttempt(args, result);
     summaries.push(summary);
 
@@ -285,95 +285,47 @@ function inferAuthStateFromJson(raw: string): CodexAuthState | null {
   return null;
 }
 
-function runCodexCommand(args: string[], timeoutMs = 6000): Promise<CommandResult> {
-  return new Promise<CommandResult>((resolve) => {
-    let done = false;
-    let proc: ReturnType<typeof spawn> | null = null;
-
-    let stdout = "";
-    let stderr = "";
-
-    const finish = (result: CommandResult) => {
-      if (done) return;
-      done = true;
-      resolve(result);
+/** `configuredPath` is the provider's configured executable; it is never replaced by PATH. */
+async function runCodexCommand(
+  args: string[],
+  options: { codexCommandPath?: string; cwd?: string; signal?: AbortSignal },
+): Promise<CommandResult> {
+  try {
+    const cwd = options.cwd ?? process.cwd();
+    const executable = await resolveCodexExecutable({
+      configuredPath: options.codexCommandPath,
+      cwd,
+    });
+    if (options.signal?.aborted) return { exitCode: null, stdout: "", stderr: "", timedOut: false };
+    const spec = buildSpawnSpec(executable, args);
+    const runner = runCommand({
+      ...spec,
+      cwd,
+      signal: options.signal,
+      timeoutMs: 6000,
+      capture: { maxChars: 64 * 1024 },
+    });
+    const result = await runner.result;
+    await runner.stopped;
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      timedOut: result.status === "timeout",
+      ...(result.status === "spawn_error"
+        ? { error: Object.assign(new Error(result.debugMessage), { code: result.errorCode }) }
+        : {}),
     };
-
-    const startWithExecutable = async () => {
-      let executable: string;
-      try {
-        executable = await resolveCodexExecutable();
-      } catch (error) {
-        const errno = error as NodeJS.ErrnoException;
-        finish({
-          exitCode: null,
-          stdout,
-          stderr: formatCodexLaunchError(errno),
-          timedOut: false,
-          error: errno,
-        });
-        return;
-      }
-
-      if (done) return;
-      try {
-        proc = spawnCodexProcess(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
-      } catch (error) {
-        const errno = error as NodeJS.ErrnoException;
-        clearTimeout(timer);
-        finish({
-          exitCode: null,
-          stdout,
-          stderr: formatCodexLaunchError(errno),
-          timedOut: false,
-          error: errno,
-        });
-        return;
-      }
-
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on("error", (error) => {
-        clearTimeout(timer);
-        const errno = error as NodeJS.ErrnoException;
-        finish({
-          exitCode: null,
-          stdout,
-          stderr: formatCodexLaunchError(errno),
-          timedOut: false,
-          error: errno,
-        });
-      });
-
-      proc.on("close", (exitCode) => {
-        clearTimeout(timer);
-        finish({
-          exitCode,
-          stdout,
-          stderr,
-          timedOut: false,
-        });
-      });
+  } catch (error) {
+    const errno = error as NodeJS.ErrnoException;
+    return {
+      exitCode: null,
+      stdout: "",
+      stderr: formatCodexLaunchError(errno),
+      timedOut: false,
+      error: errno,
     };
-
-    const timer = setTimeout(() => {
-      proc?.kill();
-      finish({
-        exitCode: null,
-        stdout,
-        stderr,
-        timedOut: true,
-      });
-    }, timeoutMs);
-
-    void startWithExecutable();
-  });
+  }
 }
 
 function summarizeAttempt(args: string[], result: CommandResult): string {
