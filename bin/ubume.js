@@ -36,17 +36,20 @@ import { createRequire } from "module";
 // The suite `scripts/bench/startup-timeline.py` consumes these stages by name.
 const startupTraceFile = process.env.UBUME_STARTUP_TRACE?.trim();
 
-function launcherStartupMark(stage, t = performance.timeOrigin + performance.now()) {
+function launcherStartupMark(stage, t) {
   if (!startupTraceFile) return;
   try {
-    appendFileSync(startupTraceFile, `${JSON.stringify({ t, pid: process.pid, stage })}\n`);
+    const timestamp = t === undefined ? performance.timeOrigin + performance.now() : t;
+    appendFileSync(startupTraceFile, `${JSON.stringify({ t: timestamp, pid: process.pid, stage })}\n`);
   } catch {
     // Tracing never affects the launcher.
   }
 }
 
-launcherStartupMark("launcher-process-start", performance.timeOrigin);
-launcherStartupMark("launcher-script-start");
+if (startupTraceFile) {
+  launcherStartupMark("launcher-process-start", performance.timeOrigin);
+  launcherStartupMark("launcher-script-start");
+}
 
 process.title = "UBUME";
 
