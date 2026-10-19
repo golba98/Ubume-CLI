@@ -4,7 +4,7 @@ This directory contains Ubume's standalone development, validation, build-metada
 
 ## Safety classification
 
-Before running a script, check its class. Offline scripts use local fixtures, temporary homes/data roots and a provider-free PATH. The Linux namespace runner under `perf/phase1_1/` additionally enforces network egress isolation; environment isolation alone is not a network sandbox.
+Before running a script, check its class. Offline scripts use local fixtures, temporary homes/data roots and a provider-free PATH. Environment isolation alone is not a network sandbox.
 
 | Class | Meaning | Scripts |
 | --- | --- | --- |
@@ -214,8 +214,7 @@ saved workbench/assistant/tool order against the fixture emission manifest. A bo
 viewport may skip older rows until final history replay; first-observation inversions remain
 in the report as visibility diagnostics. They do not substitute for the strict content/order
 checks. Run their negative-case tests with
-`python3 -m unittest discover -s scripts/bench -p '*_test.py'` and the analyzer tests with
-`python3 -m unittest discover -s perf/phase1_1 -p '*_test.py'`.
+`python3 -m unittest discover -s scripts/bench -p '*_test.py'`.
 
 ## Type-checking rewritten utilities
 
