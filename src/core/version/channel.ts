@@ -10,14 +10,13 @@ import { fileURLToPath } from "node:url";
 import { APP_VERSION as BUILD_INFO_VERSION } from "../../config/buildInfo.js";
 
 export const UBUME_CHANNEL_ENV = "UBUME_CHANNEL";
-const CODEXA_CHANNEL_ENV = "CODEXA_CHANNEL";
 export const LOCAL_DEV_CHANNEL = "local-dev";
 
 function getUbumeChannel(env: NodeJS.ProcessEnv = process.env): string {
-  return env[UBUME_CHANNEL_ENV]?.trim() || env[CODEXA_CHANNEL_ENV]?.trim() || "published";
+  return env[UBUME_CHANNEL_ENV]?.trim() || "published";
 }
 
-/** Recognizes the explicit development channel, including the legacy environment alias. */
+/** Recognizes the explicit development channel. */
 export function isLocalDevChannel(env: NodeJS.ProcessEnv = process.env): boolean {
   return getUbumeChannel(env) === LOCAL_DEV_CHANNEL;
 }
@@ -39,7 +38,6 @@ export function formatUbumeBrandLabel(env: NodeJS.ProcessEnv = process.env): str
 // (settings.ts re-exports APP_VERSION from here, so that would be a cycle).
 
 const UBUME_PACKAGE_NAME = "ubume";
-const LEGACY_CODEXA_PACKAGE_NAME = "@golba98/codexa";
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\w.]+)?$/;
 
 function readPackageVersion(
@@ -64,21 +62,21 @@ function readPackageVersion(
 
 /**
  * Resolves the version of the running Ubume install:
- * 1. `UBUME_PACKAGE_ROOT` / `CODEXA_PACKAGE_ROOT` (set by bin/ubume.js) → that package.json's version
- * 2. Walk up from this module for a package.json named "ubume" (or legacy "@golba98/codexa")
+ * 1. `UBUME_PACKAGE_ROOT` (set by bin/ubume.js) → that package.json's version
+ * 2. Walk up from this module for a package.json named "ubume"
  * 3. The committed buildInfo.ts APP_VERSION as the last resort
  *
  * `startDir` overrides the walk-up starting directory (test seam).
  */
 export function resolveAppVersion(env: NodeJS.ProcessEnv = process.env, startDir?: string): string {
-  const packageRoot = env.UBUME_PACKAGE_ROOT?.trim() || env.CODEXA_PACKAGE_ROOT?.trim();
+  const packageRoot = env.UBUME_PACKAGE_ROOT?.trim();
   if (packageRoot) {
     const version = readPackageVersion(join(packageRoot, "package.json"));
     if (version) return version;
   }
 
   let dir = startDir ?? dirname(fileURLToPath(import.meta.url));
-  const allowedNames = [UBUME_PACKAGE_NAME, LEGACY_CODEXA_PACKAGE_NAME] as const;
+  const allowedNames = [UBUME_PACKAGE_NAME] as const;
   for (;;) {
     const version = readPackageVersion(join(dir, "package.json"), allowedNames);
     if (version) return version;

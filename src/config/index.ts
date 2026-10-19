@@ -41,9 +41,6 @@ export {
   resolveLayeredConfig,
 } from "./layeredConfig.js";
 
-// Legacy Environment
-export { applyLegacyEnvAliases } from "./legacyEnv.js";
-
 // Settings & Preferences Persistence
 export {
   type AppSettings,
@@ -140,14 +137,15 @@ export {
   getCodexHome,
   getHomeDir,
   getLegacyCodexaTrustStoreFile,
+  getLegacySettingsFile,
   getNextMode,
   getNextRotatingMode,
+  getSettingsFile,
   getUbumeTrustStoreFile,
   HEADER_CONFIG_DEFAULTS,
   type HeaderConfig,
   LEGACY_DIRECTORY_DISPLAY_MODES,
   LEGACY_FALLBACK_MODELS,
-  LEGACY_SETTINGS_FILE,
   type LegacyDirectoryDisplayMode,
   MAX_CHAT_LINES,
   normalizeLegacyDirectoryDisplayMode,
@@ -155,7 +153,6 @@ export {
   type ReasoningLevel,
   type RotatingModeState,
   resolveModeCommand,
-  SETTINGS_FILE,
   type SettingDefinition,
   type SettingOption,
   type TerminalTitleMode,

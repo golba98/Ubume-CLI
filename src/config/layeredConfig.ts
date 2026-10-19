@@ -325,7 +325,7 @@ const FIELD_SPECS: readonly FieldSpec[] = [
     },
   },
   {
-    keys: ["ubume.backend", "ubume.mode", "codexa.backend", "codexa.mode"],
+    keys: ["ubume.backend", "ubume.mode"],
     apply: (data, patch, touchedFields, ignoredEntries, _configFilePath) => {
       const ubumeTable = data.ubume ?? data.codexa;
       const tableKey = "ubume" in data ? "ubume" : "codexa" in data ? "codexa" : null;
@@ -493,8 +493,7 @@ function extractRuntimePatchFromOverride(
     return { patch: {}, touchedFields: [], ignoredEntries: [`${sourceLabel}: unsupported key`] };
   }
 
-  const path = (key.startsWith("codexa.") ? key.replace(/^codexa\./, "ubume.") : key).split(".");
-  setNestedValue(overrideData, path, value);
+  setNestedValue(overrideData, key.split("."), value);
 
   return extractRuntimePatch(overrideData, sourceLabel, configPath);
 }

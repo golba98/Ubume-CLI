@@ -4,8 +4,7 @@
   "description": "Terminal UI for Ubume — TypeScript + Bun + Ink",
   "type": "module",
   "bin": {
-    "ubume": "bin/ubume.js",
-    "codexa": "bin/codexa.js"
+    "ubume": "bin/ubume.js"
   },
   "scripts": {
     "start": "bun run --silent src/index.tsx",
@@ -158,12 +157,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/golba98/Ubume.git"
+    "url": "git+https://github.com/golba98/Ubume-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/golba98/Ubume/issues"
+    "url": "https://github.com/golba98/Ubume-cli/issues"
   },
-  "homepage": "https://github.com/golba98/Ubume#readme",
+  "homepage": "https://github.com/golba98/Ubume-cli#readme",
   "publishConfig": {
     "registry": "https://registry.npmjs.org"
   },

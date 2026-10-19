@@ -26,12 +26,24 @@ test("resolveAppVersion prefers UBUME_PACKAGE_ROOT package.json version", () => 
   }
 });
 
-test("resolveAppVersion supports legacy CODEXA_PACKAGE_ROOT package.json version", () => {
+test("resolveAppVersion ignores the removed CODEXA_PACKAGE_ROOT variable", () => {
+  const legacyRoot = makeTempDir();
   const dir = makeTempDir();
   try {
-    writePackageJson(dir, JSON.stringify({ name: "ubume", version: "9.9.9" }));
-    const version = resolveAppVersion({ CODEXA_PACKAGE_ROOT: dir }, dir);
-    assert.equal(version, "9.9.9");
+    writePackageJson(legacyRoot, JSON.stringify({ name: "ubume", version: "9.9.9" }));
+    writePackageJson(dir, JSON.stringify({ name: "ubume", version: "1.2.3" }));
+    assert.equal(resolveAppVersion({ CODEXA_PACKAGE_ROOT: legacyRoot }, dir), "1.2.3");
+  } finally {
+    rmSync(legacyRoot, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveAppVersion does not accept the pre-rename @golba98/codexa package name", () => {
+  const dir = makeTempDir();
+  try {
+    writePackageJson(dir, JSON.stringify({ name: "@golba98/codexa", version: "7.7.7" }));
+    assert.notEqual(resolveAppVersion({}, dir), "7.7.7");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

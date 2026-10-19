@@ -11,7 +11,7 @@ with tempfile.TemporaryDirectory(prefix="ubume-terminal-smoke-") as directory:
     (workspace / "demo.ts").write_text("export const result = 0;\n")
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, width, 0, 0))
-    environment = {**os.environ, "TERM": "xterm-256color", "UBUME_SMOKE_WORKSPACE": str(workspace), "UBUME_DATA_DIR": directory + "/data", "CODEXA_DATA_DIR": directory + "/data"}
+    environment = {**os.environ, "TERM": "xterm-256color", "UBUME_SMOKE_WORKSPACE": str(workspace), "UBUME_DATA_DIR": directory + "/data"}
     child = subprocess.Popen([shutil.which("bun"), str(repository / "scripts/workbench-terminal-smoke.tsx")], cwd=workspace, env=environment, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
     actions = [(0.6, "Inspect demo"), (0.75, "\r"), (1.1, "Queued follow-up"), (1.25, "\r"), (1.6, "Unsent draft while working"), (2.9, "\x03"), (3.2, "\x0c"), (3.5, "\x15"), (3.7, "/transcript"), (3.85, "\r"), (4.1, "\x1b[B"), (4.3, "\r"), (4.6, "\x1b"), (4.9, "/queue"), (5.05, "\r"), (5.4, "\x1b"), (5.7, "/diff"), (5.85, "\r"), (6.1, "\r"), (6.2, "\x1b[6~"), (6.3, "\x1b[6~"), (6.4, "\x1b[6~"), (6.6, "\x1b"), (6.8, "\x1b"), (7.1, "\x11")]

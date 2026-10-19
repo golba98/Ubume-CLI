@@ -75,8 +75,18 @@ export function getLegacyCodexaTrustStoreFile(env: NodeJS.ProcessEnv = process.e
   return smartJoin(getCodexHome(env), "codexa-trust.json");
 }
 
-export const SETTINGS_FILE = join(homedir(), ".ubume-settings.json");
-export const LEGACY_SETTINGS_FILE = join(homedir(), ".codexa-settings.json");
+// Resolved per call from the live environment (like getProviderModelCacheFile): a module-level
+// `homedir()` path is fixed at import time — and Bun's homedir() ignores runtime HOME changes —
+// so HOME redirection (tests, sandboxes) would still read and write the real user file.
+/** `~/.ubume-settings.json` for the current HOME/USERPROFILE. */
+export function getSettingsFile(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getHomeDir(env), ".ubume-settings.json");
+}
+
+/** Pre-rename `~/.codexa-settings.json`, read only as a migration source. */
+export function getLegacySettingsFile(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getHomeDir(env), ".codexa-settings.json");
+}
 
 // ─── 3. Backends & Fallback Models ────────────────────────────────────────────
 

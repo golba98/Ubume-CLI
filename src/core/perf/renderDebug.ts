@@ -21,8 +21,7 @@ let sessionId = `${Date.now()}-${process.pid}`;
 const counters = new Map<string, number>();
 
 function configureFromEnv(env: DebugEnv = process.env): void {
-  renderTraceEnabled =
-    env["UBUME_DEBUG_RENDER_TRACE"] === "1" || env["CODEXA_DEBUG_RENDER_TRACE"] === "1";
+  renderTraceEnabled = env["UBUME_DEBUG_RENDER_TRACE"] === "1";
   // Both UBUME_RENDER_DEBUG and UBUME_DEBUG_RENDER activate render debugging —
   // two names exist for historical reasons; either one is sufficient.
   // UBUME_TERMINAL_TRACE is a focused alias for diagnosing terminal/clear/resize
@@ -32,19 +31,11 @@ function configureFromEnv(env: DebugEnv = process.env): void {
     env["UBUME_DEBUG_MODEL_STATE"] === "1" ||
     env["UBUME_DEBUG_RENDER"] === "1" ||
     env["UBUME_TERMINAL_TRACE"] === "1" ||
-    env["CODEXA_RENDER_DEBUG"] === "1" ||
-    env["CODEXA_DEBUG_MODEL_STATE"] === "1" ||
-    env["CODEXA_DEBUG_RENDER"] === "1" ||
-    env["CODEXA_TERMINAL_TRACE"] === "1" ||
     renderTraceEnabled;
-  lifecycleEnabled = env["UBUME_DEBUG_LIFECYCLE"] === "1" || env["CODEXA_DEBUG_LIFECYCLE"] === "1";
-  flickerEnabled = env["UBUME_DEBUG_FLICKER"] === "1" || env["CODEXA_DEBUG_FLICKER"] === "1";
-  plainActionsEnabled =
-    env["UBUME_DEBUG_PLAIN_ACTIONS"] === "1" || env["CODEXA_DEBUG_PLAIN_ACTIONS"] === "1";
-  logPath =
-    env["UBUME_RENDER_DEBUG_FILE"]?.trim() ||
-    env["CODEXA_RENDER_DEBUG_FILE"]?.trim() ||
-    resolveUbumeDebugLogPath(env);
+  lifecycleEnabled = env["UBUME_DEBUG_LIFECYCLE"] === "1";
+  flickerEnabled = env["UBUME_DEBUG_FLICKER"] === "1";
+  plainActionsEnabled = env["UBUME_DEBUG_PLAIN_ACTIONS"] === "1";
+  logPath = env["UBUME_RENDER_DEBUG_FILE"]?.trim() || resolveUbumeDebugLogPath(env);
   sessionId = `${Date.now()}-${process.pid}`;
   configured = true;
 }

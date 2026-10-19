@@ -51,7 +51,6 @@ const DETECTION_CASES: Array<[string, GlobalPackageManager]> = [
 for (const [path, expected] of DETECTION_CASES) {
   test(`detectGlobalPackageManager detects ${expected} from ${path}`, () => {
     assert.equal(detectGlobalPackageManager({ UBUME_LAUNCHER_SCRIPT: path }), expected);
-    assert.equal(detectGlobalPackageManager({ CODEXA_LAUNCHER_SCRIPT: path }), expected);
   });
 }
 

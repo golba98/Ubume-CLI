@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   DEFAULT_MODE,
@@ -22,8 +23,10 @@ import {
   getCodexHome,
   getHomeDir,
   getLegacyCodexaTrustStoreFile,
+  getLegacySettingsFile,
   getNextMode,
   getNextRotatingMode,
+  getSettingsFile,
   getUbumeTrustStoreFile,
   resolveModeCommand,
   USER_SETTING_DEFINITIONS,
@@ -184,4 +187,26 @@ test("formats labels for backend, reasoning, theme, and estimates tokens", () =>
   assert.equal(formatAuthPreferenceLabel("chatgpt-login-goal"), "ChatGPT login goal");
   assert.equal(estimateTokens(100), 25);
   assert.equal(estimateTokens(0), 0);
+});
+
+test("settings files follow HOME/USERPROFILE at call time, not at import time", () => {
+  assert.equal(
+    getSettingsFile({ HOME: "/sandbox/home" }),
+    join("/sandbox/home", ".ubume-settings.json"),
+  );
+  assert.equal(
+    getLegacySettingsFile({ USERPROFILE: "/sandbox/profile", HOME: "/ignored" }),
+    join("/sandbox/profile", ".codexa-settings.json"),
+  );
+  const previous = process.env.HOME;
+  const previousProfile = process.env.USERPROFILE;
+  delete process.env.USERPROFILE;
+  process.env.HOME = "/sandbox/live-home";
+  try {
+    assert.equal(getSettingsFile(), join("/sandbox/live-home", ".ubume-settings.json"));
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+    if (previousProfile !== undefined) process.env.USERPROFILE = previousProfile;
+  }
 });

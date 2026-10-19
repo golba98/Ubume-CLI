@@ -5,8 +5,8 @@
  * `buildIntroRows`), `TranscriptShell` (startup tracing) and
  * `chrome/TopHeader.tsx`. The intro builder colors the 6-row large logo by row
  * index (primary / secondary / shadow), so changing its row count changes its
- * coloring. Selection reads the `UBUME_*` / legacy `CODEXA_*` env overrides on
- * every call; nothing is cached.
+ * coloring. Selection reads the `UBUME_*` env overrides on every call; nothing is
+ * cached.
  */
 import { getTextWidth } from "../../core/shared/text.js";
 
@@ -69,11 +69,11 @@ const LOGO_VARIANTS: readonly { logo: readonly string[]; minCols: number; minRow
 // ─── Selection ────────────────────────────────────────────────────────────────
 
 function isNoLogoEnv(): boolean {
-  return process.env["UBUME_NO_ASCII_LOGO"] === "1" || process.env["CODEXA_NO_ASCII_LOGO"] === "1";
+  return process.env["UBUME_NO_ASCII_LOGO"] === "1";
 }
 
 function isCompactLogoEnv(): boolean {
-  return process.env["UBUME_COMPACT_LOGO"] === "1" || process.env["CODEXA_COMPACT_LOGO"] === "1";
+  return process.env["UBUME_COMPACT_LOGO"] === "1";
 }
 
 /**
@@ -82,8 +82,8 @@ function isCompactLogoEnv(): boolean {
  * straight to the compact logo (or nothing).
  *
  * Env overrides:
- *   UBUME_NO_ASCII_LOGO=1 / CODEXA_NO_ASCII_LOGO=1  → always text-only (empty array)
- *   UBUME_COMPACT_LOGO=1  / CODEXA_COMPACT_LOGO=1   → always compact single-line logo
+ *   UBUME_NO_ASCII_LOGO=1 → always text-only (empty array)
+ *   UBUME_COMPACT_LOGO=1  → always compact single-line logo
  */
 export function selectLogoVariant(cols: number): readonly string[] {
   if (isNoLogoEnv()) return [];

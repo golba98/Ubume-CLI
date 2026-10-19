@@ -179,14 +179,7 @@ test("exec saves, resumes across processes, exposes transcript/diff and preserve
     assert.equal(transient.status, 0, transient.stderr);
     assert.equal(JSON.parse(transient.stdout).data.sessionId, null);
     assert.equal(readdirSync(join(f.chatRoot, "conversations")).length, 1);
-    const legacy = spawnSync("node", [resolve(launcher, "../codexa.js"), "status", "--json"], {
-      cwd: f.workspace,
-      env: f.env,
-      encoding: "utf8",
-      timeout: 20000,
-    });
-    assert.equal(legacy.status, 0);
-    assert.equal(JSON.parse(legacy.stdout).ok, true);
+    assert.equal(existsSync(resolve(launcher, "../codexa.js")), false);
   } finally {
     f.close();
   }

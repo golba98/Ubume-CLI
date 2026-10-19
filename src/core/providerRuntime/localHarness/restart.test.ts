@@ -70,7 +70,6 @@ for (const backend of ["lm-studio", "unsloth"] as const)
           cwd: root,
           env: createTestEnvironment(root, {
             UBUME_DATA_DIR: join(root, "data"),
-            CODEXA_DATA_DIR: join(root, "data"),
             UBUME_LOCAL_BASE_URL: `${endpoint}/v1`,
             UBUME_LOCAL_MODEL: "fixture",
             UNSLOTH_STUDIO_URL: endpoint,

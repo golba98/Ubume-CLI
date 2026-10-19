@@ -1,13 +1,13 @@
 /**
- * Platform app-data and workspace artifact paths with legacy Codexa compatibility. Most
- * resolvers only name paths; workspace resolution may trigger a one-time best-effort migration
- * unless readOnly is set.
+ * Platform app-data and workspace artifact paths. Most resolvers only name paths; normal
+ * workspace initialization may resume a non-destructive legacy import unless readOnly is set.
  */
 
 import { createHash } from "node:crypto";
-import { cpSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
 import { getHomeDir } from "../../config/settings.js";
+import { importLegacyData } from "./legacyDataMigration.js";
 
 type Platform = "win32" | "darwin" | "linux" | string;
 type Environment = Record<string, string | undefined>;
@@ -39,8 +39,7 @@ export function resolveLegacyCodexaDataDir(
 }
 
 /**
- * Resolves Ubume app data, honoring the legacy data-dir alias; does not create or migrate
- * directories.
+ * Resolves the current write destination. CODEXA_DATA_DIR only locates migration input.
  */
 export function resolveUbumeDataDir(
   platformOverride?: Platform,
@@ -49,32 +48,36 @@ export function resolveUbumeDataDir(
 ): string {
   return (
     env["UBUME_DATA_DIR"]?.trim() ||
-    env["CODEXA_DATA_DIR"]?.trim() ||
     resolveDataDir(platformOverride ?? process.platform, env, home, "Ubume")
   );
 }
 
-let dataMigrated = false;
+const migratedPairs = new Set<string>();
 
 /**
- * Attempts one non-destructive legacy data copy per process; missing/current destinations and
- * I/O failures do not block startup.
+ * Imports missing legacy artifacts. Failed attempts remain retryable; current data and legacy
+ * originals are retained. Successful source/destination pairs are cached per process.
  */
 export function maybeMigrateLegacyData(
   platformOverride?: Platform,
   env: Environment = process.env,
   home = getHomeDir(),
 ): void {
-  if (dataMigrated) return;
-  dataMigrated = true;
-
   try {
     const ubumeDir = resolveUbumeDataDir(platformOverride, env, home);
     const legacyDir = resolveLegacyCodexaDataDir(platformOverride, env, home);
-
-    if (ubumeDir !== legacyDir && !existsSync(ubumeDir) && existsSync(legacyDir)) {
-      // Safe non-destructive one-time copy
-      cpSync(legacyDir, ubumeDir, { recursive: true });
+    const sources: [string, string][] = [[legacyDir, ubumeDir]];
+    // A customized pre-rename plan directory is data, not an active write alias.
+    if (env["CODEXA_PLAN_DIR"]?.trim()) {
+      sources.push([
+        env["CODEXA_PLAN_DIR"].trim(),
+        env["UBUME_PLAN_DIR"]?.trim() || join(ubumeDir, "plans"),
+      ]);
+    }
+    for (const [source, destination] of sources) {
+      const pair = JSON.stringify([source, destination]);
+      if (!migratedPairs.has(pair) && importLegacyData(source, destination))
+        migratedPairs.add(pair);
     }
   } catch {
     // Non-destructive best-effort migration
@@ -85,7 +88,7 @@ export function maybeMigrateLegacyData(
  * Allows another legacy-data migration attempt in an isolated test environment.
  */
 export function resetDataMigrationForTests(): void {
-  dataMigrated = false;
+  migratedPairs.clear();
 }
 
 /**

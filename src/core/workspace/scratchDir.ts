@@ -31,10 +31,6 @@ export function resolveScratchRoot(workspaceRoot: string): string {
   return join(workspaceRoot, ".ubume", "scratch");
 }
 
-function resolveLegacyScratchRoot(workspaceRoot: string): string {
-  return join(workspaceRoot, ".codexa", "scratch");
-}
-
 /** Name the session scratch folder without touching the filesystem. */
 export function describeSessionScratchDir(
   workspaceRoot: string,
@@ -109,22 +105,21 @@ export function pruneStaleScratchDirs(
   workspaceRoot: string,
   options: { keep?: string; maxAgeMs?: number; now?: number } = {},
 ): void {
-  for (const root of [resolveScratchRoot(workspaceRoot), resolveLegacyScratchRoot(workspaceRoot)]) {
-    const cutoff = (options.now ?? Date.now()) - (options.maxAgeMs ?? DEFAULT_MAX_AGE_MS);
-    let entries;
+  const root = resolveScratchRoot(workspaceRoot);
+  const cutoff = (options.now ?? Date.now()) - (options.maxAgeMs ?? DEFAULT_MAX_AGE_MS);
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === options.keep) continue;
+    const dir = join(root, entry.name);
     try {
-      entries = readdirSync(root, { withFileTypes: true });
+      if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true });
     } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === options.keep) continue;
-      const dir = join(root, entry.name);
-      try {
-        if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // A locked or vanished folder must not break the run that triggered pruning.
-      }
+      // A locked or vanished folder must not break the run that triggered pruning.
     }
   }
 }

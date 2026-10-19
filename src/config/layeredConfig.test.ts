@@ -199,7 +199,7 @@ test("falls back to built-in defaults when no user or project configs exist", ()
   }
 });
 
-test("handles legacy codexa.* CLI override keys and translates them to ubume.*", () => {
+test("rejects retired codexa.* CLI override keys while preserving disk compatibility", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "ubume-layered-legacy-cli-"));
   const previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = join(tempRoot, "home");
@@ -219,8 +219,8 @@ test("handles legacy codexa.* CLI override keys and translates them to ubume.*",
       },
     });
 
-    assert.equal(result.runtime.mode, "suggest");
-    assert.match(result.diagnostics.fieldSources.mode, /CLI override/i);
+    assert.notEqual(result.diagnostics.fieldSources.mode, "CLI override (codexa.mode)");
+    assert.ok(result.diagnostics.ignoredEntries.some((entry) => entry.includes("unsupported key")));
   } finally {
     if (previousCodexHome === undefined) {
       delete process.env.CODEX_HOME;

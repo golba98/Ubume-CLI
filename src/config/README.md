@@ -29,7 +29,6 @@ The `src/config/` subsystem manages all application preferences, runtime policie
 | `index.ts` | Unified public facade re-exporting the configuration API. | All public functions, types, and constants. |
 | `atomicFile.ts` | Safe atomic file persistence with `.tmp` write and rename. | `writeTextFileAtomic`, `writeJsonFileAtomic` |
 | `buildInfo.ts` | Committed version and Git commit hash fallback. | `BUILD_INFO`, `BUILD_VERSION`, `BUILD_COMMIT` |
-| `legacyEnv.ts` | Aliases `CODEXA_*` env vars to unset `UBUME_*` variables. | `applyLegacyEnvAliases` |
 | `launchArgs.ts` | Parses interactive CLI startup flags (`-c`, `--profile`, `-m`, `--no-clear`, `--resume`, `--import-session`). | `parseLaunchArgs`, `LaunchArgs` |
 | `layeredConfig.ts` | Executes 5-layer resolution and provenance diagnostic tracking. | `resolveLayeredConfig`, `applyLayeredRuntimeOverride`, `formatLayeredConfigStatus`, `mergeRuntimeIntoTomlConfig` |
 | `persistence.ts` | Manages `~/.ubume-settings.json` and TOML runtime mode storage. | `loadSettings`, `saveSettings`, `saveRuntimeModePreference` |
@@ -93,10 +92,10 @@ All file writes to user settings (`~/.ubume-settings.json`), trust stores (`~/.c
 
 ## 6. Legacy Migration & Compatibility
 
-Ubume CLI provides seamless backward compatibility for existing configurations:
+Ubume imports missing pre-rename (Codexa CLI) user data without replacing current state and only writes Ubume names. Except for the migration-source locators `CODEXA_DATA_DIR` and `CODEXA_PLAN_DIR`, pre-rename application `CODEXA_*` environment variables and `codexa.*` CLI override keys are no longer accepted; the `CODEXA_NATIVE_*` / `CODEXA_CUPY_*` / `CODEXA_NUMPY_*` variables belong to the Codexa model family and are unrelated.
 
-- **Environment Variables (`legacyEnv.ts`)**: Legacy `CODEXA_*` variables are copied into `UBUME_*` unless explicitly defined, preserving model family variables (`CODEXA_NATIVE_*`).
 - **Settings File (`persistence.ts`)**: Migrates `~/.codexa-settings.json` to `~/.ubume-settings.json`.
+- **`[codexa]` TOML table (`layeredConfig.ts`, `persistence.ts`)**: Read until an `[ubume]` table exists; the first mode save seeds `[ubume]` from it and leaves `[codexa]` untouched.
 - **Flat TOML Runtime (`persistence.ts`)**: Migrates pre-renamed flat keys (`backend`, `model`, `mode`) into standard `[ubume]` TOML tables.
 - **Directory Display Modes (`settings.ts`)**: Automatically maps legacy `"normal"` mode to modern `"dir"`.
 

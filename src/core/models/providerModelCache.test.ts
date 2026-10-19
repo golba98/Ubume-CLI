@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { withEnvironment } from "../../test/environment.js";
 import type { ProviderModel } from "../providerRuntime/types.js";
 import { loadCachedProviderModels, saveCachedProviderModels } from "./modelCache.js";
 
@@ -172,5 +173,38 @@ test("Mistral legacy API-only cache rows cannot re-enter the native Vibe picker"
     assert.match(readFileSync(file, "utf8"), /codestral-2508/);
   } finally {
     cleanup();
+  }
+});
+
+test("model-cache migration preserves legacy contents and writes only Ubume", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ubume-model-import-"));
+  try {
+    await withEnvironment({ HOME: home, USERPROFILE: home }, () => {
+      const legacy = join(home, ".codexa-model-cache.json");
+      const initial = JSON.stringify({
+        version: 1,
+        providers: {
+          "codexa-native": {
+            discoveredAt: 1,
+            models: [{ ...SAMPLE_MODELS[0], id: "codexa-934m-end3", modelId: "codexa-934m-end3" }],
+          },
+        },
+      });
+      writeFileSync(legacy, initial);
+      assert.equal(
+        loadCachedProviderModels("codexa-native")?.models[0]?.modelId,
+        "codexa-934m-end3",
+      );
+      saveCachedProviderModels("openai", { discoveredAt: 2, models: SAMPLE_MODELS });
+      assert.equal(readFileSync(legacy, "utf8"), initial);
+      const current = JSON.parse(readFileSync(join(home, ".ubume-model-cache.json"), "utf8"));
+      assert.equal(current.providers["codexa-native"].models[0].modelId, "codexa-934m-end3");
+      assert.equal(
+        loadCachedProviderModels("openai")?.models[0]?.modelId,
+        SAMPLE_MODELS[0]?.modelId,
+      );
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

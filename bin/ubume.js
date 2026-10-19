@@ -9,17 +9,8 @@ import { createRequire } from "module";
 
 process.title = "UBUME";
 
-// Pre-rename CODEXA_* variables keep working: copy each into its unset UBUME_* name.
-// The Codexa model family keeps its CODEXA_NATIVE_/CUPY_/NUMPY_ names.
-for (const [key, value] of Object.entries(process.env)) {
-  if (!key.startsWith("CODEXA_") || /^CODEXA_(NATIVE|CUPY|NUMPY)_/.test(key)) continue;
-  const ubumeKey = `UBUME_${key.slice("CODEXA_".length)}`;
-  if (process.env[ubumeKey] === undefined) process.env[ubumeKey] = value;
-}
-
 function resolveLauncherDebugDir() {
   const dataDir = process.env.UBUME_DATA_DIR?.trim()
-    || process.env.CODEXA_DATA_DIR?.trim()
     || (process.platform === "win32"
       ? join(process.env.LOCALAPPDATA?.trim() || process.env.APPDATA?.trim() || join(homedir(), "AppData", "Local"), "Ubume")
       : process.platform === "darwin"
@@ -51,7 +42,7 @@ for (let i = 0; i < originalArgs.length; i++) {
     }
   } else forwardArgs.push(arg);
 }
-const launcherStartTimeMs = Number(process.env.UBUME_EXEC_TIMING_EPOCH_MS || process.env.CODEXA_EXEC_TIMING_EPOCH_MS) || Date.now();
+const launcherStartTimeMs = Number(process.env.UBUME_EXEC_TIMING_EPOCH_MS) || Date.now();
 let launcherPreviousElapsedMs = 0;
 let intendedTerminalTitle = "Ubume";
 
@@ -59,8 +50,6 @@ function writeRenderDebugRecord(kind, fields) {
   if (
     process.env.UBUME_RENDER_DEBUG !== "1"
     && process.env.UBUME_DEBUG_RENDER !== "1"
-    && process.env.CODEXA_RENDER_DEBUG !== "1"
-    && process.env.CODEXA_DEBUG_RENDER !== "1"
   ) {
     return;
   }
@@ -70,7 +59,6 @@ function writeRenderDebugRecord(kind, fields) {
     mkdirSync(debugDir, { recursive: true });
     appendFileSync(
       process.env.UBUME_RENDER_DEBUG_FILE?.trim()
-        || process.env.CODEXA_RENDER_DEBUG_FILE?.trim()
         || join(debugDir, "render-status.log"),
       JSON.stringify({
         ts: Date.now(),
@@ -87,7 +75,7 @@ function writeRenderDebugRecord(kind, fields) {
 }
 
 function debugLaunch(message, fields = {}) {
-  if (process.env.UBUME_DEBUG_LAUNCH !== "1" && process.env.CODEXA_DEBUG_LAUNCH !== "1") {
+  if (process.env.UBUME_DEBUG_LAUNCH !== "1") {
     return;
   }
 
@@ -98,7 +86,7 @@ function debugLaunch(message, fields = {}) {
 }
 
 function writeTerminalTitleDebugRecord(fields) {
-  if (process.env.UBUME_DEBUG_TERMINAL_TITLE !== "1" && process.env.CODEXA_DEBUG_TERMINAL_TITLE !== "1") {
+  if (process.env.UBUME_DEBUG_TERMINAL_TITLE !== "1") {
     return;
   }
 
@@ -107,9 +95,7 @@ function writeTerminalTitleDebugRecord(fields) {
     mkdirSync(debugDir, { recursive: true });
     appendFileSync(
       process.env.UBUME_TERMINAL_TITLE_DEBUG_FILE?.trim()
-        || process.env.CODEXA_TERMINAL_TITLE_DEBUG_FILE?.trim()
         || process.env.UBUME_RENDER_DEBUG_FILE?.trim()
-        || process.env.CODEXA_RENDER_DEBUG_FILE?.trim()
         || join(debugDir, "render-status.log"),
       JSON.stringify({
         ts: Date.now(),
@@ -242,7 +228,6 @@ const isHeadlessMode = isHeadlessExec || isHeadlessBenchmark || ["doctor", "stat
 const execTimingEnabled = isHeadlessMode
   && (
     process.env.UBUME_EXEC_TIMING === "1"
-    || process.env.CODEXA_EXEC_TIMING === "1"
     || forwardArgs.includes("--timing")
     || forwardArgs.includes("--benchmark-diagnostics")
   );
@@ -272,7 +257,6 @@ markExecTiming("launcher_start", { pid: process.pid });
 if (!isHeadlessMode && parentHasTTY) {
   intendedTerminalTitle = normalizeTerminalTitle(
     process.env.UBUME_INITIAL_TERMINAL_TITLE
-      || process.env.CODEXA_INITIAL_TERMINAL_TITLE
       || "Ubume",
   );
   recordIntendedTitle("launcher-startup-title-disabled");
@@ -328,7 +312,6 @@ function createMouseFilter() {
 }
 
 const bunExecutable = process.env.UBUME_BUN_EXECUTABLE?.trim()
-  || process.env.CODEXA_BUN_EXECUTABLE?.trim()
   || (process.platform === "win32" ? "bun.exe" : "bun");
 
 const appEntry = join(packageRoot, "src", "index.tsx");

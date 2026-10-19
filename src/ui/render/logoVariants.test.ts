@@ -66,27 +66,23 @@ test("LOGO_MEDIUM is never auto-selected at any col ≥ 72 (LOGO_LARGE always wi
 
 // ─── Environment overrides ────────────────────────────────────────────────────
 
-test("UBUME_NO_ASCII_LOGO=1 or CODEXA_NO_ASCII_LOGO=1 suppresses all logo art at any width", () => {
-  for (const envVar of ["UBUME_NO_ASCII_LOGO", "CODEXA_NO_ASCII_LOGO"]) {
-    process.env[envVar] = "1";
-    try {
-      assert.deepStrictEqual(selectLogoVariant(200), []);
-      assert.deepStrictEqual(selectLogoVariant(LOGO_LARGE_MIN_COLS), []);
-    } finally {
-      delete process.env[envVar];
-    }
+test("UBUME_NO_ASCII_LOGO=1 suppresses all logo art at any width", () => {
+  process.env["UBUME_NO_ASCII_LOGO"] = "1";
+  try {
+    assert.deepStrictEqual(selectLogoVariant(200), []);
+    assert.deepStrictEqual(selectLogoVariant(LOGO_LARGE_MIN_COLS), []);
+  } finally {
+    delete process.env["UBUME_NO_ASCII_LOGO"];
   }
 });
 
-test("UBUME_COMPACT_LOGO=1 or CODEXA_COMPACT_LOGO=1 forces compact logo at any width", () => {
-  for (const envVar of ["UBUME_COMPACT_LOGO", "CODEXA_COMPACT_LOGO"]) {
-    process.env[envVar] = "1";
-    try {
-      assert.equal(selectLogoVariant(200), LOGO_COMPACT);
-      assert.equal(selectLogoVariant(LOGO_LARGE_MIN_COLS), LOGO_COMPACT);
-    } finally {
-      delete process.env[envVar];
-    }
+test("UBUME_COMPACT_LOGO=1 forces compact logo at any width", () => {
+  process.env["UBUME_COMPACT_LOGO"] = "1";
+  try {
+    assert.equal(selectLogoVariant(200), LOGO_COMPACT);
+    assert.equal(selectLogoVariant(LOGO_LARGE_MIN_COLS), LOGO_COMPACT);
+  } finally {
+    delete process.env["UBUME_COMPACT_LOGO"];
   }
 });
 
@@ -121,27 +117,23 @@ test("selectLogoVariantForViewport at medium cols uses medium then compact by ro
   );
 });
 
-test("UBUME_NO_ASCII_LOGO=1 or CODEXA_NO_ASCII_LOGO=1 suppresses logo in viewport selector at any size", () => {
-  for (const envVar of ["UBUME_NO_ASCII_LOGO", "CODEXA_NO_ASCII_LOGO"]) {
-    process.env[envVar] = "1";
-    try {
-      assert.deepStrictEqual(selectLogoVariantForViewport(200, 60), []);
-    } finally {
-      delete process.env[envVar];
-    }
+test("UBUME_NO_ASCII_LOGO=1 suppresses logo in viewport selector at any size", () => {
+  process.env["UBUME_NO_ASCII_LOGO"] = "1";
+  try {
+    assert.deepStrictEqual(selectLogoVariantForViewport(200, 60), []);
+  } finally {
+    delete process.env["UBUME_NO_ASCII_LOGO"];
   }
 });
 
-test("UBUME_COMPACT_LOGO=1 or CODEXA_COMPACT_LOGO=1 forces compact logo in viewport selector when rows allow", () => {
-  for (const envVar of ["UBUME_COMPACT_LOGO", "CODEXA_COMPACT_LOGO"]) {
-    process.env[envVar] = "1";
-    try {
-      assert.equal(selectLogoVariantForViewport(200, 60), LOGO_COMPACT);
-      // Too short for even the compact logo → empty.
-      assert.deepStrictEqual(selectLogoVariantForViewport(200, LOGO_COMPACT_MIN_ROWS - 1), []);
-    } finally {
-      delete process.env[envVar];
-    }
+test("UBUME_COMPACT_LOGO=1 forces compact logo in viewport selector when rows allow", () => {
+  process.env["UBUME_COMPACT_LOGO"] = "1";
+  try {
+    assert.equal(selectLogoVariantForViewport(200, 60), LOGO_COMPACT);
+    // Too short for even the compact logo → empty.
+    assert.deepStrictEqual(selectLogoVariantForViewport(200, LOGO_COMPACT_MIN_ROWS - 1), []);
+  } finally {
+    delete process.env["UBUME_COMPACT_LOGO"];
   }
 });
 
@@ -211,4 +203,15 @@ test("LOGO_MEDIUM_MIN_ROWS is referenced and positive", () => {
 
 test("LOGO_COMPACT_MIN_ROWS is referenced and positive", () => {
   assert.ok(LOGO_COMPACT_MIN_ROWS > 0);
+});
+
+test("removed pre-rename CODEXA_* logo variables are ignored", () => {
+  process.env["CODEXA_NO_ASCII_LOGO"] = "1";
+  process.env["CODEXA_COMPACT_LOGO"] = "1";
+  try {
+    assert.equal(selectLogoVariant(200), LOGO_LARGE);
+  } finally {
+    delete process.env["CODEXA_NO_ASCII_LOGO"];
+    delete process.env["CODEXA_COMPACT_LOGO"];
+  }
 });

@@ -130,10 +130,14 @@ export function loadCachedProviderModels(
 export function saveCachedProviderModels(
   providerId: ProviderId,
   entry: CachedProviderModels,
-  cacheFile = getProviderModelCacheFile(),
+  cacheFile = join(getHomeDir(), ".ubume-model-cache.json"),
 ): void {
   try {
-    const cache = readCacheFile(cacheFile) ?? { version: CACHE_VERSION, providers: {} };
+    const source =
+      !existsSync(cacheFile) && cacheFile === join(getHomeDir(), ".ubume-model-cache.json")
+        ? getProviderModelCacheFile()
+        : cacheFile;
+    const cache = readCacheFile(source) ?? { version: CACHE_VERSION, providers: {} };
     if (providerId === "google") {
       const previous = cache.providers.google;
       if (previous && isValidEntry(previous) && !isAgyCacheEntry(previous))

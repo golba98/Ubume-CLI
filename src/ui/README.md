@@ -13,7 +13,7 @@ import `src/ui`. Side effects such as provider changes, persistence and update i
 are reached only through injected callbacks or runners.
 
 Per-file details live in each module's header comment and in the `src/ui/` tables of
-[docs/SOURCE_GUIDE.md](../../docs/SOURCE_GUIDE.md). App wiring is described in
+[docs/architecture/source-guide.md](../../docs/architecture/source-guide.md). App wiring is described in
 [docs/architecture/app.md](../../docs/architecture/app.md).
 
 ## Directory map
@@ -176,7 +176,7 @@ border with `paddingX={1}`; size calculations reserve those 4 columns.
 4. Size the panel from the layout contexts. Anything that contributes rows to the shell
    must have a matching `measure…Rows` function.
 5. Release timers and listeners in effect cleanups.
-6. Add a module header comment and a row in `docs/SOURCE_GUIDE.md`.
+6. Add a module header comment and a row in `docs/architecture/source-guide.md`.
 
 ## Testing
 

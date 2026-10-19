@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 let atomicSequence = 0;
@@ -15,20 +15,42 @@ let atomicSequence = 0;
  */
 export function writeTextFileAtomic(filePath: string, content: string): void {
   const dir = dirname(filePath);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const seq = ++atomicSequence;
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${seq}.tmp`;
+  let created = false;
   try {
-    writeFileSync(tmpPath, content, "utf-8");
+    writeFileSync(tmpPath, content, { encoding: "utf-8", flag: "wx", mode: 0o600 });
+    created = true;
     renameSync(tmpPath, filePath);
   } catch (error) {
     try {
-      rmSync(tmpPath, { force: true });
+      if (created) rmSync(tmpPath, { force: true });
     } catch {
       // Best-effort cleanup of temporary file on failure.
     }
     throw error;
+  }
+}
+
+/** Publishes validated migration content atomically without replacing an existing destination. */
+export function writeTextFileIfAbsent(filePath: string, content: string): boolean {
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${++atomicSequence}.tmp`;
+  let created = false;
+  try {
+    writeFileSync(tmpPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    created = true;
+    try {
+      linkSync(tmpPath, filePath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    if (created) rmSync(tmpPath, { force: true });
   }
 }
 

@@ -40,10 +40,10 @@ describe("resolvePlanDir", () => {
     assert.equal(resolvePlanDir(), "/custom/plan/dir");
   });
 
-  test("CODEXA_PLAN_DIR fallback override works", () => {
+  test("retired CODEXA_PLAN_DIR does not select the write destination", () => {
     delete process.env["UBUME_PLAN_DIR"];
     process.env["CODEXA_PLAN_DIR"] = "/custom/codexa/dir";
-    assert.equal(resolvePlanDir(), "/custom/codexa/dir");
+    assert.notEqual(resolvePlanDir(), "/custom/codexa/dir");
   });
 
   test("Windows LOCALAPPDATA path resolution", () => {

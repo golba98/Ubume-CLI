@@ -29,7 +29,6 @@ function scenarios(steps: string[]) {
             cwd: workspace,
             env: createTestEnvironment(root, {
               UBUME_DATA_DIR: join(root, "data"),
-              CODEXA_DATA_DIR: join(root, "data"),
               CODEX_EXECUTABLE: provider,
             }),
             encoding: "utf8",
@@ -44,7 +43,6 @@ function scenarios(steps: string[]) {
         cwd: workspace,
         env: createTestEnvironment(root, {
           UBUME_DATA_DIR: join(root, "data"),
-          CODEXA_DATA_DIR: join(root, "data"),
         }),
         encoding: "utf8",
         timeout: 15000,

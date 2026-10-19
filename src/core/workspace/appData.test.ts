@@ -39,8 +39,46 @@ test("UBUME_DATA_DIR overrides the platform default", () => {
   );
   assert.equal(
     resolveUbumeDataDir("linux", { CODEXA_DATA_DIR: "/custom/codexa" }, "/home/test"),
+    join("/home/test", ".local", "share", "ubume"),
+  );
+  assert.equal(
+    resolveLegacyCodexaDataDir("linux", { CODEXA_DATA_DIR: "/custom/codexa" }, "/home/test"),
     "/custom/codexa",
   );
+});
+
+test("custom legacy data and plan directories import into current destinations independently", () => {
+  const root = mkdtempSync(join(tmpdir(), "ubume-custom-sources-"));
+  try {
+    const legacy = join(root, "old-data");
+    const plans = join(root, "old-plans");
+    const current = join(root, "current");
+    mkdirSync(legacy);
+    mkdirSync(plans);
+    mkdirSync(current);
+    writeFileSync(join(legacy, "provider.json"), '{"model":"codexa-934m-end3"}');
+    writeFileSync(join(plans, "review.md"), "preserved plan");
+    maybeMigrateLegacyData(
+      "linux",
+      { CODEXA_DATA_DIR: legacy, CODEXA_PLAN_DIR: plans, UBUME_DATA_DIR: current },
+      root,
+    );
+    assert.equal(
+      readFileSync(join(current, "provider.json"), "utf8"),
+      '{"model":"codexa-934m-end3"}',
+    );
+    assert.equal(readFileSync(join(current, "plans", "review.md"), "utf8"), "preserved plan");
+    assert.ok(existsSync(join(plans, "review.md")));
+    const second = join(root, "second-destination");
+    maybeMigrateLegacyData("linux", { CODEXA_DATA_DIR: legacy, UBUME_DATA_DIR: second }, root);
+    assert.ok(
+      existsSync(join(second, "provider.json")),
+      "the process cache is specific to each source/destination",
+    );
+  } finally {
+    resetDataMigrationForTests();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("workspace data uses deterministic, isolated storage keys", () => {

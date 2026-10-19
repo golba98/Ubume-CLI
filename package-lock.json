@@ -129,8 +129,7 @@
         "typescript": "^7.0.2"
       },
       "bin": {
-        "ubume": "bin/ubume.js",
-        "codexa": "bin/codexa.js"
+        "ubume": "bin/ubume.js"
       }
     },
     "node_modules/@agentclientprotocol/sdk": {

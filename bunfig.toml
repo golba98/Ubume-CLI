@@ -1,2 +1,5 @@
 [test]
 maxConcurrency = 1
+
+# Isolate user data, credentials, provider executables and external fetches for all suites.
+preload = ["./src/test/offlinePreload.ts"]

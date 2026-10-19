@@ -3,7 +3,7 @@
 Ubume uses Bun's test runner with colocated `*.test.ts` and `*.test.tsx` suites throughout
 `src/`, plus runner-discovered tests under `scripts/`. Existing suites use both `bun:test`
 and Bun's `node:test` compatibility. Keep assertions in the style of the surrounding suite.
-There is no global setup/preload, custom runner, or configured coverage threshold.
+The global `offlinePreload.ts` isolates homes, credentials and provider discovery, and blocks external fetches. There is no custom runner or configured coverage threshold.
 
 `bunfig.toml` and the package test script both set concurrency to one. Several suites patch
 process state or module-owned caches; do not enable concurrent execution for them.
@@ -13,6 +13,8 @@ process state or module-owned caches; do not enable concurrent execution for the
 | Module | Responsibility |
 | --- | --- |
 | `async.ts` | Bounded condition polling and event-loop yielding; never installs fake global timers. |
+| `offlinePreload.ts` | Provider-free process environment and loopback-only fetch guard for every suite. |
+| `offlineSandbox.ts` | Isolated child environments, controlled executable fixtures and invocation logs. |
 | `environment.ts` | Pure isolated child environments and reversible in-process environment patches. |
 | `fakeClock.ts` | Injected scheduler timers, time advancement, detached pending snapshots; compatibility export of `settle`. |
 | `fakeExecutable.ts` | Temporary executable scripts, JSON logs and stdio JSON-line protocol source. |
@@ -195,5 +197,6 @@ environments use the stricter missing-executable defaults described above.
 6. For a new regression, deliberately break the relevant behavior in a disposable copy and
    verify the test fails. Keep mutation artifacts outside the repository.
 
-See the [implementation audit](../../docs/TEST_INFRASTRUCTURE_AUDIT.md) for this pass's exact
-file inventory, baseline defects, assertion review, validation results and remaining limits.
+The test-infrastructure audit for this pass (file inventory, baseline defects, assertion
+review, validation results and remaining limits) is kept as a local report; see
+[`docs/REPORTING.md`](../../docs/REPORTING.md).
