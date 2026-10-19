@@ -1,3 +1,20 @@
+/**
+ * URL admission policy for the browser tools.
+ *
+ * Every URL a model wants to open passes through `browserUrl` before any
+ * browser interaction happens. The rules are security invariants, not advice:
+ *
+ *   1. Only absolute HTTP(S) URLs are accepted — no other schemes, no relative
+ *      references, no embedded credentials (user:pass@host).
+ *   2. Without network access, only loopback destinations are allowed
+ *      (localhost, [::1], 127.0.0.0/8). Everything else is denied with
+ *      BROWSER_NETWORK_DENIED before a browser process is involved.
+ *
+ * `isLoopbackUrl` is also reused at runtime: the proxy, page routing and the
+ * post-action redirect check all re-verify loopback on every request, because
+ * a navigation can redirect anywhere.
+ */
+
 export class BrowserToolError extends Error {
   code;
   constructor(code, message) {
@@ -5,9 +22,12 @@ export class BrowserToolError extends Error {
     this.code = code;
   }
 }
+
 function fail(code, message) {
   throw new BrowserToolError(code, message);
 }
+
+/** True only for localhost, [::1] and 127.x.x.x hostnames; false for anything unparsable. */
 export function isLoopbackUrl(value) {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -16,6 +36,12 @@ export function isLoopbackUrl(value) {
     return false;
   }
 }
+
+/**
+ * Validates and normalizes an HTTP(S) URL the model wants to visit.
+ * Returns the href string; throws BrowserToolError (BROWSER_INVALID_URL /
+ * BROWSER_NETWORK_DENIED) when the URL is not admissible.
+ */
 export function browserUrl(value, networkAccess) {
   let url;
   try {
