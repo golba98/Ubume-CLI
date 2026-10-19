@@ -4,8 +4,14 @@ import { App } from "./app/App.js";
 import { type LaunchArgs, parseLaunchArgs } from "./config/launchArgs.js";
 import { loadSettings } from "./config/persistence.js";
 import { APP_NAME, formatTerminalTitlePath } from "./config/settings.js";
+import * as benchTrace from "./core/perf/benchTrace.js";
 import * as renderDebug from "./core/perf/renderDebug.js";
-import { resetFrameLockForResize, wrapStdoutWithFrameLock } from "./core/terminal/frameLock.js";
+import type { BackendProvider } from "./core/providers/types.js";
+import {
+  releaseFrameLock,
+  resetFrameLockForResize,
+  wrapStdoutWithFrameLock,
+} from "./core/terminal/frameLock.js";
 import {
   type InkRenderInstance,
   resolveInkRenderInstance,
@@ -56,7 +62,9 @@ export interface StartAppDependencies {
   argv: string[];
   renderApp: (node: React.ReactElement, options?: RenderOptions) => RenderHandle;
   resolveInkInstanceForStdout: (stdout: AppStdout) => InkRenderInstance | null;
-  registerExitHandler: (handler: () => void) => void;
+  registerExitHandler: (handler: () => void) => void | (() => void);
+  /** Offline benchmark/embedding seam (never a CLI flag): the App's provider override. */
+  providerOverride?: BackendProvider;
 }
 
 export interface StartAppResult {
@@ -103,9 +111,14 @@ export function startApp({
   renderApp = render,
   resolveInkInstanceForStdout = resolveInkRenderInstance,
   registerExitHandler = (handler) => {
-    process.on("exit", handler);
+    process.once("exit", handler);
+    return () => {
+      process.off("exit", handler);
+    };
   },
+  providerOverride,
 }: Partial<StartAppDependencies> = {}): StartAppResult {
+  benchTrace.startupMark("start-app");
   renderDebug.configureRenderDebug(env);
 
   if (activeRoot) {
@@ -144,6 +157,7 @@ export function startApp({
 
   if (!capability.supported) {
     writeStderr(`${capability.message}\n`, "src/index.tsx:unsupportedTerminal");
+    releaseFrameLock(stdout);
     return { started: false, exitCode: 1 };
   }
   if (capability.warning) {
@@ -153,6 +167,7 @@ export function startApp({
   const parsedLaunchArgs = parseLaunchArgs(argv);
   if (!parsedLaunchArgs.ok) {
     writeStderr(`${parsedLaunchArgs.error}\n`, "src/index.tsx:launchArgs");
+    releaseFrameLock(stdout);
     return { started: false, exitCode: 1 };
   }
   const launchArgs: LaunchArgs = parsedLaunchArgs.value;
@@ -161,6 +176,7 @@ export function startApp({
   // enter alternate-screen mode from app.tsx only while an overlay is active.
   const startupWorkspaceRoot = resolveWorkspaceRoot();
   const startupSettings = loadSettings();
+  benchTrace.startupMark("settings-loaded");
   const startupTitle =
     formatTerminalTitlePath(startupWorkspaceRoot, startupSettings.ui.terminalTitleMode) || APP_NAME;
   setIntendedTerminalTitle(startupTitle, {
@@ -171,6 +187,7 @@ export function startApp({
   terminal.setMouseReporting(false, "src/index.tsx:startup.nativeScroll");
   terminal.setBracketedPaste(true, "src/index.tsx:startup.bracketedPaste");
 
+  let unregisterExitHandler: void | (() => void);
   let cleanupDone = false;
   let repaintArmed = false;
   let renderHandle: RenderHandle | null = null;
@@ -211,13 +228,25 @@ export function startApp({
     if (cleanupDone) return;
     cleanupDone = true;
     stdout.off("resize", onResize);
-    renderHandle?.cleanup();
-    // Restore terminal state: disable mouse reporting and bracketed paste.
-    terminal.setMouseReporting(false, "src/index.tsx:cleanup.mouse");
-    terminal.setBracketedPaste(false, "src/index.tsx:cleanup.bracketedPaste");
-    terminal.setAlternateScreen(false, "src/index.tsx:cleanup.alternateScreen");
-    terminal.resetModes();
-    activeRoot = null;
+    process.off("SIGINT", handleSignal);
+    process.off("SIGTERM", handleSignal);
+    process.off("uncaughtException", handleFatal);
+    process.off("unhandledRejection", handleFatal);
+    unregisterExitHandler?.();
+    try {
+      renderHandle?.cleanup();
+    } finally {
+      try {
+        // Restore terminal modes even when the renderer fails during teardown.
+        terminal.setMouseReporting(false, "src/index.tsx:cleanup.mouse");
+        terminal.setBracketedPaste(false, "src/index.tsx:cleanup.bracketedPaste");
+        terminal.setAlternateScreen(false, "src/index.tsx:cleanup.alternateScreen");
+        terminal.resetModes();
+      } finally {
+        releaseFrameLock(stdout);
+        activeRoot = null;
+      }
+    }
   };
 
   const handleFatal = (error: unknown) => {
@@ -236,7 +265,7 @@ export function startApp({
   };
 
   stdout.on("resize", onResize);
-  registerExitHandler(cleanup);
+  unregisterExitHandler = registerExitHandler(cleanup);
 
   // Ensure clean teardown on signals and unhandled failures to prevent
   // leaving the terminal in mouse-reporting mode.
@@ -246,13 +275,23 @@ export function startApp({
   process.on("unhandledRejection", handleFatal);
 
   const kittyKeyboard = resolveKittyKeyboardOptions(env);
-  renderHandle = renderApp(<App launchArgs={launchArgs} />, {
-    // App owns cancel, draft clearing, and the deliberate second Ctrl-C quit.
-    exitOnCtrlC: false,
-    ...(kittyKeyboard ? { kittyKeyboard } : {}),
-    // AppStdout is the narrow surface the app uses; Ink wants the full stream type.
-    stdout: wrappedStdout as unknown as NodeJS.WriteStream,
-  });
+  benchTrace.startupMark("render-start");
+  try {
+    renderHandle = renderApp(<App launchArgs={launchArgs} providerOverride={providerOverride} />, {
+      // App owns cancel, draft clearing, and the deliberate second Ctrl-C quit.
+      exitOnCtrlC: false,
+      onRender: () => {
+        benchTrace.startupMarkOnce("ink-output-generated");
+        benchTrace.traceInkOutputGenerated();
+      },
+      ...(kittyKeyboard ? { kittyKeyboard } : {}),
+      // AppStdout is the narrow surface the app uses; Ink wants the full stream type.
+      stdout: wrappedStdout as unknown as NodeJS.WriteStream,
+    });
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 
   // Resolve the real Ink class instance to get access to lastOutput,
   // onRender, calculateLayout, etc.  Gracefully degrades to null in tests.
@@ -265,6 +304,7 @@ export function startApp({
     inkInstance.unsubscribeResize();
   }
 
+  benchTrace.startupMark("render-returned");
   void renderHandle.waitUntilExit().finally(cleanup);
 
   activeRoot = { cleanup };
@@ -274,6 +314,9 @@ export function startApp({
 const isMainModule = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
 
 if (isMainModule) {
+  benchTrace.startupMarkProcessStart();
+  benchTrace.startupMark("modules-loaded");
+  benchTrace.installMemoryReporter();
   const result = startApp();
   if (!result.started) {
     process.exitCode = result.exitCode;

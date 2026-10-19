@@ -29,6 +29,7 @@ import {
   getBlockedCleanupFailure,
 } from "../../core/codex/codexPrompt.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
+import * as benchTrace from "../../core/perf/benchTrace.js";
 import * as perf from "../../core/perf/profiler.js";
 import * as renderDebug from "../../core/perf/renderDebug.js";
 import type { ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
@@ -67,7 +68,9 @@ import { acquireOwnership, type OwnershipLease } from "../../core/workspace/owne
 import type { ProjectInstructions } from "../../core/workspace/projectInstructions.js";
 import {
   captureWorkspaceSnapshot,
+  captureWorkspaceSnapshotAsync,
   createWorkspaceActivityTracker,
+  createWorkspaceContentCache,
   diffWorkspaceSnapshots,
 } from "../../core/workspace/workspaceActivity.js";
 import type { SessionAction } from "../../session/appSession.js";
@@ -242,6 +245,7 @@ export function mergeFileActivity(
 
 /** Starts a provider run (after the next visible frame) and installs its cleanup. */
 export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRunPlan): void {
+  if (benchTrace.streamTraceEnabled) benchTrace.beginStreamTrace();
   const { runId, turnId, route, lifecycle, submitTiming, safeProviderPrompt } = plan;
   const isPlanPresentation = lifecycle.responsePresentation === "plan";
   const isCurrent = () => isCurrentRun(deps.activeRunIdRef.current, runId);
@@ -261,6 +265,9 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
   let blockedCleanupFailureSurfaced = false;
 
   let preRunSnapshot: ReturnType<typeof captureWorkspaceSnapshot> | null = null;
+  // Shared by the baseline, the tracker's polls and the final polls, so unchanged files are
+  // read once per run rather than on every scan.
+  const workspaceContentCache = createWorkspaceContentCache();
   let finalWorkspacePollDone = false;
   let activityTracker: ReturnType<typeof createWorkspaceActivityTracker> | null = null;
 
@@ -289,6 +296,11 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
       if (!firstRenderFired && updates.some((update) => update.type === "assistant")) {
         firstRenderFired = true;
         perf.mark("first_render");
+      }
+      if (benchTrace.streamTraceEnabled) {
+        for (const update of updates) {
+          benchTrace.streamMark("flush", "chunk" in update ? update.chunk : JSON.stringify(update));
+        }
       }
       deps.dispatchSession({
         type: "RUN_APPLY_LIVE_UPDATES",
@@ -434,10 +446,19 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
       (route.providerId === "openai" && deps.backend === "codex-subprocess") ||
       route.providerId === "local";
     if (tracksWorkspace) {
-      preRunSnapshot = captureWorkspaceSnapshot(deps.workspaceRoot);
+      // Asynchronous so a large workspace cannot freeze the visible starting frame.
+      const baseline = await captureWorkspaceSnapshotAsync(
+        deps.workspaceRoot,
+        workspaceContentCache,
+      );
+      if (providerStartCancelled || !isCurrent()) {
+        return false;
+      }
+      preRunSnapshot = baseline;
       activityTracker = createWorkspaceActivityTracker({
         rootDir: deps.workspaceRoot,
         initialSnapshot: preRunSnapshot,
+        contentCache: workspaceContentCache,
         onActivity: (activity) => {
           if (!isCurrent()) {
             return;
@@ -468,6 +489,7 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
   };
 
   const onAssistantDelta: BackendRunHandlers["onAssistantDelta"] = (chunk) => {
+    benchTrace.streamMark("handler", chunk);
     if (!chunk || !isCurrent()) {
       return;
     }
@@ -479,7 +501,9 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
       return;
     }
     markExternalCliReady();
+    benchTrace.streamMark("normalize", safeChunk);
     liveScheduler.enqueue({ type: isPlanPresentation ? "plan" : "assistant", chunk: safeChunk });
+    benchTrace.streamMark("schedule", safeChunk);
     streamedAssistantContent += safeChunk;
     const capture = deps.activeRunCaptureRef.current;
     if (capture?.runId === runId) {
@@ -516,6 +540,7 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
   };
 
   const onToolActivity: BackendRunHandlers["onToolActivity"] = (activity) => {
+    benchTrace.streamMark("handler", activity.command);
     if (!isCurrent()) {
       return;
     }
@@ -529,7 +554,10 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
       planSeenToolIds.add(activity.id);
       planSectionContent = "";
     }
-    liveScheduler.enqueue({ type: "tool", activity: toolOutputBudget.bound(activity) });
+    const boundedActivity = toolOutputBudget.bound(activity);
+    benchTrace.streamMark("normalize", boundedActivity.command);
+    liveScheduler.enqueue({ type: "tool", activity: boundedActivity });
+    benchTrace.streamMark("schedule", boundedActivity.command);
     if (activity.status === "running") {
       return;
     }
@@ -568,7 +596,7 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
     }
     try {
       perf.mark("snapshot_start");
-      const finalSnapshot = captureWorkspaceSnapshot(deps.workspaceRoot);
+      const finalSnapshot = captureWorkspaceSnapshot(deps.workspaceRoot, workspaceContentCache);
       perf.mark("snapshot_end");
       const lateActivity = diffWorkspaceSnapshots(preRunSnapshot, finalSnapshot);
       if (lateActivity.length > 0) {
@@ -831,7 +859,7 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
     // last-moment file changes that were in flight.
     if (activityTracker && preRunSnapshot && !finalWorkspacePollDone) {
       try {
-        const cleanupSnapshot = captureWorkspaceSnapshot(deps.workspaceRoot);
+        const cleanupSnapshot = captureWorkspaceSnapshot(deps.workspaceRoot, workspaceContentCache);
         const lastActivity = diffWorkspaceSnapshots(preRunSnapshot, cleanupSnapshot);
         if (lastActivity.length > 0 && isCurrent()) {
           deps.dispatchSession({ type: "RUN_APPEND_ACTIVITY", runId, activity: lastActivity });

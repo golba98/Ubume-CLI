@@ -109,3 +109,9 @@ test(
   { timeout: 30000 },
   () => scenarios(["plan-warning-save", "plan-warning-resume"]),
 );
+
+test(
+  "actual App finalizes a !shell command in scrollback instead of leaving it executing",
+  { timeout: 30000 },
+  () => scenarios(["shell-complete"]),
+);

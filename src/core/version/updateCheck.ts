@@ -13,6 +13,14 @@ export const UBUME_NPM_PACKAGE = "ubume";
 // The dist-tags document is tiny and served uncached, unlike the full packument (CDN-cached
 // for minutes and growing with every release). `latest` is what `npm install ubume@latest` uses.
 export const UBUME_NPM_DIST_TAGS_URL = `https://registry.npmjs.org/-/package/${UBUME_NPM_PACKAGE}/dist-tags`;
+/** Environment override for the dist-tags endpoint (offline benchmarks, registry mirrors). */
+export const UBUME_UPDATE_DIST_TAGS_URL_ENV = "UBUME_UPDATE_DIST_TAGS_URL";
+
+/** The dist-tags URL to query: an http(s) `UBUME_UPDATE_DIST_TAGS_URL`, else npm's registry. */
+export function resolveDistTagsUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env[UBUME_UPDATE_DIST_TAGS_URL_ENV]?.trim();
+  return override && /^https?:\/\//i.test(override) ? override : UBUME_NPM_DIST_TAGS_URL;
+}
 export const UBUME_UPDATE_COMMAND = `npm install -g ${UBUME_NPM_PACKAGE}@latest --prefer-online --legacy-peer-deps`;
 
 export type UpdateStatus = "up-to-date" | "update-available" | "unknown" | "error";
@@ -185,7 +193,7 @@ export async function checkForUpdates(
     const fetchFn =
       overrides?.fetchNpmMetadataFn ??
       ((url: string, signal?: AbortSignal) => fetchNpmDistTags(url, { signal }));
-    const metadata: unknown = await fetchFn(UBUME_NPM_DIST_TAGS_URL, overrides?.signal);
+    const metadata: unknown = await fetchFn(resolveDistTagsUrl(), overrides?.signal);
     const rawLatest =
       typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
         ? (metadata as NpmDistTags).latest

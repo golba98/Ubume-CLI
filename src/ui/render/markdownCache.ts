@@ -21,14 +21,18 @@ export function detachMarkdownText(text: string): string {
 }
 
 /**
- * LRU cache bounded both by entry count and by a total "character" cost.
+ * Cache bounded both by entry count and by a total "character" cost, with
+ * second-chance (CLOCK) eviction approximating LRU.
  *
- * Map insertion order is the recency order: `get` re-inserts a hit, and
- * eviction drops the oldest keys until both budgets hold. A single value whose
- * cost exceeds `maxCharacters` is returned but not stored.
+ * Map insertion order is the eviction order. A hit only marks its entry as
+ * referenced: re-inserting on every hit (exact LRU) made Map delete/insert churn
+ * the dominant cost of streaming table layout, where a frame performs thousands
+ * of width lookups. Eviction gives referenced entries one more pass (moving them
+ * to the back) and drops the oldest unreferenced keys until both budgets hold. A
+ * single value whose cost exceeds `maxCharacters` is returned but not stored.
  */
 export class MarkdownCache<T> {
-  private entries = new Map<string, { key: string; value: T; cost: number }>();
+  private entries = new Map<string, { key: string; value: T; cost: number; referenced: boolean }>();
   private cost = 0;
 
   constructor(
@@ -41,8 +45,7 @@ export class MarkdownCache<T> {
   get(key: string): T | undefined {
     const entry = this.entries.get(key);
     if (!entry) return undefined;
-    this.entries.delete(key);
-    this.entries.set(entry.key, entry);
+    entry.referenced = true;
     return entry.value;
   }
 
@@ -57,13 +60,20 @@ export class MarkdownCache<T> {
     this.entries.delete(key);
     if (characters > this.maxCharacters) return value;
     const ownedKey = detachMarkdownText(key);
-    this.entries.set(ownedKey, { key: ownedKey, value, cost: characters });
+    this.entries.set(ownedKey, { key: ownedKey, value, cost: characters, referenced: false });
     this.cost += characters;
+    // Terminates: each pass either evicts or clears a reference bit, and the new
+    // entry is unreferenced.
     while (this.entries.size > this.maxEntries || this.cost > this.maxCharacters) {
-      const oldest = this.entries.keys().next().value;
+      const oldest = this.entries.values().next().value;
       if (oldest === undefined) break;
-      this.cost -= this.entries.get(oldest)!.cost;
-      this.entries.delete(oldest);
+      this.entries.delete(oldest.key);
+      if (oldest.referenced) {
+        oldest.referenced = false;
+        this.entries.set(oldest.key, oldest);
+        continue;
+      }
+      this.cost -= oldest.cost;
     }
     return value;
   }

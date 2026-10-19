@@ -18,7 +18,12 @@ import {
 import { dirname, join } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { resolveUbumeWorkspaceDataDir } from "./appData.js";
-import { containedFile, FILE_TEXT_LIMIT, listWorkspaceFiles } from "./workspaceFiles.js";
+import {
+  containedFile,
+  createContainedFileResolver,
+  FILE_TEXT_LIMIT,
+  listWorkspaceFiles,
+} from "./workspaceFiles.js";
 
 export interface CheckpointFile {
   hash: string;
@@ -45,6 +50,17 @@ export interface RestoreOperation {
 }
 const BOUNDARY_LIMIT = 64 * FILE_TEXT_LIMIT;
 const STORE_LIMIT = 256 * FILE_TEXT_LIMIT;
+// Files read and hashed concurrently during capture. Limit accounting stays sequential in
+// listing order, so which files a full boundary skips is unchanged; at most this many
+// files' bytes (each <= FILE_TEXT_LIMIT) are held at once.
+const CAPTURE_BATCH = 32;
+
+/** Result of reading one listed path for capture, before any limit is applied. */
+type CaptureCandidate =
+  | { kind: "file"; path: string; bytes: Buffer; hash: string; mode: number; stored: boolean }
+  | { kind: "skip"; path: string }
+  | { kind: "absent"; path: string }
+  | { kind: "error"; path: string };
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const same = (a?: CheckpointFile, b?: CheckpointFile) => a?.hash === b?.hash && a?.mode === b?.mode;
 const fileAt = (boundary: FileBoundary, path: string): CheckpointFile | undefined =>
@@ -75,8 +91,7 @@ export class CheckpointStore {
     if (digest(bytes) !== file.hash) throw new Error("Checkpoint content is corrupt.");
     return bytes;
   }
-  private async saveBytes(bytes: Buffer): Promise<string> {
-    const hash = digest(bytes);
+  private async saveBytes(bytes: Buffer, hash = digest(bytes)): Promise<string> {
     await mkdir(join(this.directory, "blobs"), { recursive: true, mode: 0o700 });
     try {
       await writeFile(this.blob(hash), bytes, { flag: "wx", mode: 0o600 });
@@ -92,57 +107,110 @@ export class CheckpointStore {
   async capture(): Promise<FileBoundary> {
     const boundary: FileBoundary = { files: Object.create(null), complete: true, skipped: [] };
     let size = 0;
-    let stored = 0;
-    try {
-      for (const entry of await readdir(join(this.directory, "blobs")))
-        stored += (await lstat(join(this.directory, "blobs", entry))).size;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    for (const path of await listWorkspaceFiles(this.workspace)) {
-      try {
-        const absolute = await containedFile(this.workspace, path);
-        const stat = await lstat(absolute);
-        if (!stat.isFile() || stat.size > FILE_TEXT_LIMIT) {
-          boundary.skipped.push(path);
+    let stored = await this.storedBytes();
+    const contained = createContainedFileResolver(this.workspace);
+    // Blobs written by this capture; candidates in one batch are inspected before any of them
+    // is saved, so identical content later in the batch must not count against the store twice.
+    const written = new Set<string>();
+    const paths = await listWorkspaceFiles(this.workspace);
+    for (let start = 0; start < paths.length; start += CAPTURE_BATCH) {
+      const batch = paths.slice(start, start + CAPTURE_BATCH);
+      // Bun can settle a whole batch of fs promises without returning to the event loop;
+      // yield between batches so a large capture never stalls rendering or input.
+      if (start > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      const candidates = await Promise.all(batch.map((path) => this.inspect(contained, path)));
+      for (const candidate of candidates) {
+        if (candidate.kind === "absent") continue; // Git still lists tracked deletions.
+        if (candidate.kind === "skip") {
+          boundary.skipped.push(candidate.path);
           continue;
         }
-        const bytes = await readFile(absolute);
-        if (bytes.length > FILE_TEXT_LIMIT || bytes.includes(0)) {
-          boundary.skipped.push(path);
+        if (candidate.kind === "error") {
+          boundary.complete = false;
+          boundary.skipped.push(candidate.path);
           continue;
         }
-        try {
-          new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch {
-          boundary.skipped.push(path);
-          continue;
-        }
+        const { path, bytes, hash, mode } = candidate;
         size += bytes.length;
-        const hash = digest(bytes);
-        let exists = false;
-        try {
-          await lstat(this.blob(hash));
-          exists = true;
-        } catch {
-          /* New blob. */
-        }
+        const exists = candidate.stored || written.has(hash);
         if (size > BOUNDARY_LIMIT || (!exists && stored + bytes.length > STORE_LIMIT)) {
           boundary.complete = false;
           boundary.skipped.push(path);
           continue;
         }
-        await this.saveBytes(bytes);
-        if (!exists) stored += bytes.length;
-        boundary.files[path] = { hash, mode: stat.mode & 0o777 };
-      } catch (error) {
-        // Git still lists tracked deletions. Absence is a valid checkpoint state.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        boundary.complete = false;
-        boundary.skipped.push(path);
+        try {
+          if (!exists) {
+            await this.saveBytes(bytes, hash);
+            written.add(hash);
+            stored += bytes.length;
+          }
+          boundary.files[path] = { hash, mode };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          boundary.complete = false;
+          boundary.skipped.push(path);
+        }
       }
     }
     return boundary;
+  }
+  /** Total size of stored blobs, used for the store limit. */
+  private async storedBytes(): Promise<number> {
+    const directory = join(this.directory, "blobs");
+    let entries: string[];
+    try {
+      entries = await readdir(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    let total = 0;
+    for (let start = 0; start < entries.length; start += CAPTURE_BATCH) {
+      const sizes = await Promise.all(
+        entries.slice(start, start + CAPTURE_BATCH).map(async (entry) => {
+          try {
+            return (await lstat(join(directory, entry))).size;
+          } catch (error) {
+            // A blob removed while listing no longer occupies the store.
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+            throw error;
+          }
+        }),
+      );
+      for (const entrySize of sizes) total += entrySize;
+    }
+    return total;
+  }
+  /** Reads and validates one listed path; limits are applied by the caller in listing order. */
+  private async inspect(
+    contained: (path: string) => Promise<string>,
+    path: string,
+  ): Promise<CaptureCandidate> {
+    try {
+      const absolute = await contained(path);
+      const stat = await lstat(absolute);
+      if (!stat.isFile() || stat.size > FILE_TEXT_LIMIT) return { kind: "skip", path };
+      const bytes = await readFile(absolute);
+      if (bytes.length > FILE_TEXT_LIMIT || bytes.includes(0)) return { kind: "skip", path };
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        return { kind: "skip", path };
+      }
+      const hash = digest(bytes);
+      let stored = false;
+      try {
+        await lstat(this.blob(hash));
+        stored = true;
+      } catch {
+        /* New blob. */
+      }
+      return { kind: "file", path, bytes, hash, mode: stat.mode & 0o777, stored };
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT"
+        ? { kind: "absent", path }
+        : { kind: "error", path };
+    }
   }
   /**
    * Builds a display diff from verified blobs with bounded diff computation; does not change

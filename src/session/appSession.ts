@@ -15,7 +15,8 @@
  * per batch to keep renders cheap while a run streams.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import * as benchTrace from "../core/perf/benchTrace.js";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import type { BackendProgressUpdate } from "../core/providers/types.js";
 import type { RunFileActivity } from "../core/workspace/workspaceActivity.js";
@@ -879,12 +880,27 @@ export function useAppSessionState(initialStaticEvents?: () => TimelineEvent[]) 
   const [state, setState] = useState<SessionState>(() =>
     createInitialSessionState({ staticEvents: initialStaticEvents?.() ?? [] }),
   );
+  useLayoutEffect(() => {
+    if (!benchTrace.streamTraceEnabled) return;
+    for (const event of state.activeEvents) {
+      if (event.type === "assistant")
+        benchTrace.streamMark("commit", event.content + event.contentChunks.join(""));
+      if (event.type === "run") {
+        for (const tool of event.toolActivities) benchTrace.streamMark("commit", tool.command);
+      }
+    }
+  }, [state]);
   const liveStateRef = useRef(state);
   const queueRef = useRef<SessionAction[]>([]);
   const scheduledRef = useRef(false);
 
   const dispatch = useCallback((action: SessionAction) => {
     liveStateRef.current = reduceSessionState(liveStateRef.current, action);
+    if (benchTrace.streamTraceEnabled && action.type === "RUN_APPLY_LIVE_UPDATES") {
+      for (const update of action.updates) {
+        benchTrace.streamMark("reduce", "chunk" in update ? update.chunk : JSON.stringify(update));
+      }
+    }
     queueRef.current.push(action);
     if (scheduledRef.current) return;
 

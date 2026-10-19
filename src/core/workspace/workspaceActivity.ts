@@ -3,7 +3,8 @@
  * during runs.
  */
 
-import { readdirSync, readFileSync, statSync } from "fs";
+import { type Dirent, readdirSync, readFileSync, type Stats, statSync } from "fs";
+import { readdir, readFile, stat } from "fs/promises";
 import { join, relative, sep } from "path";
 import { normalizeLineBreaks } from "../shared/text.js";
 import { SCRATCH_RELATIVE_DIR } from "./scratchDir.js";
@@ -42,6 +43,8 @@ interface WorkspaceActivityTrackerOptions {
   onActivity: (activity: RunFileActivity[]) => void;
   pollIntervalMs?: number;
   initialSnapshot?: Map<string, WorkspaceFileSnapshot>;
+  /** Content cache shared with the caller's own (final) snapshots of the same run. */
+  contentCache?: WorkspaceContentCache;
 }
 
 interface WorkspaceFileSnapshot {
@@ -51,7 +54,34 @@ interface WorkspaceFileSnapshot {
   content?: string;
 }
 
+interface CachedFileContent {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  ino: number;
+  content: string | undefined;
+}
+
+/**
+ * Tracked text keyed by absolute path and validated by full stat identity, so a poll only
+ * reads files whose stat changed. ctime is part of the key because every content write
+ * updates it, which catches same-size rewrites within one mtime tick. This is a display
+ * cache: recovery never relies on it (checkpoints hash exact bytes).
+ */
+export type WorkspaceContentCache = Map<string, CachedFileContent>;
+
+export function createWorkspaceContentCache(): WorkspaceContentCache {
+  return new Map();
+}
+
 const DEFAULT_POLL_INTERVAL_MS = 400;
+// Slow scans back off to at most this interval so polling never saturates the disk.
+const MAX_ADAPTIVE_POLL_INTERVAL_MS = 2000;
+// Parallel filesystem operations per asynchronous scan.
+const SCAN_CONCURRENCY = 32;
+// Bun can settle fs promises without returning to the event loop, so an "async" scan would
+// still starve timers and input; the scan yields a macrotask after this many operations.
+const SCAN_OPERATIONS_PER_YIELD = 64;
 const MAX_TRACKED_TEXT_BYTES = 128 * 1024;
 const MAX_DIFFABLE_LINE_COUNT = 240;
 const MAX_DIFF_PREVIEW_LINES = 6;
@@ -122,12 +152,109 @@ function shouldTrackTextContent(path: string, size: number): boolean {
   return true;
 }
 
-function readTrackedFileContent(path: string, size: number): string | undefined {
-  if (!shouldTrackTextContent(path, size)) return undefined;
-
-  const buffer = readFileSync(path);
+function decodeTrackedContent(buffer: Buffer): string | undefined {
   if (isBinaryBuffer(buffer)) return undefined;
   return normalizeLineBreaks(buffer.toString("utf8"));
+}
+
+function cachedContent(
+  cache: WorkspaceContentCache | undefined,
+  fullPath: string,
+  stats: Stats,
+): { hit: true; content: string | undefined } | { hit: false } {
+  const cached = cache?.get(fullPath);
+  if (
+    cached &&
+    cached.mtimeMs === stats.mtimeMs &&
+    cached.ctimeMs === stats.ctimeMs &&
+    cached.size === stats.size &&
+    cached.ino === stats.ino
+  ) {
+    return { hit: true, content: cached.content };
+  }
+  return { hit: false };
+}
+
+function rememberContent(
+  cache: WorkspaceContentCache | undefined,
+  fullPath: string,
+  stats: Stats,
+  content: string | undefined,
+): void {
+  cache?.set(fullPath, {
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+    size: stats.size,
+    ino: stats.ino,
+    content,
+  });
+}
+
+function readTrackedFileContent(
+  path: string,
+  stats: Stats,
+  cache?: WorkspaceContentCache,
+): string | undefined {
+  if (!shouldTrackTextContent(path, stats.size)) return undefined;
+  const cached = cachedContent(cache, path, stats);
+  if (cached.hit) return cached.content;
+  const content = decodeTrackedContent(readFileSync(path));
+  rememberContent(cache, path, stats, content);
+  return content;
+}
+
+async function readTrackedFileContentAsync(
+  path: string,
+  stats: Stats,
+  cache?: WorkspaceContentCache,
+): Promise<string | undefined> {
+  if (!shouldTrackTextContent(path, stats.size)) return undefined;
+  const cached = cachedContent(cache, path, stats);
+  if (cached.hit) return cached.content;
+  const content = decodeTrackedContent(await readFile(path));
+  rememberContent(cache, path, stats, content);
+  return content;
+}
+
+/** Whether a directory entry is excluded from display tracking (by name or scratch path). */
+function isExcludedDirectory(rootDir: string, childDir: string, name: string): boolean {
+  if (shouldIgnoreDirectory(name)) return true;
+  const normalizedRel = normalizePath(relative(rootDir, childDir));
+  return normalizedRel === SCRATCH_RELATIVE_DIR;
+}
+
+/** Drops cache entries for files a complete scan no longer saw (deleted or now excluded). */
+function pruneContentCache(cache: WorkspaceContentCache | undefined, seen: Set<string>): void {
+  if (!cache) return;
+  for (const fullPath of cache.keys()) {
+    if (!seen.has(fullPath)) cache.delete(fullPath);
+  }
+}
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Runs `work` over `items` with at most `limit` operations in flight, yielding to the event
+ * loop every {@link SCAN_OPERATIONS_PER_YIELD} operations.
+ */
+async function forEachLimited<T>(
+  items: readonly T[],
+  limit: number,
+  work: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  let sinceYield = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++]!;
+      await work(item);
+      if (++sinceYield >= SCAN_OPERATIONS_PER_YIELD) {
+        sinceYield = 0;
+        await yieldToEventLoop();
+      }
+    }
+  });
+  await Promise.all(workers);
 }
 
 function splitTextLines(text: string): string[] {
@@ -238,10 +365,15 @@ export function createTextDiffExcerpt(
 
 /**
  * Captures bounded display-oriented file metadata/content while skipping excluded workspace
- * trees.
+ * trees. Symlinks are never followed. With a `contentCache`, files whose stat is unchanged
+ * since they were last read are not read again.
  */
-export function captureWorkspaceSnapshot(rootDir: string): Map<string, WorkspaceFileSnapshot> {
+export function captureWorkspaceSnapshot(
+  rootDir: string,
+  contentCache?: WorkspaceContentCache,
+): Map<string, WorkspaceFileSnapshot> {
   const snapshot = new Map<string, WorkspaceFileSnapshot>();
+  const seen = new Set<string>();
 
   function walk(dir: string): void {
     let entries;
@@ -254,11 +386,8 @@ export function captureWorkspaceSnapshot(rootDir: string): Map<string, Workspace
 
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        if (shouldIgnoreDirectory(entry.name)) continue;
         const childDir = join(dir, entry.name);
-        const normalizedRel = normalizePath(relative(rootDir, childDir));
-        if (normalizedRel === SCRATCH_RELATIVE_DIR || normalizedRel === ".codexa/scratch") continue;
-        walk(childDir);
+        if (!isExcludedDirectory(rootDir, childDir, entry.name)) walk(childDir);
         continue;
       }
 
@@ -272,8 +401,9 @@ export function captureWorkspaceSnapshot(rootDir: string): Map<string, Workspace
           path,
           mtimeMs: stats.mtimeMs,
           size: stats.size,
-          content: readTrackedFileContent(fullPath, stats.size),
+          content: readTrackedFileContent(fullPath, stats, contentCache),
         });
+        seen.add(fullPath);
       } catch {
         // Skip files we can't stat (deleted between readdir and stat, etc.)
       }
@@ -281,6 +411,60 @@ export function captureWorkspaceSnapshot(rootDir: string): Map<string, Workspace
   }
 
   walk(rootDir);
+  pruneContentCache(contentCache, seen);
+  return snapshot;
+}
+
+/**
+ * Asynchronous equivalent of {@link captureWorkspaceSnapshot} (same exclusions, symlink and
+ * content rules) that keeps the event loop responsive in large workspaces. Filesystem work is
+ * bounded to {@link SCAN_CONCURRENCY} operations in flight. Entry order may differ from the
+ * synchronous walk; consumers compare snapshots by path.
+ */
+export async function captureWorkspaceSnapshotAsync(
+  rootDir: string,
+  contentCache?: WorkspaceContentCache,
+): Promise<Map<string, WorkspaceFileSnapshot>> {
+  const snapshot = new Map<string, WorkspaceFileSnapshot>();
+  const seen = new Set<string>();
+  let directories = [rootDir];
+  while (directories.length > 0) {
+    const files: string[] = [];
+    const nextDirectories: string[] = [];
+    await forEachLimited(directories, SCAN_CONCURRENCY, async (dir) => {
+      let entries: Dirent[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return; // Same as the synchronous walk: unreadable directories are skipped.
+      }
+      for (const entry of entries) {
+        const child = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!isExcludedDirectory(rootDir, child, entry.name)) nextDirectories.push(child);
+        } else if (entry.isFile()) {
+          files.push(child);
+        }
+      }
+    });
+    await forEachLimited(files, SCAN_CONCURRENCY, async (fullPath) => {
+      try {
+        const stats = await stat(fullPath);
+        const path = normalizePath(relative(rootDir, fullPath));
+        snapshot.set(path, {
+          path,
+          mtimeMs: stats.mtimeMs,
+          size: stats.size,
+          content: await readTrackedFileContentAsync(fullPath, stats, contentCache),
+        });
+        seen.add(fullPath);
+      } catch {
+        // Deleted or unreadable between listing and stat/read.
+      }
+    });
+    directories = nextDirectories;
+  }
+  pruneContentCache(contentCache, seen);
   return snapshot;
 }
 
@@ -372,31 +556,51 @@ export function summarizeRunActivity(activity: RunFileActivity[]): RunActivitySu
 /**
  * Owns a run's baseline and bounded polling for display activity; stop/finalization remains with
  * the caller.
+ *
+ * Polls are asynchronous and never overlap: the next poll is scheduled only after the previous
+ * one finished, at the configured interval or, for slow scans, twice the scan duration (capped
+ * at {@link MAX_ADAPTIVE_POLL_INTERVAL_MS}). A poll that finishes after `stop()` reports nothing.
  */
 export function createWorkspaceActivityTracker(
   options: WorkspaceActivityTrackerOptions,
 ): WorkspaceActivityTracker {
   let stopped = false;
-  let previous = options.initialSnapshot ?? captureWorkspaceSnapshot(options.rootDir);
+  const contentCache = options.contentCache ?? createWorkspaceContentCache();
+  let previous = options.initialSnapshot ?? captureWorkspaceSnapshot(options.rootDir, contentCache);
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const poll = () => {
+  const schedule = (delayMs: number) => {
     if (stopped) return;
-    const next = captureWorkspaceSnapshot(options.rootDir);
-    const activity = diffWorkspaceSnapshots(previous, next);
-    previous = next;
-    if (activity.length > 0) {
-      options.onActivity(activity);
+    timer = setTimeout(poll, delayMs);
+    timer.unref?.();
+  };
+
+  const poll = async () => {
+    if (stopped) return;
+    const startedAt = performance.now();
+    let scanMs = 0;
+    try {
+      const next = await captureWorkspaceSnapshotAsync(options.rootDir, contentCache);
+      scanMs = performance.now() - startedAt;
+      if (stopped) return;
+      const activity = diffWorkspaceSnapshots(previous, next);
+      previous = next;
+      if (activity.length > 0) options.onActivity(activity);
+    } catch {
+      // Display tracking is best effort; the caller's final poll still runs.
+    } finally {
+      const backoff = Math.min(MAX_ADAPTIVE_POLL_INTERVAL_MS, scanMs * 2);
+      schedule(Math.max(pollIntervalMs, backoff));
     }
   };
 
-  const timer = setInterval(poll, pollIntervalMs);
-  timer.unref?.();
+  schedule(pollIntervalMs);
 
   return {
     stop() {
       stopped = true;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
     },
   };
 }

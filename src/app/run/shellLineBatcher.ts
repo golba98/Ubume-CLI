@@ -17,7 +17,7 @@ export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]
   let pendingStderr: string[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  const cancel = () => {
+  const clearTimer = () => {
     if (timer) {
       clearTimeout(timer);
       timer = null;
@@ -25,7 +25,7 @@ export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]
   };
 
   const flush = () => {
-    cancel();
+    clearTimer();
     const stdout = pendingStdout;
     const stderr = pendingStderr;
     pendingStdout = [];
@@ -35,7 +35,8 @@ export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]
   };
 
   const enqueue = (stream: "stdout" | "stderr", lines: string[]) => {
-    (stream === "stdout" ? pendingStdout : pendingStderr).push(...lines);
+    const pending = stream === "stdout" ? pendingStdout : pendingStderr;
+    for (const line of lines) pending.push(line);
     if (timer) return;
     timer = setTimeout(() => {
       timer = null;
@@ -43,5 +44,10 @@ export function createShellLineBatcher(emit: (stdout: string[], stderr: string[]
     }, LIVE_UPDATE_FLUSH_MS);
   };
 
+  const cancel = () => {
+    clearTimer();
+    pendingStdout = [];
+    pendingStderr = [];
+  };
   return { enqueue, flush, cancel };
 }

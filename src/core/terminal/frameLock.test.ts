@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { resetFrameLockForResize, wrapStdoutWithFrameLock } from "./frameLock.js";
+import { releaseFrameLock, resetFrameLockForResize, wrapStdoutWithFrameLock } from "./frameLock.js";
 
 describe("frameLock", () => {
   test("deduplicates identical consecutive frames", () => {
@@ -76,4 +76,22 @@ describe("frameLock", () => {
 
     assert.deepEqual(writes, ["same frame\x1b[K", "same frame\x1b[K"]);
   });
+});
+
+test("releasing and rewrapping frame lock restores the writer without nested wrappers", () => {
+  const writes: string[] = [];
+  const write = (chunk: string) => {
+    writes.push(chunk);
+    return true;
+  };
+  const stdout = { write };
+  wrapStdoutWithFrameLock({ stdout, env: {} });
+  stdout.write("same");
+  wrapStdoutWithFrameLock({ stdout, env: {} });
+  stdout.write("same");
+  releaseFrameLock(stdout);
+  assert.equal(stdout.write, write);
+  stdout.write("same");
+  releaseFrameLock(stdout);
+  assert.deepEqual(writes, ["same\x1b[K", "same\x1b[K", "same"]);
 });
