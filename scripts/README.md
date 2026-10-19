@@ -166,3 +166,11 @@ This is an integration smoke, not an isolated unit test. It can contact an exter
 ## Local browser smoke
 
 `UBUME_BROWSER_MODE=headless bun scripts/smoke-local-browser.ts` runs an isolated localhost browser flow using the structured browser backend. Use `headed` to watch on a desktop. It requires installed Chromium, leaves screenshot artifacts in its printed temporary directory, and closes its browser and server on completion. It does not contact a model or external site; the Local Harness integration tests verify model/tool routing separately.
+
+## Type-checking rewritten utilities
+
+`bun run typecheck:utilities` checks the maintained smoke, native-registry test, lock-generation
+and recording utilities listed in `scripts/tsconfig.json`. The production build and existing
+prepublish validation also run this check. It compiles these scripts without executing a
+provider, loading a model, installing tools or publishing a package. Benchmark fixtures have
+their own TypeScript configurations.
