@@ -139,6 +139,10 @@ test("prunes stale session folders but keeps the active and fresh ones", () => {
     const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     utimesSync(join(scratchRoot, "stale"), old, old);
     utimesSync(join(scratchRoot, "active"), old, old);
+    const legacy = join(root, ".codexa", "scratch", "stale");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "user-note.txt"), "retained legacy content");
+    utimesSync(legacy, old, old);
 
     pruneStaleScratchDirs(root, { keep: "active" });
 
@@ -146,6 +150,7 @@ test("prunes stale session folders but keeps the active and fresh ones", () => {
     assert.ok(existsSync(join(scratchRoot, "active")));
     assert.ok(existsSync(join(scratchRoot, "fresh")));
     assert.ok(existsSync(join(scratchRoot, ".gitignore")));
+    assert.equal(readFileSync(join(legacy, "user-note.txt"), "utf8"), "retained legacy content");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

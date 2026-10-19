@@ -2,13 +2,19 @@
 
 ## Unreleased
 
+### Changed
+
+- Complete Ubume application identity migration: remove deprecated `codexa`, `codexa-dev` and `cxd` entry points, application `CODEXA_*` aliases, `codexa.*` command-line overrides, and `--codexa-prompt-policy`. Use `ubume`, `ubume-dev` / `ubd`, `UBUME_*`, `ubume.*` and `--ubume-prompt-policy`.
+- Preserve Codexa model names, IDs, protocols, environment settings and `/codexa` model commands. Import missing legacy user artifacts into Ubume without overwriting current state; retain custom `CODEXA_DATA_DIR` and `CODEXA_PLAN_DIR` as migration sources only. Legacy originals remain available.
+- Organize maintained documentation by subject under `docs/`; keep generated reports local under ignored `docs/_reports/`.
+
 ---
 
 ## [0.1.18] — 2026-10-17 (prepared)
 
 ### Added
 
-- Experimental Codexa Native integration for five local 934M checkpoint variants, with managed worker streaming, generation settings, cancellation, unload and replay commands. Native inference requires separately configured Python, tokenizer and checkpoint files; see `docs/CODEXA_NATIVE.md`.
+- Experimental Codexa Native integration for five local 934M checkpoint variants, with managed worker streaming, generation settings, cancellation, unload and replay commands. Native inference requires separately configured Python, tokenizer and checkpoint files; see `docs/providers/codexa-native.md`.
 - Preserve raw generation output and provenance in saved conversations, with explicit context trimming and empty-response notices.
 
 ### Fixed
@@ -23,7 +29,7 @@
 
 ### Verification
 
-- Release checks and package contents are recorded in `docs/RELEASE_0.1.18_VERIFICATION.md`.
+- Release checks and package contents were recorded in a local release verification report.
 - Prepared for review; this preparation does not publish to npm or create a release tag.
 
 ---
@@ -46,7 +52,7 @@
 
 ### Verification
 
-- Release preparation passed 2,137 tests across 193 files (0 failures), build, TypeScript, Biome, capability audit (17/17), version consistency, CLI `--version` and package dry run. See `docs/RELEASE_0.1.17_VERIFICATION.md`.
+- Release preparation passed 2,137 tests across 193 files (0 failures), build, TypeScript, Biome, capability audit (17/17), version consistency, CLI `--version` and package dry run.
 
 ---
 
@@ -67,7 +73,7 @@
 ### Verification
 
 - Final release verification passed: 1,986 tests across 177 files (0 failures), TypeScript, Biome, build, capability audit (17/17), whitespace checks, version consistency and CLI `--version` (0.1.16). The package dry run includes 228 files (601,516 packed bytes); required runtime files are present and tests, fixtures, credentials and legacy Gemini runtime files are excluded.
-- Focused routing/picker checks passed 93 tests. Sanitized synthetic 60/120-column terminal captures and the full verification details are in `docs/recordings/mistral-vibe-picker.txt` and `docs/RELEASE_0.1.16_VERIFICATION.md`.
+- Focused routing/picker checks passed 93 tests. Sanitized synthetic 60/120-column terminal captures are in `docs/terminal/recordings/mistral-vibe-picker.txt`; full verification details were recorded in a local release verification report.
 - Local parsing confirms the injected model list is accepted by Vibe 2.26.0. No live Mistral completion was sent; successful Large 4 inference and the model reported by a completed request remain unverified.
 - This version is prepared for review and has not been published to npm or tagged as a release.
 
@@ -87,7 +93,7 @@
 
 ### Verification
 
-- Rendering PR verification: 401 focused tests passed, TypeScript and Biome passed. Its broader suite passed 1,954 tests; the capability-audit failure was corrected, while the unrelated dependency-symlink path-scan failure remains documented in `docs/TERMINAL_RENDERING_REPORT.md`.
+- Rendering PR verification: 401 focused tests passed, TypeScript and Biome passed. Its broader suite passed 1,954 tests; the capability-audit failure was corrected, while the unrelated dependency-symlink path-scan failure remained documented in the rendering investigation report (kept locally).
 - Release preparation: 78 version/CLI/package-metadata tests passed; TypeScript, Biome, version consistency, CLI `--version` (0.1.15), and `npm pack --dry-run` passed. The dry run includes 227 files (596,893 bytes).
 - Public npm registry verification on 2026-10-09 confirms that 0.1.15 is published.
 
@@ -133,7 +139,7 @@
 ### Internal
 
 - #291 was merged into #290's branch after #290 had already landed, so it never reached `main`. This release carries it as its first commit.
-- `docs/RELEASING.md` explains the `ENOENT … src/config/package.json` error from running `npm publish` in `src/config`. (#290)
+- `docs/releasing/release-guide.md` explains the `ENOENT … src/config/package.json` error from running `npm publish` in `src/config`. (#290)
 
 ### Verification
 
@@ -154,7 +160,7 @@
 
 - Ctrl+O opens the model picker again. 0.1.3 had moved it to Alt+P and used Ctrl+O for the transcript inspector. Alt+P still opens the model picker too.
 - The transcript inspector moves to Ctrl+T. `/transcript` is unchanged.
-- `/help` and `docs/TERMINAL_WORKBENCH.md` list the new shortcuts.
+- `/help` and `docs/terminal/workbench.md` list the new shortcuts.
 
 ### Verification
 
@@ -169,7 +175,7 @@
 
 ### Added
 
-- Local models can drive a browser through 14 structured Local Harness tools: open, inspect, click, type, press keys, select, navigate, and take screenshots, reusing one browser across turns. Run `ubume browser install` to install Chromium (requires Node 18+). Under `on-request`, click, type, press, and select need a one-use approval. Sensitive fields are masked, and browser traffic stays on loopback when network access is disabled. See `docs/LOCAL_BROWSER.md`. (#274)
+- Local models can drive a browser through 14 structured Local Harness tools: open, inspect, click, type, press keys, select, navigate, and take screenshots, reusing one browser across turns. Run `ubume browser install` to install Chromium (requires Node 18+). Under `on-request`, click, type, press, and select need a one-use approval. Sensitive fields are masked, and browser traffic stays on loopback when network access is disabled. See `docs/providers/local-browser.md`. (#274)
 
 ### Removed
 
@@ -214,7 +220,7 @@
   - a 2.5 s gap, which re-arms with a visible hint;
   - clearing a draft;
   - the Kitty keyboard protocol.
-- Terminal recording: `docs/recordings/ctrl-c-double-press.cast`.
+- Terminal recording: `docs/terminal/recordings/ctrl-c-double-press.cast`.
 - The packed tarball (218 files, 581 kB) was installed in an isolated prefix, and these checks passed:
   - `--version` reported 0.1.12;
   - `doctor --json`;
@@ -244,7 +250,7 @@
 ### Verification
 
 - 1,893 tests and TypeScript checks passed, including complete process-restart and missing-state recovery tests for LM Studio and Unsloth.
-- Terminal recording: `docs/recordings/provider-resume.cast`.
+- Terminal recording: `docs/terminal/recordings/provider-resume.cast`.
 - The release hook passed all 1,893 full-suite tests; the additional Antigravity diagnostics regression passed separately. Capability audit: 17/17; npm audit: zero vulnerabilities.
 - The verified tarball installed in an isolated prefix and passed version, doctor, fixture-provider headless execution and packaged Harness inference. The isolated terminal benchmark passed. npm accepted the verified `0.1.11` tarball; public registry processing is pending.
 
@@ -263,7 +269,7 @@
 
 - All 1,880 tests, TypeScript checks, the 17-check capability audit, npm audit (zero vulnerabilities), and the isolated fixture-provider PTY smoke passed.
 - Added rendered-row and live input regressions for pasted labels, cursor positions and full-row boundaries, Unicode, token deletion, narrow widths, resizing, and submission with intact token IDs.
-- Terminal recording: `docs/recordings/input-viewport-fix.cast`.
+- Terminal recording: `docs/terminal/recordings/input-viewport-fix.cast`.
 - `npm run prepublishOnly` passed. The clean tarball installation passed version, `doctor --json`, fixture-provider headless execution, and packaged Harness inference against a local mock endpoint. Package contents and SHA-512 integrity were verified.
 - The terminal bench passed with the fixture provider in an isolated workspace; no paid provider request was made.
 - npm publication is pending; the version is prepared for review.
@@ -279,7 +285,7 @@
 ### Verification
 
 - 1,870 Bun tests pass, including regression coverage for attachment IDs, visible Unicode, and border alignment at 60, 80, 100, and 120 columns. TypeScript checks pass.
-- The terminal fixture verifies selection, section switching, and resizing; recording: `docs/recordings/resume-border-fix.cast`.
+- The terminal fixture verifies selection, section switching, and resizing; recording: `docs/terminal/recordings/resume-border-fix.cast`.
 - Release validation includes the capability audit, npm audit, isolated terminal smoke, clean tarball installation, headless CLI checks, and packaged Harness inference against a local fixture endpoint.
 
 ---
@@ -804,7 +810,7 @@ The failure was diagnosed on a llama.cpp server (via Unsloth Studio) running a 2
 
 - Removed unused conversation-route state and an unconsumed conversation-title export found during the release audit.
 - Updated architecture and source documentation for conversation persistence and resume flow.
-- Removed the duplicate root documentation file; `docs/DOCUMENTATION.md` is now the single technical documentation guide.
+- Removed the duplicate root documentation file; `docs/DOCUMENTATION.md` became the single technical documentation guide (since consolidated into `docs/README.md` and `docs/architecture/`).
 - Updated package metadata for the `1.0.16` patch release.
 
 ---

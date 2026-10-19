@@ -24,7 +24,6 @@ function scenarios(steps: string[]) {
           timeout: 20000,
           env: createTestEnvironment(root, {
             UBUME_DATA_DIR: join(root, "data"),
-            CODEXA_DATA_DIR: join(root, "data"),
           }),
         },
       );

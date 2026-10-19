@@ -80,7 +80,7 @@ export function resolveNumpyChatCommand(env = process.env) {
 const { isHeadlessMode, isHeadlessBenchmark, entry, entryArgs } = resolveLocalDevEntry(repoRoot, forwardArgs);
 const isNativeChat = forwardArgs[0] === "native";
 const isNumpyChat = forwardArgs[0] === "numpy";
-const bunExecutable = process.env.UBUME_BUN_EXECUTABLE?.trim() || process.env.CODEXA_BUN_EXECUTABLE?.trim()
+const bunExecutable = process.env.UBUME_BUN_EXECUTABLE?.trim()
   || (process.platform === "win32" ? "bun.exe" : "bun");
 
 function hasFlag(args, longFlag, shortFlag) {
@@ -129,7 +129,7 @@ ubume-dev numpy talks directly to the local NumPy 250M checkpoint.
 }
 
 function launch() {
-  if (process.env.UBUME_DEBUG_LAUNCH === "1" || process.env.CODEXA_DEBUG_LAUNCH === "1") {
+  if (process.env.UBUME_DEBUG_LAUNCH === "1") {
     process.stderr.write(
       `[ubume-dev:launch] source=local-repo channel=local-dev version=${formatLocalDevVersion()} entry=${entry}\n`,
     );

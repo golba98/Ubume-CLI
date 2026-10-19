@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { normalizeWorkspaceRoot } from "../core/workspace/workspaceRoot.js";
-import { writeJsonFileAtomic } from "./atomicFile.js";
+import { writeJsonFileAtomic, writeTextFileIfAbsent } from "./atomicFile.js";
 import { getLegacyCodexaTrustStoreFile, getUbumeTrustStoreFile } from "./settings.js";
 
 /** Internal schema stored in `ubume-trust.json` */
@@ -59,7 +59,9 @@ function loadTrustStore(): TrustStoreData {
       text = readFileSync(legacyFile, "utf-8");
       try {
         const parsed = parseTrustStoreData(JSON.parse(text));
-        saveTrustStore(parsed);
+        if (!writeTextFileIfAbsent(ubumeFile, JSON.stringify(parsed, null, 2))) {
+          text = readFileSync(ubumeFile, "utf8");
+        }
       } catch {
         // Non-destructive best-effort migration
       }

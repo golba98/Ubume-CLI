@@ -167,6 +167,41 @@ test("persists Auto and Plan choices while preserving unrelated Codex config", (
   }
 });
 
+test("mode persistence seeds [ubume] from a pre-rename [codexa] table without rewriting it", () => {
+  const root = mkdtempSync(join(tmpdir(), "ubume-mode-legacy-"));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = root;
+  try {
+    writeFileSync(
+      join(root, "config.toml"),
+      '[codexa]\nbackend = "codex-subprocess"\nmode = "suggest"\n',
+      "utf-8",
+    );
+    saveRuntimeModePreference("auto-edit", false);
+    let parsed = parseTomlDocument(readFileSync(join(root, "config.toml"), "utf-8"));
+    assert.deepEqual(parsed.codexa, { backend: "codex-subprocess", mode: "suggest" });
+    assert.deepEqual(parsed.ubume, {
+      backend: "codex-subprocess",
+      mode: "auto-edit",
+      plan_mode: false,
+    });
+
+    // Repeating the save only updates [ubume]; the legacy table is never written again.
+    saveRuntimeModePreference("full-auto", true);
+    parsed = parseTomlDocument(readFileSync(join(root, "config.toml"), "utf-8"));
+    assert.deepEqual(parsed.codexa, { backend: "codex-subprocess", mode: "suggest" });
+    assert.deepEqual(parsed.ubume, {
+      backend: "codex-subprocess",
+      mode: "full-auto",
+      plan_mode: true,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runtime mode persistence failures do not escape into the TUI", () => {
   const root = mkdtempSync(join(tmpdir(), "ubume-mode-failure-"));
   const previous = process.env.CODEX_HOME;

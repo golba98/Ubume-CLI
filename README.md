@@ -67,8 +67,10 @@ opening a panel. Large pastes are displayed as `[Pasted Content … chars]`
 while their complete content is sent to the model. You can keep typing during
 runs; Enter queues the next instruction. Ctrl+C interrupts or clears the draft;
 on an empty prompt, press it twice to exit. Ctrl+L redraws.
-See the [terminal workbench guide](docs/TERMINAL_WORKBENCH.md) for editing keys,
+See the [terminal workbench guide](docs/terminal/workbench.md) for editing keys,
 file attachments, change review, recovery, and resume behavior.
+
+For upgrades from the former application identity, see the [identity migration guide](docs/development/identity-migration.md). Genuine Codexa models retain their names and controls.
 
 ## Development
 
@@ -88,10 +90,10 @@ ubume-dev
 
 Developer references:
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Source guide](docs/SOURCE_GUIDE.md)
-- [Documentation guide](docs/DOCUMENTATION.md)
-- [Release guide](docs/RELEASING.md)
+- [Documentation index](docs/README.md)
+- [Architecture overview](docs/architecture/overview.md)
+- [Source guide](docs/architecture/source-guide.md)
+- [Release guide](docs/releasing/release-guide.md)
 
 ## Versions
 
@@ -100,11 +102,11 @@ release. [CHANGELOG.md](CHANGELOG.md) contains the detailed technical record.
 
 ### Terminal commands without the TUI
 
-Use `ubume doctor`, `ubume status --json`, `ubume providers`, and `ubume sessions list` to diagnose and inspect Ubume from a shell. `ubume exec "prompt"` saves a session by default; continue it with `ubume exec --resume <id> "next instruction"`, or use `--no-save` for a transient run. Pipe prompts with `ubume exec --stdin`. See [terminal command usage](docs/TERMINAL_COMMANDS.md) for JSON output, file attachments, diagnostics, and session diffs.
+Use `ubume doctor`, `ubume status --json`, `ubume providers`, and `ubume sessions list` to diagnose and inspect Ubume from a shell. `ubume exec "prompt"` saves a session by default; continue it with `ubume exec --resume <id> "next instruction"`, or use `--no-save` for a transient run. Pipe prompts with `ubume exec --stdin`. See [terminal command usage](docs/terminal/headless-commands.md) for JSON output, file attachments, diagnostics, and session diffs.
 
-Saved chats, including LM Studio and Unsloth conversations, live in Ubume's user data folder under `chats/`. `/resume` includes provider sections and Local backend/model filters. See [resume and storage details](docs/TERMINAL_WORKBENCH.md).
+Saved chats, including LM Studio and Unsloth conversations, live in Ubume's user data folder under `chats/`. `/resume` includes provider sections and Local backend/model filters. See [resume and storage details](docs/terminal/workbench.md).
 
-Local models can use integrated structured browser tools through the DeepSeek Harness. See [browser setup and usage](docs/LOCAL_BROWSER.md). Install Chromium with `ubume browser install`.
+Local models can use integrated structured browser tools through the DeepSeek Harness. See [browser setup and usage](docs/providers/local-browser.md). Install Chromium with `ubume browser install`.
 
 ### Google backend compatibility
 

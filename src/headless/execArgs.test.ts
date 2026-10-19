@@ -87,15 +87,12 @@ test("rejects invalid prompt policy values", () => {
   }
 });
 
-test("accepts the pre-rename --codexa-prompt-policy spelling", () => {
-  for (const argv of [
+test("rejects the retired --codexa-prompt-policy spelling", () => {
+  for (const args of [
     ["--codexa-prompt-policy", "wrapped", "Prompt"],
     ["--codexa-prompt-policy=wrapped", "Prompt"],
   ]) {
-    const parsed = parseHeadlessExecArgs(argv);
-    assert.equal(parsed.ok, true);
-    if (!parsed.ok) return;
-    assert.equal(parsed.value.promptPolicy, "wrapped");
+    assert.equal(parseHeadlessExecArgs(args).ok, false);
   }
 });
 

@@ -7,7 +7,7 @@ This directory contains Ubume's standalone development, validation, build-metada
 | File or entry point | Package command | Direct command | Purpose |
 | --- | --- | --- | --- |
 | `run-local-dev.mjs` | `bun run dev:run` | `node scripts/run-local-dev.mjs [args]` | Launch the current checkout or direct native-model chat through `ubume-dev native`. |
-| `install-local-dev-bin.mjs` | `bun run install:dev-bin` | `node scripts/install-local-dev-bin.mjs` | Install `ubume-dev` and `cxd` shims that point to this checkout without changing published `ubume`. |
+| `install-local-dev-bin.mjs` | `bun run install:dev-bin` | `node scripts/install-local-dev-bin.mjs` | Install `ubume-dev` and `ubd` shims that point to this checkout without changing published `ubume`. |
 | `gen-build-info.mjs` | `bun run gen-build-info` | `node scripts/gen-build-info.mjs` | Generate the tracked version/commit constants consumed by the application. |
 | `audit-ubume-capabilities.mjs` | `bun run audit:ubume-gap` | `node scripts/audit-ubume-capabilities.mjs` | Perform a read-only static capability audit against the current source layout. |
 | `smoke-terminal-bench.mjs` | `bun run smoke:terminal-bench` | `node scripts/smoke-terminal-bench.mjs` | Run a real headless Ubume request through the installed launcher path. |
@@ -56,7 +56,7 @@ Inputs and effects:
 This installer creates two equivalent local-development commands:
 
 - `ubume-dev` — explicit local Ubume command;
-- `cxd` — short alias for `ubume-dev`.
+- `ubd` — short alias for `ubume-dev`.
 
 Both shims invoke `scripts/run-local-dev.mjs`. The installer never creates, replaces, or removes the published `ubume` command.
 
@@ -110,7 +110,7 @@ This is an integration smoke, not an isolated unit test. It can contact an exter
 | `bun run start` | Runs `src/index.tsx` once. | Interactive TUI; requires a supported terminal. |
 | `bun run dev` | Runs `src/index.tsx` with Bun watch mode. | Restarts as source files change. |
 | `bun run dev:run` | Runs the local launcher described above. | Supports interactive, `exec`, and benchmark modes. |
-| `bun run install:dev-bin` | Installs `ubume-dev` and `cxd`. | Does not modify `ubume`. |
+| `bun run install:dev-bin` | Installs `ubume-dev` and `ubd`. | Does not modify `ubume`. |
 | `bun run debug:claude-models` | Runs Claude Code model discovery diagnostics. | May inspect the locally installed Claude CLI/package/cache/config. |
 | `bun run typecheck` | Runs `tsc --noEmit`. | Validation only; does not emit JavaScript. |
 | `bun test` | Runs the full Bun test suite. | Discovers colocated `*.test.ts` and `*.test.tsx` files. |

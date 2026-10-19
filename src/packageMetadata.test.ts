@@ -10,13 +10,8 @@ const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf
   scripts?: Record<string, string>;
 };
 
-test("published package binary provides ubume and backwards-compatible codexa alias", () => {
-  assert.deepEqual(packageJson.bin, {
-    ubume: "bin/ubume.js",
-    codexa: "bin/codexa.js",
-  });
-  assert.equal(Object.hasOwn(packageJson.bin ?? {}, "ubume-dev"), false);
-  assert.equal(Object.hasOwn(packageJson.bin ?? {}, "ubume-dev"), false);
+test("published package exposes only the ubume binary", () => {
+  assert.deepEqual(packageJson.bin, { ubume: "bin/ubume.js" });
 });
 
 test("local dev scripts install and run dev bin separately", () => {

@@ -1,4 +1,4 @@
-# Root files and local cleanup
+# Repository files and local cleanup
 
 Keep the root configuration files in place. They support development,
 reproducible dependency installation, and release preparation.
@@ -23,7 +23,9 @@ by Git in this repository and can be removed if those instructions are no longer
 wanted. Keep them when using the associated assistants.
 
 The `bin/`, `src/`, `scripts/`, and `docs/` directories contain maintained project
-files. Do not remove them as temporary output.
+files. Do not remove them as temporary output. The exception is `docs/_reports/`:
+agent-generated reports live there, are ignored by Git, and stay on the machine that
+produced them (see [`docs/REPORTING.md`](../REPORTING.md)).
 
 ## Disposable local artifacts
 

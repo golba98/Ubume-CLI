@@ -51,8 +51,6 @@ const INLINE_VALUE_FLAGS = new Set([
   "--cwd",
   "--file",
   "--ubume-prompt-policy",
-  // Pre-rename spelling, still accepted.
-  "--codexa-prompt-policy",
 ]);
 
 function normalizeNonEmpty(value: string | undefined): string | null {
@@ -220,8 +218,7 @@ export function parseHeadlessExecArgs(argv: readonly string[]): HeadlessExecArgs
         break;
       }
 
-      case "--ubume-prompt-policy":
-      case "--codexa-prompt-policy": {
+      case "--ubume-prompt-policy": {
         const value = normalizeNonEmpty(inline ? inlineValue : argv[++index]);
         if (value !== "raw" && value !== "wrapped") {
           return fail(

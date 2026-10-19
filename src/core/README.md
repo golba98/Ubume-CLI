@@ -1,6 +1,6 @@
 # Core subsystem
 
-Core code owns provider integration, processes, filesystem state, and terminal boundaries. It must not import UI components. The production file catalog is in [SOURCE_GUIDE](../../docs/SOURCE_GUIDE.md).
+Core code owns provider integration, processes, filesystem state, and terminal boundaries. It must not import UI components. The production file catalog is in [source guide](../../docs/architecture/source-guide.md).
 
 | Folder | Responsibility |
 | --- | --- |
@@ -27,7 +27,7 @@ Core code owns provider integration, processes, filesystem state, and terminal b
 
 Core depends on configuration, shared session contracts/history formatting, packaged `bin/` bridges, and platform libraries. It does not import app orchestration or Ink UI components. `perf/renderDebug.ts` exposes React instrumentation hooks, but does not own presentation. Keep `shared/values.ts` import-free and `version/channel.ts` independent of settings to avoid initialization cycles.
 
-Home and CODEX_HOME resolution come from `config/settings.ts`; platform app-data paths come from `workspace/appData.ts`. Preserve user-visible Codexa environment aliases and legacy data/config migrations.
+Home and CODEX_HOME resolution come from `config/settings.ts`; platform app-data paths come from `workspace/appData.ts`. Preserve the one-time, read-only migrations of pre-rename Codexa user data (settings, trust store, app data, workspace `providers.json`); never write legacy names.
 
 ## Debug instrumentation
 
@@ -82,7 +82,7 @@ The stdout frame wrapper deduplicates output and resets its cache on resize. Str
 - Add comments for decisions, limits, side effects and ownership. Do not document guarantees stronger than the implementation, or add remote probes to synchronous lookups.
 - Format only touched TypeScript files using the repository's installed Biome settings. Inspect generated build metadata and exclude unrelated changes.
 
-The [core audit report](../../docs/CORE_AUDIT.md) records reviewed files, targeted corrections and verification. The [architecture guide](../../docs/ARCHITECTURE.md), [model recovery notes](../../docs/PROVIDER_MODEL_RECOVERY.md) and [browser guide](../../docs/LOCAL_BROWSER.md) provide wider integration context.
+The [architecture overview](../../docs/architecture/overview.md), [interactive app architecture](../../docs/architecture/app.md) (including provider and model recovery) and [browser guide](../../docs/providers/local-browser.md) provide wider integration context.
 
 ## Validation commands
 

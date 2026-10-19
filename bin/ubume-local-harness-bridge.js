@@ -10,7 +10,7 @@ const MAX_PENDING_STDOUT_BYTES = 16 * 1024 * 1024;
 const MAX_TOOL_ARGUMENT_CHARS = 2_000;
 const MAX_TOOL_RESULT_CHARS = 2_000;
 const configuredMaxRssBytes = Number(
-  process.env.UBUME_DSH_MAX_RSS_BYTES || process.env.CODEXA_DSH_MAX_RSS_BYTES,
+  process.env.UBUME_DSH_MAX_RSS_BYTES,
 );
 const maxRssBytes = Number.isSafeInteger(configuredMaxRssBytes) && configuredMaxRssBytes > 0
   ? configuredMaxRssBytes

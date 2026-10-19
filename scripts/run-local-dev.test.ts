@@ -86,7 +86,7 @@ test("resolveNumpyChatCommand targets the trained NumPy follow-up checkpoint", (
   ]);
 });
 
-test("createUbumeDevShim installs both ubume-dev and cxd pointing at the local launcher", () => {
+test("createUbumeDevShim installs ubume-dev and ubd pointing at the local launcher", () => {
   const binDir = mkdtempSync(join(tmpdir(), "ubume-dev-shim-"));
   try {
     const result = createUbumeDevShim({ binDir });
@@ -94,7 +94,7 @@ test("createUbumeDevShim installs both ubume-dev and cxd pointing at the local l
 
     assert.equal(result.launcherPath, launcherPath);
     assert.equal(result.shimPaths.length, SHIM_NAMES.length);
-    assert.deepEqual([...SHIM_NAMES].sort(), ["codexa-dev", "cxd", "ubd", "ubume-dev"]);
+    assert.deepEqual([...SHIM_NAMES].sort(), ["ubd", "ubume-dev"]);
 
     for (const shimPath of result.shimPaths) {
       // Each shim exists and references the LOCAL run-local-dev.mjs launcher.

@@ -247,4 +247,4 @@ from `usePromptRun`'s phase 1 in the right order, and test it in
 **A new hook.** Put it in the folder that owns its responsibility and start it
 with a header comment. Type its context with `Pick<AppState, …>` plus explicit
 extras. If it contains effects, call it where those effects belonged in the
-original order. Add the file to `docs/SOURCE_GUIDE.md`.
+original order. Add the file to `docs/architecture/source-guide.md`.

@@ -1,4 +1,3 @@
-import "./config/legacyEnv.js";
 import { type Instance, type RenderOptions, render } from "ink";
 import type React from "react";
 import { App } from "./app/App.js";
@@ -76,7 +75,7 @@ function debugLaunch(
   write: (chunk: string, source: string) => boolean,
   fields: Record<string, unknown>,
 ): void {
-  if (env.UBUME_DEBUG_LAUNCH !== "1" && env.CODEXA_DEBUG_LAUNCH !== "1") {
+  if (env.UBUME_DEBUG_LAUNCH !== "1") {
     return;
   }
 

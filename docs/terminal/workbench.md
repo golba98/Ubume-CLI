@@ -131,7 +131,7 @@ cleanup, stale callbacks, and draft preservation during cancellation.
 
 `python3 scripts/smoke-workbench.py` creates a temporary workspace and data root,
 uses a deterministic provider, and records the actual app through a PTY. It does
-not invoke a paid provider. Play the included [recording](terminal-workbench.cast)
-with `asciinema play docs/terminal-workbench.cast`. Live authenticated provider
+not invoke a paid provider. Play the included [recording](recordings/terminal-workbench.cast)
+with `asciinema play docs/terminal/recordings/terminal-workbench.cast`. Live authenticated provider
 behavior still depends on the installed provider CLI and terminal keyboard
 protocol; the recording is a UI smoke test.

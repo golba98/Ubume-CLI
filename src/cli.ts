@@ -1,4 +1,3 @@
-import "./config/legacyEnv.js";
 import { runTerminalCommand } from "./headless/commands.js";
 
 if ((import.meta as ImportMeta & { main?: boolean }).main) {

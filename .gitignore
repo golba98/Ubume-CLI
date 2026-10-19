@@ -75,3 +75,6 @@ docs/planning/parity-implementation-backlog.md
 .gemini/
 gha-creds-*.json
 .aider*
+
+# Generated agent reports remain local; permanent documentation stays tracked.
+docs/_reports/

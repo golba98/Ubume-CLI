@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { writeJsonFileAtomic, writeTextFileAtomic } from "./atomicFile.js";
+import { writeJsonFileAtomic, writeTextFileAtomic, writeTextFileIfAbsent } from "./atomicFile.js";
 
 test("atomicFile writes text content atomically and creates nested directories", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "ubume-atomic-test-"));
@@ -35,6 +35,18 @@ test("atomicFile writes JSON content with custom formatting", () => {
     assert.ok(content.includes('  "key": "value"'));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("migration publication preserves a destination created by another writer", () => {
+  const root = mkdtempSync(join(tmpdir(), "ubume-exclusive-import-"));
+  try {
+    const path = join(root, "settings.json");
+    assert.equal(writeTextFileIfAbsent(path, '{"current":true}'), true);
+    assert.equal(writeTextFileIfAbsent(path, '{"legacy":true}'), false);
+    assert.equal(readFileSync(path, "utf8"), '{"current":true}');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

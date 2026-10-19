@@ -1,6 +1,6 @@
-# Ubume Architecture
+# Architecture overview
 
-This document explains what Ubume does, how the application is assembled, how a prompt moves through the system, and which architectural boundaries maintainers must preserve. For the purpose and maintenance notes for every file under `src/`, see [Source Guide](SOURCE_GUIDE.md).
+This document explains what Ubume does, how the application is assembled, how a prompt moves through the system, and which architectural boundaries maintainers must preserve. For the purpose and maintenance notes for every file under `src/`, see [Source Guide](source-guide.md).
 
 ## What Ubume is
 
@@ -29,7 +29,7 @@ Ubume does not replace provider authentication. External provider CLIs remain re
 
 ## Developer automation
 
-Repository scripts sit outside the application runtime and provide local launching, shim installation, build metadata, static capability auditing, and an authenticated headless smoke. Their full command and side-effect reference is the [Developer Scripts guide](../scripts/README.md).
+Repository scripts sit outside the application runtime and provide local launching, shim installation, build metadata, static capability auditing, and an authenticated headless smoke. Their full command and side-effect reference is the [Developer Scripts guide](../../scripts/README.md).
 
 ```mermaid
 flowchart LR
@@ -39,7 +39,7 @@ flowchart LR
   Package --> Audit[audit-ubume-capabilities.mjs]
   Package --> Smoke[smoke-terminal-bench.mjs]
 
-  Install --> Shims[ubume-dev and cxd]
+  Install --> Shims[ubume-dev and ubd]
   Shims --> Dev
   Dev --> Interactive[src/index.tsx]
   Dev --> Headless[src/cli.ts]
@@ -100,7 +100,7 @@ flowchart TD
 
 The intended ownership rules are:
 
-- `app/App.tsx` coordinates subsystems by composing the domain hooks under `src/app/` (`state/`, `lifecycle/`, `settings/`, `providers/`, `models/`, `run/`, `conversation/`, `input/`, `overlays/`). Reusable domain logic belongs in those folders or lower layers. See [src/app architecture](architecture/app.md).
+- `app/App.tsx` coordinates subsystems by composing the domain hooks under `src/app/` (`state/`, `lifecycle/`, `settings/`, `providers/`, `models/`, `run/`, `conversation/`, `input/`, `overlays/`). Reusable domain logic belongs in those folders or lower layers. See [src/app architecture](app.md).
 - `session/` owns serializable chat/timeline state, lifecycle reducers, streaming schedules, and plan flow. It must not render Ink components.
 - `ui/` owns terminal presentation and input behavior. It consumes session/config types but should not launch providers or persist workspace state.
 - `core/` owns non-UI runtime behavior: processes, providers, terminal control, workspace services, model discovery, and diagnostics.
@@ -166,7 +166,7 @@ flowchart LR
   Child --> Exit[Stable exit code]
 ```
 
-Headless mode deliberately bypasses Ink, panels, and session rendering (see the [headless subsystem guide](../src/headless/README.md)). It shares launch arguments, layered configuration, project-instruction loading, terminal sanitization, provider contracts, and Codex subprocess parsing with the interactive application.
+Headless mode deliberately bypasses Ink, panels, and session rendering (see the [headless subsystem guide](../../src/headless/README.md)). It shares launch arguments, layered configuration, project-instruction loading, terminal sanitization, provider contracts, and Codex subprocess parsing with the interactive application.
 
 ## Provider architecture
 
@@ -297,7 +297,7 @@ The version 2 snapshot is authoritative and atomically replaced with file and di
 
 `src/session/sessionCatalog.ts` combines owned conversations and native Claude Code, Codex, Google (Antigravity) and Mistral Vibe CLI histories. Native adapters in `src/core/externalSessions/` only read provider stores. Discovery failures are isolated by source. Explicit saved native references and import provenance deduplicate matching source/session/workspace identities; standalone programmatic CLI sessions remain visible. Provider IDs and Local backend/model filters are independent of the native transcript format.
 
-`src/session/resumeCoordinator.ts` handles saved-route assessment, workspace handoff and idempotent imports. The picker has All, OpenAI, Anthropic, Mistral and Local sections, with development provider sections when relevant. Other projects are reopened through the installed/dev Ubume launcher with `--resume ID` or `--import-session source:ID`. Missing or unknown folders remain viewable; owned chats require the original path identity before writing. Saved routes stay pinned while viewing, and an unavailable provider/backend/model requires an explicit validated choice before another prompt can run.
+`src/session/sessionCatalog.ts` and `src/app/conversation/useResumeFlows.ts` handle saved-route assessment, workspace handoff and idempotent imports. The picker has All, OpenAI, Anthropic, Mistral and Local sections, with development provider sections when relevant. Other projects are reopened through the installed/dev Ubume launcher with `--resume ID` or `--import-session source:ID`. Missing or unknown folders remain viewable; owned chats require the original path identity before writing. Saved routes stay pinned while viewing, and an unavailable provider/backend/model requires an explicit validated choice before another prompt can run.
 
 Native terminal handoff uses `claude --resume`, `codex resume`, `agy --conversation`, or `vibe --resume`, always in the recorded original folder. Continuing inside Ubume imports a transcript once and reuses the owned conversation on later imports. Vibe continuation references belong to individual conversations and include model, message watermark and transcript hash; there is no workspace-global active Vibe session.
 
@@ -311,6 +311,14 @@ Local completion explicitly flushes the Harness session journal before publishin
 - `workspaceGuard.ts` recognizes paths outside the workspace and dependency paths before commands or diagnostics are accepted. Shell commands are checked strictly; prompt text (including approved plans embedded in execution prompts) skips incidental mentions — Windows paths on a POSIX host, HTTP route templates, and explanatory clauses with no filesystem action — while explicit targets and `../` traversal stay blocked.
 - `workspaceActivity.ts` snapshots and diffs files so the timeline can report what a run changed.
 - `appData.ts` centralizes platform-specific data paths; new persistent state, including workspace-scoped conversation history, should use it rather than inventing project-local folders.
+
+## Failure states
+
+Missing executables, invalid configuration, unavailable models, authentication failures,
+malformed streams, cancellation, resize, and terminal restoration must remain explicit states.
+Fallbacks may preserve usability but must never mislabel the active provider or model. Entry
+points and `src/app/App.tsx` may compose lower layers; `core/` and `session/` modules must not
+depend on UI components.
 
 ## Maintenance playbooks
 
@@ -352,18 +360,18 @@ Local completion explicitly flushes the Harness session journal before publishin
 3. Store mutable application state through `core/workspace/appData.ts` unless the data is intentional project configuration.
 4. Test invalid values, missing files, migration/fallback behavior, and round-trip persistence.
 
-## Documentation maintenance
-
-Update `docs/ARCHITECTURE.md` when a subsystem boundary, entry point, data flow, provider layer, persistence rule, or terminal invariant changes. Update `docs/SOURCE_GUIDE.md` whenever a file under `src/` is added, removed, renamed, or changes responsibility. Architectural descriptions must be verified against the current code rather than inferred from historical behavior or filenames.
-
 ## Local browser computer use
 
 Local uses the DeepSeek Harness as the generic agent runtime for compatible local models. Agent-scoped structured browser tools join its existing tool registry; the same loop handles streaming calls, reasoning, approvals, results and sessions. `src/core/computerUse/` supervises a private Node/Playwright worker under `bin/`; this worker executes browser commands and owns no model client or agent loop. Browser environment availability is independent of model capability. Existing hosted search/fetch guards remain in place.
 
-The browser backend reuses an ephemeral context per live Harness session, provides bounded semantic snapshots and references, and supplies screenshots through Harness attachments. Session cleanup closes browsers; the supervisor also reaps owned processes after worker failure. See [Local browser setup, tools, permissions and lifecycle](LOCAL_BROWSER.md).
+The browser backend reuses an ephemeral context per live Harness session, provides bounded semantic snapshots and references, and supplies screenshots through Harness attachments. Session cleanup closes browsers; the supervisor also reaps owned processes after worker failure. See [Local browser setup, tools, permissions and lifecycle](../providers/local-browser.md).
 
-### App and rendering ownership after cleanup
+## App and rendering ownership
 
-`src/app/App.tsx` composes the hooks in `src/app/` while retaining clear-frame wiring and the first dispose/sync effects inline. Hooks split out of larger ones are called at their original positions so effect order is unchanged. Run refs have a stable owner (`state/useRunRefs.ts`); render-time assignments and synchronous composer value/cursor updates remain in render/input handlers. `overlays/OverlayPanels.tsx` stays un-memoized because AppShell does not compare panel closures. [docs/architecture/app.md](architecture/app.md) documents the provider, model, run and conversation lifecycles and these invariants.
+`src/app/App.tsx` composes the hooks in `src/app/` while retaining clear-frame wiring and the first dispose/sync effects inline. Hooks split out of larger ones are called at their original positions so effect order is unchanged. Run refs have a stable owner (`state/useRunRefs.ts`); render-time assignments and synchronous composer value/cursor updates remain in render/input handlers. `overlays/OverlayPanels.tsx` stays un-memoized because AppShell does not compare panel closures. [docs/architecture/app.md](app.md) documents the provider, model, run and conversation lifecycles and these invariants.
 
 Timeline measurement lives in `ui/timeline/measure/`; its facade owns the public cache reset API. Viewport calculation, item construction, row rendering, and viewport effects have separate modules. Composer input/model/keymap logic lives in `ui/chrome/composer/`. Local harness configuration, profiles, event routing, policy decisions, and messages stay within its runtime folder; process and active-run identity guards remain at each asynchronous boundary.
+
+## Documentation maintenance
+
+Update `docs/architecture/overview.md` when a subsystem boundary, entry point, data flow, provider layer, persistence rule, or terminal invariant changes. Update `docs/architecture/source-guide.md` whenever a file under `src/` is added, removed, renamed, or changes responsibility. Architectural descriptions must be verified against the current code rather than inferred from historical behavior or filenames.

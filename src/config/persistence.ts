@@ -6,11 +6,12 @@
  *
  * Persistence destinations:
  * - App settings: `~/.ubume-settings.json` (with automatic migration from `~/.codexa-settings.json`).
- * - Runtime execution mode: `~/.codex/config.toml` (`[ubume]` or `[codexa]` table).
+ * - Runtime execution mode: `~/.codex/config.toml` (`[ubume]` table, seeded once from a
+ *   pre-rename `[codexa]` table, which is left in place).
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { writeJsonFileAtomic, writeTextFileAtomic } from "./atomicFile.js";
+import { writeJsonFileAtomic, writeTextFileAtomic, writeTextFileIfAbsent } from "./atomicFile.js";
 import { mergeRuntimeIntoTomlConfig, parseTomlDocument } from "./layeredConfig.js";
 import { normalizeRuntimeConfig, type RuntimeConfig } from "./runtimeConfig.js";
 import type { AvailableMode, Theme } from "./settings.js";
@@ -24,12 +25,12 @@ import {
   DEFAULT_THEME,
   DEFAULT_WORKSPACE_DISPLAY_MODE,
   getCodexConfigFile,
+  getLegacySettingsFile,
+  getSettingsFile,
   HEADER_CONFIG_DEFAULTS,
   type HeaderConfig,
   LEGACY_DIRECTORY_DISPLAY_MODES,
-  LEGACY_SETTINGS_FILE,
   normalizeLegacyDirectoryDisplayMode,
-  SETTINGS_FILE,
   type TerminalTitleMode,
   WORKSPACE_DISPLAY_MODES,
   type WorkspaceDisplayMode,
@@ -377,7 +378,7 @@ function maybeMigrateLegacyRuntime(rawData: unknown): void {
       : {};
     const mergedConfig = mergeRuntimeIntoTomlConfig(existingConfig, legacyRuntime);
     writeTextFileAtomic(codexConfigFile, serializeTomlDocument(mergedConfig));
-    writeJsonFileAtomic(SETTINGS_FILE, stripLegacyRuntime(rawData));
+    writeJsonFileAtomic(getSettingsFile(), stripLegacyRuntime(rawData));
   } catch {
     // Best-effort migration only; keep legacy JSON intact if anything fails.
   }
@@ -390,12 +391,19 @@ function maybeMigrateLegacyRuntime(rawData: unknown): void {
 export function loadSettings(): AppSettings {
   try {
     let text = "";
-    if (existsSync(SETTINGS_FILE)) {
-      text = readFileSync(SETTINGS_FILE, "utf-8");
-    } else if (existsSync(LEGACY_SETTINGS_FILE)) {
-      text = readFileSync(LEGACY_SETTINGS_FILE, "utf-8");
+    const settingsFile = getSettingsFile();
+    const legacySettingsFile = getLegacySettingsFile();
+    if (existsSync(settingsFile)) {
+      text = readFileSync(settingsFile, "utf-8");
+    } else if (existsSync(legacySettingsFile)) {
+      text = readFileSync(legacySettingsFile, "utf-8");
       try {
-        writeJsonFileAtomic(SETTINGS_FILE, JSON.parse(text));
+        const parsed: unknown = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+          return getDefaultSettings();
+        if (!writeTextFileIfAbsent(settingsFile, JSON.stringify(parsed, null, 2))) {
+          text = readFileSync(settingsFile, "utf8");
+        }
       } catch {
         // Best-effort migration only
       }
@@ -415,15 +423,16 @@ export function loadSettings(): AppSettings {
  */
 export function saveSettings(settings: AppSettings): void {
   try {
-    writeJsonFileAtomic(SETTINGS_FILE, serializeSettings(settings));
+    writeJsonFileAtomic(getSettingsFile(), serializeSettings(settings));
   } catch {
     // Silently ignore — settings are best-effort
   }
 }
 
 /**
- * Persists the interactive execution mode choice to `~/.codex/config.toml`
- * without replacing unrelated configuration keys.
+ * Persists the interactive execution mode choice to the `[ubume]` table of `~/.codex/config.toml`
+ * without replacing unrelated configuration keys. A pre-rename `[codexa]` table seeds `[ubume]`
+ * the first time and is otherwise left untouched.
  */
 export function saveRuntimeModePreference(mode: AvailableMode, planMode: boolean): void {
   try {
@@ -431,19 +440,12 @@ export function saveRuntimeModePreference(mode: AvailableMode, planMode: boolean
     const current = existsSync(codexConfigFile)
       ? parseTomlDocument(readFileSync(codexConfigFile, "utf-8"))
       : {};
-    const useCodexa =
-      !current.ubume &&
-      current.codexa &&
-      typeof current.codexa === "object" &&
-      !Array.isArray(current.codexa);
-    const tableKey = useCodexa ? "codexa" : "ubume";
+    const source = current.ubume ?? current.codexa;
     const existing =
-      current[tableKey] &&
-      typeof current[tableKey] === "object" &&
-      !Array.isArray(current[tableKey])
-        ? { ...(current[tableKey] as Record<string, unknown>) }
+      source && typeof source === "object" && !Array.isArray(source)
+        ? { ...(source as Record<string, unknown>) }
         : {};
-    current[tableKey] = { ...existing, mode, plan_mode: planMode };
+    current.ubume = { ...existing, mode, plan_mode: planMode };
     writeTextFileAtomic(codexConfigFile, serializeTomlDocument(current));
   } catch {
     // Runtime preference persistence is best-effort and must not crash the TUI.

@@ -3,8 +3,10 @@ import test, { afterEach, beforeEach } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { withEnvironment } from "../../test/environment.js";
 import { resetAntigravityRouteValidationCacheForTests } from "../providerRuntime/antigravity.js";
 import { checkLocalProvider, resetLocalProviderStateForTests } from "../providerRuntime/local.js";
+import { workspaceStorageKey } from "../workspace/appData.js";
 import { buildProviderRegistry } from "./registry.js";
 import {
   getLegacyProviderWorkspaceConfigFile,
@@ -855,4 +857,26 @@ test("Codexa local paths and generation controls survive serialization without c
   const again = parseProviderWorkspaceConfig(serializeProviderWorkspaceConfig(parsed));
   assert.deepEqual(again.providers?.["codexa-native"], parsed.providers?.["codexa-native"]);
   assert.equal(again.providers?.openai?.currentModel, "gpt-5.5");
+});
+
+test("read-only provider inspection finds legacy app data when Ubume already exists without importing", async () => {
+  const legacy = mkdtempSync(join(tmpdir(), "ubume-readonly-legacy-"));
+  const workspace = mkdtempSync(join(tmpdir(), "ubume-readonly-workspace-"));
+  try {
+    const providerDir = join(legacy, "workspaces", workspaceStorageKey(workspace));
+    mkdirSync(providerDir, { recursive: true });
+    writeFileSync(
+      join(providerDir, "providers.json"),
+      JSON.stringify({ providers: { "codexa-native": { current_model: "codexa-934m-end3" } } }),
+    );
+    await withEnvironment({ CODEXA_DATA_DIR: legacy }, () => {
+      const config = loadProviderWorkspaceConfig(workspace, { readOnly: true });
+      assert.equal(config.providers?.["codexa-native"]?.currentModel, "codexa-934m-end3");
+      assert.equal(existsSync(join(testDataRoot, ".identity-migration")), false);
+      assert.equal(existsSync(join(testDataRoot, "workspaces")), false);
+    });
+  } finally {
+    rmSync(legacy, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  }
 });

@@ -5,10 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { normalizeRuntimeConfig, resolveRuntimeConfig } from "../../config/runtimeConfig.js";
+import { withEnvironment } from "../../test/environment.js";
+import { saveCachedProviderModels } from "../models/modelCache.js";
 import { ModelCatalog, providerCatalog } from "../models/modelCatalog.js";
 import type { CommandResult, runCommand } from "../process/commandRunner.js";
 import type { BackendProvider } from "../providers/types.js";
 import { resetAnthropicRouteValidationCacheForTests, validateAnthropicRoute } from "./anthropic.js";
+import {
+  parseAgyModelsOutput,
+  resetAntigravityRouteValidationCacheForTests,
+} from "./antigravity.js";
 import { checkLocalProvider, resetLocalProviderStateForTests } from "./local.js";
 import {
   createRoutedProvider,
@@ -166,14 +172,26 @@ test("every supported external provider exposes the shared planning run path", (
   }
 });
 
-test("google runtime exposes configured Antigravity models for in-Ubume routing", () => {
-  const runtime = getProviderRuntime("google");
-  const discovery = discoverProviderModels("google");
-
-  assert.equal(runtime.routeAvailable, true);
-  assert.equal(runtime.backendKind, "antigravity-cli-auth");
-  assert.equal(discovery.status, "ready");
-  assert.ok(discovery.models.length > 0);
+test("google runtime exposes configured Antigravity models for in-Ubume routing", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ubume-google-inventory-"));
+  try {
+    await withEnvironment({ HOME: home, USERPROFILE: home }, () => {
+      resetAntigravityRouteValidationCacheForTests();
+      saveCachedProviderModels("google", {
+        discoveredAt: Date.now(),
+        models: parseAgyModelsOutput("Gemini 3.5 Flash (Medium)"),
+      });
+      const runtime = getProviderRuntime("google");
+      const discovery = discoverProviderModels("google");
+      assert.equal(runtime.routeAvailable, true);
+      assert.equal(runtime.backendKind, "antigravity-cli-auth");
+      assert.equal(discovery.status, "ready");
+      assert.ok(discovery.models.length > 0);
+    });
+  } finally {
+    resetAntigravityRouteValidationCacheForTests();
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("anthropic runtime exposes configured Claude models for in-Ubume routing", () => {

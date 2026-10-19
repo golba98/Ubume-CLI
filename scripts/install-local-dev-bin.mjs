@@ -10,12 +10,12 @@ const currentFile = fileURLToPath(import.meta.url);
 const repoRoot = dirname(dirname(currentFile));
 const launcherPath = join(repoRoot, "scripts", "run-local-dev.mjs");
 
-// Both shim names launch the same local-repo dev launcher. `cxd` is the short
+// Both shim names launch the same local-repo dev launcher. `ubd` is the short
 // alias for `ubume-dev`.
-export const SHIM_NAMES = ["ubume-dev", "ubd", "codexa-dev", "cxd"];
+export const SHIM_NAMES = ["ubume-dev", "ubd"];
 
 export function resolveInstallBinDir(env = process.env) {
-  const override = env.UBUME_DEV_BIN_DIR?.trim() || env.CODEXA_DEV_BIN_DIR?.trim();
+  const override = env.UBUME_DEV_BIN_DIR?.trim();
   if (override) return override;
 
   try {
@@ -54,8 +54,6 @@ export function createUbumeDevShim(options = {}) {
   // shimPath kept for backward compatibility (the primary ubume-dev shim).
   return { binDir, shimPath: shimPaths[0], shimPaths, launcherPath };
 }
-
-export const createCodexaDevShim = createUbumeDevShim;
 
 if (currentFile === process.argv[1]) {
   const result = createUbumeDevShim();

@@ -8,7 +8,11 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "path";
 import { getProviderRuntime, isProviderRoutableInUbume } from "../providerRuntime/registry.js";
 import { isRecord } from "../shared/values.js";
-import { resolveUbumeWorkspaceDataDir } from "../workspace/appData.js";
+import {
+  resolveLegacyCodexaDataDir,
+  resolveUbumeWorkspaceDataDir,
+  workspaceStorageKey,
+} from "../workspace/appData.js";
 import { normalizeWorkspaceRoot } from "../workspace/workspaceRoot.js";
 import { resolveLocalBackend } from "./localBackend.js";
 import { resolveProviderIdentity } from "./providerIdentity.js";
@@ -443,13 +447,24 @@ export function loadProviderWorkspaceConfig(
     }
   }
 
-  const legacyFilePath = getLegacyProviderWorkspaceConfigFile(workspaceRoot);
-  if (!existsSync(legacyFilePath)) return {};
-  try {
-    return parseProviderWorkspaceConfig(JSON.parse(readFileSync(legacyFilePath, "utf-8")));
-  } catch {
-    return {};
+  const legacyFiles = [
+    join(
+      resolveLegacyCodexaDataDir(),
+      "workspaces",
+      workspaceStorageKey(normalizeWorkspaceRoot(workspaceRoot)),
+      "providers.json",
+    ),
+    getLegacyProviderWorkspaceConfigFile(workspaceRoot),
+  ];
+  for (const legacyFilePath of legacyFiles) {
+    if (!existsSync(legacyFilePath)) continue;
+    try {
+      return parseProviderWorkspaceConfig(JSON.parse(readFileSync(legacyFilePath, "utf-8")));
+    } catch {
+      // An unreadable legacy source does not conceal another recoverable source.
+    }
   }
+  return {};
 }
 
 /**

@@ -30,18 +30,13 @@ const UPDATE_ARGV: Record<GlobalPackageManager, readonly string[]> = {
 
 /**
  * Infers which package manager owns the global Ubume install from the
- * launcher script location (UBUME_LAUNCHER_SCRIPT / CODEXA_LAUNCHER_SCRIPT, set by bin/ubume.js).
+ * launcher script location (UBUME_LAUNCHER_SCRIPT, set by bin/ubume.js).
  */
 export function detectGlobalPackageManager(
   env: NodeJS.ProcessEnv = process.env,
   launcherPathOverride?: string,
 ): GlobalPackageManager {
-  const launcherPath =
-    launcherPathOverride ??
-    env.UBUME_LAUNCHER_SCRIPT ??
-    env.CODEXA_LAUNCHER_SCRIPT ??
-    process.argv[1] ??
-    "";
+  const launcherPath = launcherPathOverride ?? env.UBUME_LAUNCHER_SCRIPT ?? process.argv[1] ?? "";
   const normalized = launcherPath.toLowerCase().replace(/\\/g, "/");
   if (!normalized) return "npm";
 

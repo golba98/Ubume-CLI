@@ -14,7 +14,7 @@ The headless commands reuse the interactive app's configuration, provider routin
 session storage and file checkpoints. A session started with `ubume exec` can be
 resumed in the TUI, and the reverse also works.
 
-User-facing usage lives in [docs/TERMINAL_COMMANDS.md](../../docs/TERMINAL_COMMANDS.md).
+User-facing usage lives in [docs/terminal/headless-commands.md](../../docs/terminal/headless-commands.md).
 This document is for contributors.
 
 ## Module map
@@ -197,7 +197,7 @@ authenticated end-to-end run, use `bun run smoke:terminal-bench`.
 
 - **New inspection command**: add a `case` to `runInspectionCommand`, list its options in
   `COMMAND_OPTIONS`, add the command name to the launcher's headless list in
-  `bin/ubume.js`, and update `terminalHelp` and `docs/TERMINAL_COMMANDS.md`.
+  `bin/ubume.js`, and update `terminalHelp` and `docs/terminal/headless-commands.md`.
 - **New exec option**: add it to the `switch` in `parseHeadlessExecArgs` (and to
   `INLINE_VALUE_FLAGS` if it takes `=value`), document it in `terminalHelp`, and add a
   case to the error-wording table test.

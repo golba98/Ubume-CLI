@@ -88,7 +88,7 @@ export function normalizePlanReviewMarkdown(
  * Uses platform-appropriate app-data locations instead of the workspace.
  */
 export function resolvePlanDir(platformOverride?: Platform): string {
-  const envDir = process.env["UBUME_PLAN_DIR"] || process.env["CODEXA_PLAN_DIR"];
+  const envDir = process.env["UBUME_PLAN_DIR"];
   if (envDir) return envDir;
 
   return join(resolveUbumeDataDir(platformOverride ?? process.platform), "plans");
