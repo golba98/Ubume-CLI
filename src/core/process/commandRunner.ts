@@ -6,8 +6,12 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { normalizeLineBreaks } from "../shared/text.js";
-import { sanitizeTerminalOutput } from "../terminal/terminalSanitize.js";
+import {
+  sanitizeTerminalOutput,
+  sanitizeTerminalStreamChunk,
+} from "../terminal/terminalSanitize.js";
 import { createTerminalTitleSequenceStripper } from "../terminal/terminalTitle.js";
+import { createOutputBuffer, type OutputCapture } from "./outputCapture.js";
 import { validateExecutableForSpawn } from "./processValidation.js";
 
 export interface CommandSpec {
@@ -19,6 +23,11 @@ export interface CommandSpec {
   stdinData?: string;
   keepStdinOpen?: boolean;
   signal?: AbortSignal;
+  /**
+   * What `result.stdout`/`result.stderr` retain. Defaults to `"full"`, which callers that
+   * parse or persist complete output rely on. Stream handlers always receive every chunk.
+   */
+  capture?: OutputCapture;
 }
 
 export interface CommandResult {
@@ -33,6 +42,8 @@ export interface CommandResult {
   errorCode?: string;
   userMessage: string;
   debugMessage?: string;
+  /** Characters a bounded `capture` dropped from the retained output, when any were. */
+  omittedOutputChars?: { stdout: number; stderr: number };
 }
 
 export interface CommandStreamHandlers {
@@ -46,11 +57,12 @@ interface InternalCommandSpec extends CommandSpec {
 }
 
 // Sanitize before splitting: title sequences can span newlines and must not corrupt the line output.
-function splitOutputLines(text: string): string[] {
-  return normalizeLineBreaks(sanitizeTerminalOutput(text))
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+function* splitOutputLines(text: string): Generator<string> {
+  const safe = normalizeLineBreaks(sanitizeTerminalOutput(text));
+  for (const match of safe.matchAll(/[^\n]+/g)) {
+    const line = match[0].trim();
+    if (line) yield line;
+  }
 }
 
 function pluralize(count: number, singular: string, plural = `${singular}s`): string {
@@ -112,33 +124,40 @@ export function summarizeCommandResult(
     return result.userMessage;
   }
 
-  const stdoutLines = splitOutputLines(result.stdout);
-  if (stdoutLines.length === 0) {
+  let lineCount = 0;
+  let firstLine = "";
+  let allPaths = true;
+  for (const line of splitOutputLines(result.stdout)) {
+    lineCount++;
+    if (lineCount === 1) firstLine = line;
+    if (!looksLikePath(line)) allPaths = false;
+  }
+  if (lineCount === 0) {
     return "Completed with no output.";
   }
 
   const lowerCommand = command.toLowerCase();
   if (/\brg\b/.test(lowerCommand) && /--files\b/.test(lowerCommand)) {
-    return `Found ${pluralize(stdoutLines.length, "file")}.`;
+    return `Found ${pluralize(lineCount, "file")}.`;
   }
 
   if (/\b(get-childitem|ls|dir)\b/.test(lowerCommand)) {
-    return `Listed ${pluralize(stdoutLines.length, "item")}.`;
+    return `Listed ${pluralize(lineCount, "item")}.`;
   }
 
   if (/\b(rg|grep|select-string|findstr)\b/.test(lowerCommand)) {
-    return `Found ${pluralize(stdoutLines.length, "match", "matches")}.`;
+    return `Found ${pluralize(lineCount, "match", "matches")}.`;
   }
 
-  if (stdoutLines.length === 1) {
-    return stdoutLines[0]!;
+  if (lineCount === 1) {
+    return firstLine;
   }
 
-  if (stdoutLines.every(looksLikePath)) {
-    return `Returned ${pluralize(stdoutLines.length, "path")}.`;
+  if (allPaths) {
+    return `Returned ${pluralize(lineCount, "path")}.`;
   }
 
-  return `Produced ${pluralize(stdoutLines.length, "line")} of output.`;
+  return `Produced ${pluralize(lineCount, "line")} of output.`;
 }
 
 /**
@@ -163,7 +182,7 @@ export function runCommand(
  */
 export function runShellCommand(
   command: string,
-  options: Pick<CommandSpec, "cwd" | "env" | "timeoutMs">,
+  options: Pick<CommandSpec, "cwd" | "env" | "timeoutMs" | "capture">,
   handlers: CommandStreamHandlers = {},
 ): {
   child: ChildProcess;
@@ -202,8 +221,8 @@ function runProcess(
     cwd: spec.cwd,
   });
   const displayExecutable = spec.displayExecutable ?? executable;
-  let stdout = "";
-  let stderr = "";
+  const stdout = createOutputBuffer(spec.capture);
+  const stderr = createOutputBuffer(spec.capture);
   let canceled = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const stdoutTitleStripper = createTerminalTitleSequenceStripper({
@@ -291,20 +310,25 @@ function runProcess(
     // Keep the escalation alive even after the group leader closes its stdio.
   };
   const result = new Promise<CommandResult>((resolve) => {
+    let settled = false;
     const finish = (
       partial: Omit<
         CommandResult,
         "stdout" | "stderr" | "startedAt" | "endedAt" | "durationMs" | "userMessage"
       > & { endedAt?: number },
     ) => {
+      if (settled) return;
+      settled = true;
       if (timeoutHandle) clearTimeout(timeoutHandle);
-      stdout += stdoutTitleStripper.flush();
-      stderr += stderrTitleStripper.flush();
+      stdout.append(stdoutTitleStripper.flush());
+      stderr.append(stderrTitleStripper.flush());
       const endedAt = partial.endedAt ?? Date.now();
+      const stderrText = stderr.text();
+      const omitted = stdout.omittedChars + stderr.omittedChars;
       resolve({
         ...partial,
-        stdout: sanitizeTerminalOutput(stdout),
-        stderr: sanitizeTerminalOutput(stderr),
+        stdout: sanitizeTerminalStreamChunk(stdout.text()),
+        stderr: sanitizeTerminalStreamChunk(stderrText),
         startedAt,
         endedAt,
         durationMs: endedAt - startedAt,
@@ -312,23 +336,26 @@ function runProcess(
           executable: displayExecutable,
           code: partial.errorCode,
           exitCode: partial.exitCode,
-          stderr,
+          stderr: stderrText,
           signal: partial.signal,
           status: partial.status,
         }),
+        ...(omitted > 0
+          ? { omittedOutputChars: { stdout: stdout.omittedChars, stderr: stderr.omittedChars } }
+          : {}),
       });
     };
 
     child.stdout?.on("data", (buffer: Buffer) => {
       const text = stdoutTitleStripper.process(buffer);
-      stdout += text;
-      handlers.onStdout?.(sanitizeTerminalOutput(text));
+      stdout.append(text);
+      handlers.onStdout?.(sanitizeTerminalStreamChunk(text));
     });
 
     child.stderr?.on("data", (buffer: Buffer) => {
       const text = stderrTitleStripper.process(buffer);
-      stderr += text;
-      handlers.onStderr?.(sanitizeTerminalOutput(text));
+      stderr.append(text);
+      handlers.onStderr?.(sanitizeTerminalStreamChunk(text));
     });
 
     child.once("error", (error: NodeJS.ErrnoException) => {

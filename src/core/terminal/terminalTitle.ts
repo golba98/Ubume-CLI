@@ -2,6 +2,7 @@
  * Tracks intended terminal titles and applies/restores title sequences across lifecycle changes.
  */
 
+import { StringDecoder } from "node:string_decoder";
 import {
   APP_NAME,
   formatTerminalTitlePath,
@@ -17,8 +18,13 @@ const DEFAULT_TERMINAL_TITLE = APP_NAME;
 
 const DEBUG_TERMINAL_TITLE = Boolean(process.env["UBUME_DEBUG_TERMINAL_TITLE"]);
 
-/** Hard cap applied at every entry-point to prevent O(n²) scanning cost on adversarial input. */
-const MAX_TERMINAL_TITLE_INPUT_LENGTH = 65536;
+/**
+ * Longest pending (unterminated) title sequence a stream stripper carries between chunks.
+ * Longer pending text cannot be a real title, so it is released as ordinary output; this
+ * bounds both carryover memory and rescanning. Complete strings are scanned in linear time
+ * and are never truncated.
+ */
+const MAX_PENDING_TITLE_SEQUENCE_LENGTH = 65536;
 
 // Returns start index of the next ESC]0; or ESC]2; header at/after `from`, or -1.
 function findNextOscTitleStart(text: string, from: number): number {
@@ -247,8 +253,7 @@ export function traceTerminalTitleSequences(
   input: Buffer | string,
   context: TerminalTitleSequenceTraceContext,
 ): boolean {
-  const raw = Buffer.isBuffer(input) ? input.toString("utf8") : input;
-  const text = raw.slice(0, MAX_TERMINAL_TITLE_INPUT_LENGTH);
+  const text = Buffer.isBuffer(input) ? input.toString("utf8") : input;
   if (!text) return false;
 
   let found = false;
@@ -284,7 +289,7 @@ export function traceTerminalTitleSequences(
 
 /** Removes complete OSC title sequences from a complete string. */
 export function stripTerminalTitleSequences(input: string): string {
-  const text = input.slice(0, MAX_TERMINAL_TITLE_INPUT_LENGTH);
+  const text = input;
   if (!text) return "";
 
   let result = "";
@@ -320,12 +325,15 @@ export function stripTerminalTitleSequencesFromChunk(chunk: Buffer | string): st
 // split across two Node `data` events is still detected and stripped correctly.
 /**
  * Buffers split OSC title sequences across chunks; flush pending sequence text at EOF.
+ * Buffer chunks are decoded with a streaming UTF-8 decoder, so a multibyte character split
+ * across reads is reassembled instead of becoming U+FFFD.
  */
 export function createTerminalTitleSequenceStripper(context: TerminalTitleSequenceTraceContext): {
   process(chunk: Buffer | string): string;
   flush(): string;
 } {
   let carryover = "";
+  const decoder = new StringDecoder("utf8");
 
   const strip = (text: string): string => {
     if (!text) return "";
@@ -335,14 +343,15 @@ export function createTerminalTitleSequenceStripper(context: TerminalTitleSequen
 
   return {
     process(chunk: Buffer | string): string {
-      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      const text = Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk;
       const input = carryover + text;
       carryover = "";
 
-      const incompleteStart = findIncompleteOscTitleStart(
-        input.slice(0, MAX_TERMINAL_TITLE_INPUT_LENGTH),
-      );
-      if (incompleteStart !== -1) {
+      const incompleteStart = findIncompleteOscTitleStart(input);
+      if (
+        incompleteStart !== -1 &&
+        input.length - incompleteStart <= MAX_PENDING_TITLE_SEQUENCE_LENGTH
+      ) {
         carryover = input.slice(incompleteStart);
         return strip(input.slice(0, incompleteStart));
       }
@@ -351,7 +360,7 @@ export function createTerminalTitleSequenceStripper(context: TerminalTitleSequen
     },
 
     flush(): string {
-      const remaining = carryover;
+      const remaining = carryover + decoder.end();
       carryover = "";
       return strip(remaining);
     },
