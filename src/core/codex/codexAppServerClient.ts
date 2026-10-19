@@ -1,12 +1,15 @@
 /**
  * Short-lived Codex app-server sessions shared by model discovery and usage queries. Owns the
- * initialize handshake, response correlation, timeout/abort listeners and best-effort child
+ * initialize handshake, response correlation, timeout/abort listeners and awaited process-group
  * termination; callers supply only the session work.
  */
 
 import type { ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { APP_NAME, APP_VERSION } from "../../config/settings.js";
-import { spawnCodexProcess } from "../executables/codexExecutable.js";
+import { buildSpawnSpec } from "../executables/executableResolver.js";
+import { runCommand } from "../process/commandRunner.js";
+import { createOutputBuffer } from "../process/outputCapture.js";
 import { isRecord } from "../shared/values.js";
 
 /**
@@ -20,6 +23,7 @@ export interface CodexAppServerClient {
 
 export interface CodexAppServerSessionOptions {
   timeoutMs: number;
+  cwd?: string;
   signal?: AbortSignal;
   /** Names the operation in timeout/cancel/exit errors, e.g. "Codex model discovery". */
   operation: string;
@@ -44,7 +48,7 @@ export function describeAppServerError(error: unknown): string {
 
 /**
  * Runs work after the initialize handshake. Timeout, abort, parse or process failures reject;
- * finally removes session listeners and requests child termination.
+ * finally removes session listeners and awaits process-group termination.
  *
  * @param executable - Resolved Codex command; platform wrapping is delegated to the spawn helper.
  * @param options - Session-wide deadline, cancellation and diagnostic operation name.
@@ -57,12 +61,21 @@ export async function withCodexAppServer<T>(
   options: CodexAppServerSessionOptions,
   run: (client: CodexAppServerClient) => Promise<T>,
 ): Promise<T> {
-  const proc: ChildProcess = spawnCodexProcess(executable, ["app-server", "--listen", "stdio://"], {
-    stdio: ["pipe", "pipe", "pipe"],
+  if (options.signal?.aborted) throw new Error(`${options.operation} canceled.`);
+  const spec = buildSpawnSpec(executable, ["app-server", "--listen", "stdio://"]);
+  const runner = runCommand({
+    ...spec,
+    cwd: options.cwd ?? process.cwd(),
+    stdinData: "",
+    keepStdinOpen: true,
+    capture: { maxChars: 64 * 1024 },
   });
+  const proc: ChildProcess = runner.child;
+  const stdoutDecoder = new StringDecoder("utf8");
+  const stderrDecoder = new StringDecoder("utf8");
 
   let stdoutBuffer = "";
-  let stderr = "";
+  const stderr = createOutputBuffer({ maxChars: 64 * 1024 });
   let nextRequestId = 0;
   let closedError: Error | null = null;
   const pending = new Map<number, PendingRequest>();
@@ -123,18 +136,22 @@ export async function withCodexAppServer<T>(
 
   proc.stdout?.on("data", (chunk: Buffer) => {
     if (closedError) return;
-    stdoutBuffer += chunk.toString("utf8");
+    stdoutBuffer += stdoutDecoder.write(chunk);
     processStdout(false);
   });
   proc.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
+    stderr.append(stderrDecoder.write(chunk));
   });
   proc.on("error", (error) => failSession(error));
   proc.on("close", (exitCode) => {
     if (closedError) return;
+    stdoutBuffer += stdoutDecoder.end();
+    stderr.append(stderrDecoder.end());
     processStdout(true);
     if (closedError) return;
-    const stderrSummary = stderr.trim() ? ` stderr: ${stderr.trim().slice(0, 300)}` : "";
+    const stderrSummary = stderr.text().trim()
+      ? ` stderr: ${stderr.text().trim().slice(0, 300)}`
+      : "";
     failSession(
       new Error(
         `Codex app-server exited before ${options.operation} completed (code ${exitCode}).${stderrSummary}`,
@@ -180,16 +197,11 @@ export async function withCodexAppServer<T>(
     options.signal?.removeEventListener("abort", abort);
     if (!closedError) closedError = new Error(`${options.operation} finished.`);
     pending.clear();
+    runner.cancel();
+    await runner.stopped;
     proc.stdout?.removeAllListeners();
     proc.stderr?.removeAllListeners();
     proc.removeAllListeners();
     proc.on("error", () => undefined);
-    if (!proc.killed) {
-      try {
-        proc.kill();
-      } catch {
-        // Best-effort shutdown.
-      }
-    }
   }
 }

@@ -4,6 +4,7 @@ import {
   sanitizeTerminalInput,
   sanitizeTerminalLines,
   sanitizeTerminalOutput,
+  sanitizeTerminalStreamChunk,
 } from "./terminalSanitize.js";
 
 test("sanitizeTerminalOutput strips ANSI/OSC/control bytes and normalizes line breaks", () => {
@@ -19,4 +20,19 @@ test("sanitizeTerminalInput removes layout-breaking escapes", () => {
 test("sanitizeTerminalLines sanitizes and drops empty lines", () => {
   const lines = ["\u001B[32mok\u001B[0m", " \u0007", "next\rline"];
   assert.deepEqual(sanitizeTerminalLines(lines), ["ok", "next\nline"]);
+});
+
+test("plain Unicode and LF fast path agrees with control-heavy normalization", () => {
+  const text = "你好🌸\nplain text\n";
+  assert.equal(sanitizeTerminalOutput(text), text);
+  assert.equal(sanitizeTerminalStreamChunk(text), text);
+  assert.equal(sanitizeTerminalOutput(`\x1b[0m${text}`), text);
+  assert.equal(sanitizeTerminalOutput("a\tb", { preserveTabs: true }), "a\tb");
+  assert.equal(sanitizeTerminalOutput("a\tb", { tabSize: 4 }), "a    b");
+  for (let code = 0; code < 32; code++) {
+    const char = String.fromCharCode(code);
+    const expected = code === 9 ? "  " : code === 10 || code === 13 ? "\n" : "";
+    assert.equal(sanitizeTerminalOutput(`a${char}b`), `a${expected}b`);
+    assert.equal(sanitizeTerminalStreamChunk(`a${char}b`), `a${expected}b`);
+  }
 });

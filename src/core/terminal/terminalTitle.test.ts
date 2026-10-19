@@ -266,3 +266,49 @@ test("traceTerminalTitleSequences does not hang on crafted adversarial input", (
   assert.ok(Date.now() - start < 100, "must complete in under 100 ms");
   assert.equal(found, false, "no complete sequences in adversarial input");
 });
+
+const TITLE = "\u001b]0;child title\u0007";
+const traceContext = { source: "test", stream: "stdout", origin: "shell" } as const;
+
+test("stripTerminalTitleSequences keeps text beyond 64K characters", () => {
+  const body = "x".repeat(100_000);
+  assert.equal(stripTerminalTitleSequences(`${TITLE}${body}`), body);
+  assert.equal(stripTerminalTitleSequences(`${body}${TITLE}tail`), `${body}tail`);
+});
+
+test("the stateful stripper never truncates large chunks that contain a title", () => {
+  const stripper = createTerminalTitleSequenceStripper(traceContext);
+  const body = "y".repeat(150_000);
+  const output = stripper.process(`${TITLE}${body}${TITLE}end`) + stripper.flush();
+  assert.equal(output, `${body}end`);
+});
+
+test("the stateful stripper decodes UTF-8 split across Buffer chunks", () => {
+  const stripper = createTerminalTitleSequenceStripper(traceContext);
+  const text = "é漢字👩🏽‍💻ñ€".repeat(50);
+  const bytes = Buffer.from(text);
+  let output = "";
+  for (let offset = 0; offset < bytes.length; offset += 5) {
+    output += stripper.process(bytes.subarray(offset, offset + 5));
+  }
+  output += stripper.flush();
+  assert.equal(output, text);
+});
+
+test("an unterminated title start does not swallow the rest of the stream", () => {
+  const stripper = createTerminalTitleSequenceStripper(traceContext);
+  const chunk = "z".repeat(16_384);
+  let output = stripper.process("before\u001b]0;never closed ");
+  for (let i = 0; i < 12; i += 1) output += stripper.process(chunk);
+  const beforeFlush = output.length;
+  output += stripper.flush();
+  assert.ok(beforeFlush > 64 * 1024, "pending text is released once it cannot be a title");
+  assert.equal(output, `before\u001b]0;never closed ${chunk.repeat(12)}`);
+});
+
+test("a title split across chunks is still stripped", () => {
+  const stripper = createTerminalTitleSequenceStripper(traceContext);
+  const output =
+    stripper.process("a\u001b]0;ti") + stripper.process("tle\u0007b") + stripper.flush();
+  assert.equal(output, "ab");
+});

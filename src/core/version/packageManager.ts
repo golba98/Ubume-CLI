@@ -15,6 +15,8 @@ import { UBUME_NPM_PACKAGE } from "./updateCheck.js";
 export type GlobalPackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
 const UPDATE_TIMEOUT_MS = 300_000;
+// Install output is streamed to the panel; the result is only scanned for permission errors.
+const UPDATE_OUTPUT_CAPTURE = { maxChars: 256 * 1024 } as const;
 
 const PACKAGE_SPEC = `${UBUME_NPM_PACKAGE}@latest`;
 
@@ -97,7 +99,7 @@ export function runUpdateCommand(
     const runShell = deps.runShellCommandFn ?? runShellCommand;
     const { result, cancel } = runShell(
       displayCommand,
-      { cwd, timeoutMs: UPDATE_TIMEOUT_MS },
+      { cwd, timeoutMs: UPDATE_TIMEOUT_MS, capture: UPDATE_OUTPUT_CAPTURE },
       handlers,
     );
     return { result, cancel };
@@ -105,7 +107,13 @@ export function runUpdateCommand(
 
   const run = deps.runCommandFn ?? runCommand;
   const { result, cancel } = run(
-    { executable: argv[0]!, args: [...argv.slice(1)], cwd, timeoutMs: UPDATE_TIMEOUT_MS },
+    {
+      executable: argv[0]!,
+      args: [...argv.slice(1)],
+      cwd,
+      timeoutMs: UPDATE_TIMEOUT_MS,
+      capture: UPDATE_OUTPUT_CAPTURE,
+    },
     handlers,
   );
   return { result, cancel };

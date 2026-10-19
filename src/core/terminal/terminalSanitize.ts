@@ -57,6 +57,14 @@ export function sanitizeTerminalOutput(raw: string, options: SanitizeTerminalOpt
   return normalizeTabs(withoutUnsafeControls, preserveTabs, tabSize);
 }
 
+/** Fast equivalent of the default sanitizer for already decoded process-stream chunks. */
+export function sanitizeTerminalStreamChunk(raw: string): string {
+  // Ordinary streamed text needs none of the escape stripping, CR normalization or tab work.
+  // LF is already canonical; all other controls and C1 bytes take the full sanitizer below.
+  if (!/[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/.test(raw)) return raw;
+  return sanitizeTerminalOutput(raw);
+}
+
 /** Sanitizes untrusted input with the default two-space tab expansion. */
 export function sanitizeTerminalInput(raw: string): string {
   return sanitizeTerminalOutput(raw, { preserveTabs: false, tabSize: DEFAULT_TAB_SIZE });
@@ -64,8 +72,10 @@ export function sanitizeTerminalInput(raw: string): string {
 
 /** Sanitizes and right-trims lines, discarding those that become empty. */
 export function sanitizeTerminalLines(lines: string[]): string[] {
-  return lines
-    .map((line) => sanitizeTerminalOutput(line))
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0);
+  const sanitized: string[] = [];
+  for (const line of lines) {
+    const value = sanitizeTerminalOutput(line).trimEnd();
+    if (value.length > 0) sanitized.push(value);
+  }
+  return sanitized;
 }

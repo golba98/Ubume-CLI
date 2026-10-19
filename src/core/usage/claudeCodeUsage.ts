@@ -285,6 +285,8 @@ export async function requestClaudeGetUsage(
       signal: options.signal,
       stdinData: line("ubume-init", { subtype: "initialize" }),
       keepStdinOpen: true,
+      // The control protocol is parsed from the stream; only a short stderr is reported.
+      capture: { maxChars: 64 * 1024 },
     },
     {
       onStdout: (chunk) => {

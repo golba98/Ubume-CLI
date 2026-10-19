@@ -9,6 +9,7 @@ import { prepareCodexExecLaunch } from "../codex/codexLaunch.js";
 import { buildCodexPrompt } from "../codex/codexPrompt.js";
 import { formatCodexLaunchError, spawnCodexProcess } from "../executables/codexExecutable.js";
 import * as perf from "../perf/profiler.js";
+import { createOutputBuffer, type OutputBuffer } from "../process/outputCapture.js";
 import { normalizeLineBreaks } from "../shared/text.js";
 import { createTerminalTitleSequenceStripper } from "../terminal/terminalTitle.js";
 import { createCodexJsonStreamParser } from "./codexJsonStream.js";
@@ -30,6 +31,13 @@ function looksLikeUnsupportedStructuredOutput(raw: string): boolean {
     raw,
   );
 }
+
+// Retention bounds (characters). Legacy transcript mode keeps complete output, because
+// its final answer is reconstructed from the whole transcript. In JSON mode the answer
+// comes from parsed events, so the raw text only backs a rare empty-answer fallback.
+const JSON_MODE_RAW_OUTPUT_CHARS = 8 * 1024 * 1024;
+// stderr is diagnostics only: keep its first and last 512 KiB.
+const RAW_STDERR_CHARS = 1024 * 1024;
 
 function isProcessTerminationNoise(line: string): boolean {
   return /^SUCCESS: The process with PID \d+ .* has been terminated\.$/.test(line.trim());
@@ -53,17 +61,17 @@ export const codexSubprocessProvider: BackendProvider = {
     let cancelled = false;
     let proc: ReturnType<typeof spawn> | null = null;
     let procExited = false;
-    let currentRawOutput = "";
+    let currentRawOutput: OutputBuffer = createOutputBuffer();
     // CLI diagnostics only; stdout carries tool output and must not be
     // classified (e.g. as an auth failure) when the run errors.
-    let currentRawStderr = "";
+    let currentRawStderr: OutputBuffer = createOutputBuffer({ maxChars: RAW_STDERR_CHARS });
     let finalAnswerObserved = false;
 
     const finishError = (message: string) => {
       if (done) return;
       done = true;
       control.finish();
-      handlers.onError(message, currentRawStderr);
+      handlers.onError(message, currentRawStderr.text());
     };
 
     const finishSuccess = (response: string) => {
@@ -107,8 +115,12 @@ export const codexSubprocessProvider: BackendProvider = {
           }
           handlers.benchmarkHooks?.onProviderPrepComplete?.();
 
+          // Per-stream copies exist only to replay output into the transcript parser and to
+          // detect an unsupported --json flag; both questions are settled once a structured
+          // event arrives, so JSON mode stops (and frees) them.
           let rawStdout = "";
           let rawStderr = "";
+          let retainRawStreams = structuredOutput;
           let stdoutLineBuffer = "";
           let mode: "undecided" | "json" | "legacy" = structuredOutput ? "undecided" : "legacy";
           let legacyProgressSequence = 0;
@@ -226,14 +238,24 @@ export const codexSubprocessProvider: BackendProvider = {
                 switchToTranscriptFallback();
                 return;
               }
-              mode = "json";
+              if (mode !== "json") enterJsonMode();
             }
+          };
+
+          const enterJsonMode = () => {
+            mode = "json";
+            retainRawStreams = false;
+            rawStdout = "";
+            rawStderr = "";
+            const bounded = createOutputBuffer({ maxChars: JSON_MODE_RAW_OUTPUT_CHARS });
+            bounded.append(currentRawOutput.text());
+            currentRawOutput = bounded;
           };
 
           const ingestStdoutText = (text: string) => {
             if (!text) return;
-            currentRawOutput += text;
-            rawStdout += text;
+            currentRawOutput.append(text);
+            if (retainRawStreams) rawStdout += text;
 
             if (mode === "legacy") {
               feedTranscript(text, "stdout");
@@ -246,9 +268,9 @@ export const codexSubprocessProvider: BackendProvider = {
 
           const ingestStderrText = (text: string) => {
             if (!text) return;
-            currentRawOutput += text;
-            currentRawStderr += text;
-            rawStderr += text;
+            currentRawOutput.append(text);
+            currentRawStderr.append(text);
+            if (retainRawStreams) rawStderr += text;
 
             if (mode === "legacy") {
               feedTranscript(text, "stderr");
@@ -337,8 +359,8 @@ export const codexSubprocessProvider: BackendProvider = {
               !jsonParser.hasStructuredEvents() &&
               looksLikeUnsupportedStructuredOutput(`${rawStdout}\n${rawStderr}`)
             ) {
-              currentRawOutput = "";
-              currentRawStderr = "";
+              currentRawOutput = createOutputBuffer();
+              currentRawStderr = createOutputBuffer({ maxChars: RAW_STDERR_CHARS });
               startAttempt(false, true);
               return;
             }
@@ -353,8 +375,8 @@ export const codexSubprocessProvider: BackendProvider = {
               const finalResponse =
                 mode === "json"
                   ? jsonParser.getFinalResponse().trim() ||
-                    sanitizeCodexTranscript(currentRawOutput)
-                  : sanitizeCodexTranscript(currentRawOutput);
+                    sanitizeCodexTranscript(currentRawOutput.text())
+                  : sanitizeCodexTranscript(currentRawOutput.text());
               emitFinalAnswerObserved(finalResponse);
               finishSuccess(finalResponse);
               return;
@@ -394,8 +416,6 @@ export const codexSubprocessProvider: BackendProvider = {
         });
     };
 
-    currentRawOutput = "";
-    currentRawStderr = "";
     startAttempt(true);
 
     return () => {
