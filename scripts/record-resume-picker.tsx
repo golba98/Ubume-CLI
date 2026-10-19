@@ -29,5 +29,5 @@ const pause = () => new Promise((resolve) => setTimeout(resolve, 120));
 await pause();
 for (const key of ["\x1b[C", "\x1b[C", "\x1b[C", "\x1b[C", "b", "b", "m", "\x1b[C", "a"]) { time += 1.5; input.write(key); await pause(); }
 time += 2; app.unmount();
-const directory = join(import.meta.dir, "..", "docs", "recordings"); mkdirSync(directory, { recursive: true });
+const directory = join(import.meta.dir, "..", "docs", "terminal", "recordings"); mkdirSync(directory, { recursive: true });
 writeFileSync(join(directory, "provider-resume.cast"), frames.map((frame) => JSON.stringify(frame)).join("\n") + "\n");

@@ -1,6 +1,6 @@
 # Source guide
 
-This is the maintenance catalog for production TypeScript files under `src/`. It describes ownership and purpose; [Architecture overview](overview.md) explains how the subsystems work together, [Developer Scripts](../../scripts/README.md) documents repository automation outside `src/`, [Installed Launchers](../development/launchers.md) documents the `bin/` entry points and Harness modules, and [`src/core/README.md`](../../src/core/README.md) maps the core folders.
+This is the maintenance catalog for production TypeScript files under `src/`. It describes ownership and purpose; [Architecture overview](overview.md) explains how the subsystems work together, [Developer Scripts](../../scripts/README.md) documents repository automation outside `src/`, [Installed Launchers](../../bin/README.md) documents the `bin/` entry points and Harness modules, and [`src/core/README.md`](../../src/core/README.md) maps the core folders.
 
 ## How to use this guide
 

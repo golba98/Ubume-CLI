@@ -1,3 +1,33 @@
+/**
+ * Playwright-backed implementation of the Ubume browser tools.
+ *
+ * `BrowserManager` owns one browser session per conversation: a dedicated
+ * Chromium `launchServer`, a dedicated browser context behind a loopback
+ * proxy, and per-session element references, secrets and abort controllers.
+ *
+ * Security invariants (reviewable in this file; do not weaken any of them):
+ *   - URL admission: every navigation goes through `browserUrl`, which admits
+ *     only HTTP(S) without embedded credentials and, without network access,
+ *     only loopback destinations.
+ *   - Network enforcement is layered: the context-level proxy (see
+ *     ubume-browser-proxy.js), per-request `context.route` interception, and a
+ *     post-action check that re-verifies the *final* URL so a redirect to an
+ *     external site cannot slip through (ERR_BLOCKED_BY_CLIENT and proxy
+ *     failures are classified as BROWSER_NETWORK_DENIED).
+ *   - Secrets typed into sensitive fields are captured and scrubbed
+ *     (`[redacted]`) from all later text/URL observations; sensitive fields are
+ *     marked and masked in screenshots.
+ *   - Context isolation: downloads disabled, service workers blocked, no
+ *     persisted state; `browser_close`/`closeSession` discard cookies and
+ *     references.
+ *   - Resource limits: bounded element/text/result sizes, bounded screenshot
+ *     pixels, 30 s maximum deadlines, per-session action serialization
+ *     (`session.tail`), and cancellation through AbortController at every
+ *     await point.
+ *   - Chromium always launches with its sandbox enabled; there is no
+ *     `--no-sandbox` fallback.
+ */
+
 import { chromium } from "playwright";
 import { saveImageFile, DEFAULT_MAX_IMAGE_BYTES, DEFAULT_MAX_IMAGE_DIMENSION, DEFAULT_MAX_IMAGE_PIXELS, DEFAULT_MAX_IMAGES_PER_MESSAGE, DEFAULT_MAX_MESSAGE_IMAGE_BYTES } from "@deepseek-ai/dsh-attachment-local";
 import { join } from "node:path";
@@ -6,15 +36,27 @@ import { setTimeout as delay } from "node:timers/promises";
 import { browserDescription, safeBrowserUrl, validateBrowserArguments } from "./ubume-local-browser-tools.js";
 import { BrowserToolError, browserUrl, isLoopbackUrl } from "./ubume-browser-url.js";
 import { createBrowserProxy } from "./ubume-browser-proxy.js";
+
 export { BrowserToolError, browserUrl, isLoopbackUrl } from "./ubume-browser-url.js";
+
 const fail = (code, message) => { throw new BrowserToolError(code, message); };
+
+// Inspection and result limits.
 const MAX_ELEMENTS = 100;
 const MAX_TEXT = 8000;
 const MAX_RESULT_BYTES = 32768;
 
+const NAVIGATION_TOOLS = ["browser_open", "browser_navigate", "browser_back", "browser_forward", "browser_reload"];
+
+/** Whether the arguments select an element target (typing cannot use text). */
 function hasTarget(args, typing = false) {
   return ["element", "role", "selector", ...typing ? [] : ["text"]].some((key) => args[key] !== undefined);
 }
+
+/**
+ * Replaces every known secret with [redacted] and maps control characters to
+ * spaces so nothing typed into a sensitive field can leak into observations.
+ */
 function scrub(value, session) {
   let result = value;
   for (const secret of session.secrets)
@@ -22,6 +64,8 @@ function scrub(value, session) {
       result = result.split(secret).join("[redacted]");
   return result.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, " ");
 }
+
+/** Closes a Playwright server, killing it after a 1.5 s grace period. */
 async function closeServer(server) {
   if (!server)
     return;
@@ -42,12 +86,59 @@ async function closeServer(server) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Failure classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps an arbitrary Playwright/Harness failure to a stable code. Order is
+ * deliberate: explicit tool errors and cancellation win, then Chromium's
+ * network-error messages (policy denial is detected before generic navigation
+ * failure), then lifecycle errors.
+ */
+function failureCode(error, controller, networkAccessAllowed) {
+  if (error instanceof BrowserToolError) return error.code;
+  if (controller.signal.aborted) return "ABORTED";
+  if (error instanceof Error && error.name === "TimeoutError") return "BROWSER_TIMEOUT";
+  const message = error instanceof Error ? error.message : "";
+  if (!networkAccessAllowed && /ERR_BLOCKED_BY_CLIENT|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/.test(message)) return "BROWSER_NETWORK_DENIED";
+  if (/ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED/.test(message)) return "BROWSER_NAVIGATION_FAILED";
+  if (/ERR_CERT_|ERR_SSL_/.test(message)) return "BROWSER_TLS_FAILED";
+  if (/closed|crash|disconnected/i.test(message)) return "BROWSER_CLOSED";
+  return "BROWSER_FAILED";
+}
+
+/** Stable user-facing message for each failure code. */
+const FAILURE_MESSAGES = {
+  BROWSER_NETWORK_DENIED: "External browser requests are blocked. Enable network access; localhost remains available.",
+  BROWSER_TLS_FAILED: "TLS validation failed. Check the site's certificate.",
+  BROWSER_NAVIGATION_FAILED: "Navigation failed. Check the URL and whether the server is running.",
+  BROWSER_CLOSED: "Browser/page closed or crashed. Open a browser again.",
+  BROWSER_INVALID_ARGUMENTS: "Invalid browser arguments.",
+};
+
+function failureDetail(error, code) {
+  if (error instanceof BrowserToolError) return error.message;
+  if (code === "ABORTED") return "Browser action cancelled.";
+  if (code === "BROWSER_TIMEOUT") return "Browser action timed out. Inspect the page and use a bounded wait before retrying.";
+  if (FAILURE_MESSAGES[code]) return FAILURE_MESSAGES[code];
+  return "Browser action failed. Inspect the page and check the target; no action was retried automatically.";
+}
+
+// ---------------------------------------------------------------------------
+// Browser manager
+// ---------------------------------------------------------------------------
+
 export class BrowserManager {
   capability;
   sessions = new Map;
+
   constructor(capability, onProcess = () => {}) {
-    this.capability = capability; this.onProcess = onProcess;
+    this.capability = capability;
+    this.onProcess = onProcess;
   }
+
+  /** Returns the session record for a conversation id, creating it on demand. */
   session(id) {
     let session = this.sessions.get(id);
     if (!session) {
@@ -56,6 +147,14 @@ export class BrowserManager {
     }
     return session;
   }
+
+  /**
+   * Runs one browser tool call. Calls on the same session are serialized
+   * through `session.tail` (browser state is exclusive); the caller's abort
+   * signal is bridged onto a fresh controller so one cancellation aborts only
+   * this call. Always resolves to { ok, value } or { ok, error } — raw
+   * exceptions never escape, and error text is scrubbed of session secrets.
+   */
   async execute(request, policy) {
     const session = this.session(request.sessionId);
     const controller = new AbortController;
@@ -75,11 +174,10 @@ export class BrowserManager {
         controller.signal.throwIfAborted();
         return { ok: true, value };
       } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        let code = error instanceof BrowserToolError ? error.code : controller.signal.aborted ? "ABORTED" : error instanceof Error && error.name === "TimeoutError" ? "BROWSER_TIMEOUT" : !policy.networkAccess && /ERR_BLOCKED_BY_CLIENT|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/.test(message) ? "BROWSER_NETWORK_DENIED" : /ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED/.test(message) ? "BROWSER_NAVIGATION_FAILED" : /ERR_CERT_|ERR_SSL_/.test(message) ? "BROWSER_TLS_FAILED" : /closed|crash|disconnected/i.test(message) ? "BROWSER_CLOSED" : "BROWSER_FAILED";
+        let code = failureCode(error, controller, policy.networkAccess);
         if (error?.code === "BROWSER_INVALID_ARGUMENTS")
           code = "BROWSER_INVALID_ARGUMENTS";
-        const detail = error instanceof BrowserToolError ? error.message : code === "ABORTED" ? "Browser action cancelled." : code === "BROWSER_TIMEOUT" ? "Browser action timed out. Inspect the page and use a bounded wait before retrying." : code === "BROWSER_NETWORK_DENIED" ? "External browser requests are blocked. Enable network access; localhost remains available." : code === "BROWSER_TLS_FAILED" ? "TLS validation failed. Check the site's certificate." : code === "BROWSER_NAVIGATION_FAILED" ? "Navigation failed. Check the URL and whether the server is running." : code === "BROWSER_CLOSED" ? "Browser/page closed or crashed. Open a browser again." : code === "BROWSER_INVALID_ARGUMENTS" ? "Invalid browser arguments." : "Browser action failed. Inspect the page and check the target; no action was retried automatically.";
+        const detail = failureDetail(error, code);
         return { ok: false, error: { code, message: scrub(detail, session) } };
       } finally {
         session.controllers.delete(controller);
@@ -89,6 +187,14 @@ export class BrowserManager {
     session.tail = work;
     return work;
   }
+
+  // -- Session startup ----------------------------------------------------
+
+  /**
+   * Ensures the session has a live browser server, connection, context and
+   * page. Reuses the existing server when possible; "auto" mode falls back to
+   * headless when a headed launch fails on a machine without a usable display.
+   */
   async open(session, args, signal) {
     const configured = args.mode ?? this.capability.mode;
     const mode = configured === "auto" ? this.capability.headedSupported ? "headed" : "headless" : configured;
@@ -102,13 +208,26 @@ export class BrowserManager {
     if (this.capability.status !== "available")
       fail("BROWSER_UNAVAILABLE", this.capability.reason);
     await closeServer(session.server);
+    await this.launchServer(session, mode, configured);
+    await this.connectToServer(session, signal);
+    await this.createContext(session);
+    session.page = await session.context.newPage();
+    signal.throwIfAborted();
+  }
+
+  /**
+   * Launches the Chromium server, or fails. `auto` + headed gets one headless
+   * retry; an explicit headed request does not (the user asked to see it).
+   * Chromium's own sandbox stays on — no bypass is ever attempted.
+   */
+  async launchServer(session, mode, configured) {
     const launch = (headless) => chromium.launchServer({
       executablePath: this.capability.executablePath,
       host: "127.0.0.1",
       headless,
       chromiumSandbox: true,
       timeout: 30000,
-      args: !headless && process.env.WAYLAND_DISPLAY && !process.env.DISPLAY ? ["--ozone-platform=wayland"] : []
+      args: !headless && process.env.WAYLAND_DISPLAY && !process.env.DISPLAY ? ["--ozone-platform=wayland"] : [],
     });
     try {
       session.server = await launch(mode === "headless");
@@ -127,6 +246,10 @@ export class BrowserManager {
     const pid = session.server.process().pid;
     this.onProcess(pid);
     session.server.on("close", () => this.onProcess(pid, true));
+  }
+
+  /** Connects the driver to the server and rewires on unexpected disconnects. */
+  async connectToServer(session, signal) {
     if (signal.aborted || session.disposed) {
       await closeServer(session.server);
       signal.throwIfAborted();
@@ -137,6 +260,14 @@ export class BrowserManager {
       session.refs.clear();
       session.epoch++;
     });
+  }
+
+  /**
+   * Creates the isolated context and installs the layered network policy:
+   * loopback proxy for every request (including redirected ones), route-level
+   * admission, WebSocket policy, and per-page reference invalidation.
+   */
+  async createContext(session) {
     await session.proxy?.close();
     session.proxy = await createBrowserProxy((url) => session.networkAccess || isLoopbackUrl(url));
     session.context = await session.browser.newContext({ viewport: { width: 1280, height: 720 }, acceptDownloads: false, serviceWorkers: "block", proxy: { server: session.proxy.url, bypass: "<-loopback>" } });
@@ -154,38 +285,53 @@ export class BrowserManager {
       else
         await ws.close();
     });
-    session.context.on("page", (page) => {
-      session.page = page;
+    session.context.on("page", (page) => this.trackPage(session, page));
+  }
+
+  /**
+   * Keeps `session.page` pointing at the newest live page and invalidates all
+   * element references on any navigation, crash or page switch. dialogs are
+   * dismissed so a page cannot stall waiting for a user.
+   */
+  trackPage(session, page) {
+    session.page = page;
+    session.refs.clear();
+    session.epoch++;
+    page.on("framenavigated", () => {
       session.refs.clear();
       session.epoch++;
-      page.on("framenavigated", () => {
-        session.refs.clear();
-        session.epoch++;
-      });
-      page.on("crash", () => {
-        session.refs.clear();
-        session.epoch++;
-      });
-      page.on("dialog", (dialog) => {
-        dialog.dismiss().catch(() => {
-          return;
-        });
-      });
-      page.on("close", () => {
-        session.refs.clear();
-        session.epoch++;
-        if (session.page === page)
-          session.page = session.context?.pages().filter((candidate) => !candidate.isClosed()).at(-1);
+    });
+    page.on("crash", () => {
+      session.refs.clear();
+      session.epoch++;
+    });
+    page.on("dialog", (dialog) => {
+      dialog.dismiss().catch(() => {
+        return;
       });
     });
-    session.page = await session.context.newPage();
-    signal.throwIfAborted();
+    page.on("close", () => {
+      session.refs.clear();
+      session.epoch++;
+      if (session.page === page)
+        session.page = session.context?.pages().filter((candidate) => !candidate.isClosed()).at(-1);
+    });
   }
+
+  // -- Target resolution ----------------------------------------------------
+
+  /** The live page, or a BROWSER_CLOSED failure when there is none. */
   current(session) {
     if (!session.browser?.isConnected() || !session.page || session.page.isClosed())
       fail("BROWSER_CLOSED", "No open browser page. Call browser_open first.");
     return session.page;
   }
+
+  /**
+   * Resolves the arguments to exactly one Playwright locator. Element
+   * references must come from the current inspection epoch; ambiguous matches
+   * are rejected so an action can never hit the wrong element.
+   */
   async resolveTarget(session, args, signal) {
     const page = this.current(session);
     let locator;
@@ -208,6 +354,17 @@ export class BrowserManager {
       fail("BROWSER_AMBIGUOUS_TARGET", `${count} elements match. Inspect again and use an element reference or a one-based index.`);
     return args.index ? locator.nth(Number(args.index) - 1) : locator;
   }
+
+  // -- Inspection ----------------------------------------------------------
+
+  /**
+   * Walks the page's accessibility snapshot and returns bounded semantic
+   * elements plus visible text. Private/form fields never expose their value:
+   * they are reported as textboxes with their label, and their typed content
+   * never enters the result. References carry the inspection epoch, so stale
+   * refs are detectable in resolveTarget. With `scope`, only that subtree is
+   * inspected (used by browser_inspect on a target).
+   */
   async inspect(session, signal, scope) {
     const page = this.current(session);
     const elements = [];
@@ -249,6 +406,8 @@ export class BrowserManager {
         if ((role !== "generic" || item.cursor === "pointer") && role !== "text" && role !== "iframe") {
           const entry = { role, name: scrub(name, session).slice(0, 240) };
           if (native) {
+            // Reuse a reference when this exact element was already seen this
+            // epoch; otherwise allocate the next id.
             const known = [...old].find(([, ref]) => ref.frame === frame && ref.native === native && ref.epoch === session.epoch && ref.role === role && ref.name === name);
             const id = known?.[0] ?? `e${session.nextRef++}`;
             refs.set(id, { frame, native, epoch: session.epoch, role, name });
@@ -280,14 +439,24 @@ export class BrowserManager {
         break;
     }
     session.refs = refs;
-    const result = { summary: `Page inspected: ${elements.length} elements${truncated ? " (truncated; inspect a section for more)" : ""}.`, page: { url: scrub(safeBrowserUrl(page.url()), session), title: scrub(await page.title(), session).slice(0, 500), loadState: await page.evaluate(() => document.readyState) }, elements, visibleText: texts.join(`
-`), truncated };
+    const result = { summary: `Page inspected: ${elements.length} elements${truncated ? " (truncated; inspect a section for more)" : ""}.`, page: { url: scrub(safeBrowserUrl(page.url()), session), title: scrub(await page.title(), session).slice(0, 500), loadState: await page.evaluate(() => document.readyState) }, elements, visibleText: texts.join(`\n`), truncated };
+    // Hard bound on the serialized size: drop elements until it fits.
     while (Buffer.byteLength(JSON.stringify(result)) > MAX_RESULT_BYTES && result.elements.length) {
       result.elements.pop();
       result.truncated = true;
     }
     return result;
   }
+
+  // -- Approval identity ---------------------------------------------------
+
+  /**
+   * Describes the element a typing/click approval is about, plus a stable
+   * identity: the inspection epoch, a per-element random token, and a hash of
+   * the element's structural shape. The identity survives re-rendering of the
+   * same element but changes when the underlying element does, so an approval
+   * granted earlier cannot be replayed onto a different field.
+   */
   async approvalState(sessionId, args, typing, signal) {
     const session = this.session(sessionId);
     const page = this.current(session);
@@ -299,10 +468,23 @@ export class BrowserManager {
     }, undefined, { timeout: 1e4, signal });
     const editable = await locator.evaluate((el) => el.matches("input,textarea,select,[contenteditable]"), undefined, { timeout: 1e4, signal });
     const label = await locator.getAttribute("aria-label", { timeout: 1e4, signal }) || (editable ? String(args.name ?? "form field") : await locator.innerText({ timeout: 1e4, signal }).catch(() => "")) || String(args.element ?? args.name ?? "focused element");
-    const shape = await locator.evaluate((el) => [el.tagName, el.getAttribute("role"), el.getAttribute("aria-label"), el.getAttribute("href"), el.getAttribute("type"), el.textContent].join(`
-`), undefined, { timeout: 1e4, signal });
+    const shape = await locator.evaluate((el) => [el.tagName, el.getAttribute("role"), el.getAttribute("aria-label"), el.getAttribute("href"), el.getAttribute("type"), el.textContent].join(`\n`), undefined, { timeout: 1e4, signal });
     return { description: `${scrub(label, session).slice(0, 120)} on ${scrub(safeBrowserUrl(page.url()), session)}`, identity: `${session.epoch}:${token}:${createHash("sha256").update(shape).digest("hex")}` };
   }
+
+  // -- Tool execution ------------------------------------------------------
+
+  /** Default deadline: navigation-class tools get 30 s, everything else 10 s. */
+  actionTimeoutMs(tool, args) {
+    return Number(args.timeoutMs ?? (NAVIGATION_TOOLS.includes(tool) ? 30000 : 1e4));
+  }
+
+  /**
+   * Executes one validated tool call and returns the post-action inspection.
+   * Every action is followed by a fresh inspect (refs must reflect the page as
+   * it is now) and by the post-action network check (the final URL decides,
+   * so redirects are covered).
+   */
   async perform(session, request, policy) {
     const { tool, arguments: args } = request;
     const { signal } = policy;
@@ -326,8 +508,7 @@ export class BrowserManager {
         await this.current(session).goto(browserUrl(args.url, policy.networkAccess), { waitUntil: "domcontentloaded", timeout: Number(args.timeoutMs ?? 30000), signal });
     }
     const page = this.current(session);
-    const timeout = Number(args.timeoutMs ?? (["browser_open", "browser_navigate", "browser_back", "browser_forward", "browser_reload"].includes(tool) ? 30000 : 1e4));
-    const opts = { timeout, signal };
+    const opts = { timeout: this.actionTimeoutMs(tool, args), signal };
     if (tool !== "browser_open" && tool !== "browser_inspect")
       await this.inspect(session, signal);
     const loc = hasTarget(args, tool === "browser_type") && tool !== "browser_wait" ? await this.resolveTarget(session, args, signal) : undefined;
@@ -339,6 +520,9 @@ export class BrowserManager {
         await loc.click(opts);
         break;
       case "browser_type": {
+        // Sensitive detection covers explicit `sensitive` flags, password and
+        // card autocompletes, and token-named fields. The typed text becomes a
+        // session secret: scrubbed from every later observation.
         const sensitive = args.sensitive === true || await loc.evaluate((el) => el.matches('input[type="password"],[autocomplete*="password"],[autocomplete^="cc-"],[name*="token" i]'), undefined, opts);
         if (sensitive) {
           session.secrets.add(String(args.text));
@@ -387,20 +571,45 @@ export class BrowserManager {
           await pending.waitFor({ ...opts, state: "visible" });
         }
         break;
-      case "browser_screenshot": {
-        const mask = page.frames().map((frame) => frame.locator('input[type="password"],[autocomplete*="password"],[autocomplete^="cc-"],[autocomplete="one-time-code"],[name*="token" i],[data-ubume-sensitive="true"]'));
-        const buffer = await (loc ?? page).screenshot({ ...opts, type: "png", scale: "css", mask, animations: "disabled" });
-        const image = await saveImageFile(join(policy.dshHome, "attachments", "v1"), { data: buffer, mediaType: "image/png", name: "browser-screenshot.png" }, { maxImageBytes: Math.min(DEFAULT_MAX_IMAGE_BYTES, 4 * 1024 * 1024), maxImagesPerMessage: DEFAULT_MAX_IMAGES_PER_MESSAGE, maxMessageImageBytes: DEFAULT_MAX_MESSAGE_IMAGE_BYTES, maxImagePixels: DEFAULT_MAX_IMAGE_PIXELS, maxImageDimension: DEFAULT_MAX_IMAGE_DIMENSION, mediaTypes: ["image/png"] }, { maxPixels: 2048 * 2048, maxDimension: 2048, maxBytes: 4 * 1024 * 1024 });
-        const hash = String(image.attachmentId).slice("sha256:".length);
-        return { summary: `Screenshot saved (${image.width}×${image.height}); sensitive fields masked.`, image, artifactPath: join(policy.dshHome, "attachments", "v1", "objects", hash.slice(0, 2), hash) };
-      }
+      case "browser_screenshot":
+        return await this.captureScreenshot(session, page, loc, opts, policy);
     }
     const result = await this.inspect(session, signal, tool === "browser_inspect" ? loc : undefined);
-    if (!policy.networkAccess && !isLoopbackUrl(this.current(session).url()) && this.current(session).url() !== "about:blank") fail("BROWSER_NETWORK_DENIED", "External browser access is disabled. Redirects to external websites are blocked; enable Ubume network access to visit them.");
+    this.enforceNetworkPolicy(session, policy);
     if (tool !== "browser_inspect")
       result.summary = browserDescription(tool, args) + (session.fallback ? " (automatic headed launch unavailable; using headless)" : "");
     return result;
   }
+
+  /**
+   * Final network check: judged on the page's *current* URL, so an action that
+   * landed on an external site via redirect or form post is still denied.
+   */
+  enforceNetworkPolicy(session, policy) {
+    const url = this.current(session).url();
+    if (!policy.networkAccess && !isLoopbackUrl(url) && url !== "about:blank")
+      fail("BROWSER_NETWORK_DENIED", "External browser access is disabled. Redirects to external websites are blocked; enable Ubume network access to visit them.");
+  }
+
+  /** Captures a masked screenshot and persists it as a bounded attachment. */
+  async captureScreenshot(session, page, loc, opts, policy) {
+    // Mask password/card/one-time/token fields in every frame, plus fields
+    // marked sensitive by earlier browser_type calls.
+    const mask = page.frames().map((frame) => frame.locator('input[type="password"],[autocomplete*="password"],[autocomplete^="cc-"],[autocomplete="one-time-code"],[name*="token" i],[data-ubume-sensitive="true"]'));
+    const buffer = await (loc ?? page).screenshot({ ...opts, type: "png", scale: "css", mask, animations: "disabled" });
+    const image = await saveImageFile(join(policy.dshHome, "attachments", "v1"), { data: buffer, mediaType: "image/png", name: "browser-screenshot.png" }, { maxImageBytes: Math.min(DEFAULT_MAX_IMAGE_BYTES, 4 * 1024 * 1024), maxImagesPerMessage: DEFAULT_MAX_IMAGES_PER_MESSAGE, maxMessageImageBytes: DEFAULT_MAX_MESSAGE_IMAGE_BYTES, maxImagePixels: DEFAULT_MAX_IMAGE_PIXELS, maxImageDimension: DEFAULT_MAX_IMAGE_DIMENSION, mediaTypes: ["image/png"] }, { maxPixels: 2048 * 2048, maxDimension: 2048, maxBytes: 4 * 1024 * 1024 });
+    const hash = String(image.attachmentId).slice("sha256:".length);
+    return { summary: `Screenshot saved (${image.width}×${image.height}); sensitive fields masked.`, image, artifactPath: join(policy.dshHome, "attachments", "v1", "objects", hash.slice(0, 2), hash) };
+  }
+
+  // -- Teardown ----------------------------------------------------------
+
+  /**
+   * Closes one conversation's browser: abort its calls, close the server, wait
+   * for the serialized tail to drain, then discard refs, the proxy and the
+   * secret set. The server is closed both before and after the drain because
+   * an in-flight call may have reconnected.
+   */
   async closeSession(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session)
@@ -417,9 +626,13 @@ export class BrowserManager {
     if (this.sessions.get(sessionId) === session)
       this.sessions.delete(sessionId);
   }
+
+  /** Graceful teardown of every session. */
   async shutdown() {
     await Promise.allSettled([...this.sessions.keys()].map((id) => this.closeSession(id)));
   }
+
+  /** Immediate teardown (worker shutdown): kill servers without waiting. */
   terminate() {
     for (const session of this.sessions.values()) {
       session.disposed = true;

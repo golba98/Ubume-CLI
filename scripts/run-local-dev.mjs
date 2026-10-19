@@ -1,4 +1,18 @@
 #!/usr/bin/env node
+/**
+ * Local development launcher (`ubume-dev` / `cxd` shims point here).
+ *
+ * Runs the current checkout's sources — interactive launches through
+ * `src/index.tsx`, `exec` and `--headless-benchmark` through `src/cli.ts` —
+ * exactly like the installed `bin/ubume.js` launcher, but tagged
+ * `UBUME_CHANNEL=local-dev` and with relaunch metadata pointing back to this
+ * checkout. `native` and `numpy` launch the local Codexa model chat commands
+ * directly instead of Ubume at all.
+ *
+ * Never installs or modifies the published `ubume` command.
+ * Only launches when executed directly; the resolution helpers below are
+ * exported for `run-local-dev.test.ts`.
+ */
 
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -83,6 +97,7 @@ const isNumpyChat = forwardArgs[0] === "numpy";
 const bunExecutable = process.env.UBUME_BUN_EXECUTABLE?.trim()
   || (process.platform === "win32" ? "bun.exe" : "bun");
 
+/** A flag matches only before `--`; afterwards every argument is literal. */
 function hasFlag(args, longFlag, shortFlag) {
   for (const arg of args) {
     if (arg === "--") return false;
@@ -128,6 +143,45 @@ ubume-dev numpy talks directly to the local NumPy 250M checkpoint.
 `);
 }
 
+/**
+ * Mirrors the child's termination to the caller: re-raise fatal signals (so
+ * shells and wrappers observe them) and exit with the child's code otherwise.
+ */
+function forwardChildExit(child) {
+  child.on("close", (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+/**
+ * Launches one of the local model chat commands (`native` / `numpy`), first
+ * verifying every required file exists. Extra command-line arguments are
+ * forwarded to the chat script.
+ */
+function launchLocalChat(command, label, channel, missingRootHint) {
+  const missing = command.requiredPaths.filter((path) => !existsSync(path));
+  if (missing.length > 0) {
+    console.error(`${label} is not available because required files are missing:`);
+    for (const path of missing) console.error(`  ${path}`);
+    console.error(missingRootHint);
+    process.exit(1);
+  }
+  const child = spawn(command.executable, [...command.args, ...forwardArgs.slice(1)], {
+    cwd: command.cwd,
+    stdio: "inherit",
+    env: { ...process.env, UBUME_CHANNEL: channel },
+  });
+  child.on("error", (error) => {
+    console.error(`Failed to launch ${label}: ${error.message}`);
+    process.exit(1);
+  });
+  forwardChildExit(child);
+}
+
 function launch() {
   if (process.env.UBUME_DEBUG_LAUNCH === "1") {
     process.stderr.write(
@@ -146,58 +200,22 @@ function launch() {
   }
 
   if (isNativeChat) {
-    const native = resolveNativeChatCommand();
-    const missing = native.requiredPaths.filter((path) => !existsSync(path));
-    if (missing.length > 0) {
-      console.error("Codexa native chat is not available because required files are missing:");
-      for (const path of missing) console.error(`  ${path}`);
-      console.error("Set CODEXA_NATIVE_MODEL_ROOT if the model repository moved.");
-      process.exit(1);
-    }
-    const child = spawn(native.executable, [...native.args, ...forwardArgs.slice(1)], {
-      cwd: native.cwd,
-      stdio: "inherit",
-      env: { ...process.env, UBUME_CHANNEL: "local-dev-native" },
-    });
-    child.on("error", (error) => {
-      console.error(`Failed to launch Codexa native chat: ${error.message}`);
-      process.exit(1);
-    });
-    child.on("close", (code, signal) => {
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      process.exit(code ?? 0);
-    });
+    launchLocalChat(
+      resolveNativeChatCommand(),
+      "Codexa native chat",
+      "local-dev-native",
+      "Set CODEXA_NATIVE_MODEL_ROOT if the model repository moved.",
+    );
     return;
   }
 
   if (isNumpyChat) {
-    const numpy = resolveNumpyChatCommand();
-    const missing = numpy.requiredPaths.filter((path) => !existsSync(path));
-    if (missing.length > 0) {
-      console.error("Codexa NumPy chat is not available because required files are missing:");
-      for (const path of missing) console.error(`  ${path}`);
-      console.error("Set CODEXA_NUMPY_MODEL_ROOT if the model repository moved.");
-      process.exit(1);
-    }
-    const child = spawn(numpy.executable, [...numpy.args, ...forwardArgs.slice(1)], {
-      cwd: numpy.cwd,
-      stdio: "inherit",
-      env: { ...process.env, UBUME_CHANNEL: "local-dev-numpy" },
-    });
-    child.on("error", (error) => {
-      console.error(`Failed to launch Codexa NumPy chat: ${error.message}`);
-      process.exit(1);
-    });
-    child.on("close", (code, signal) => {
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      process.exit(code ?? 0);
-    });
+    launchLocalChat(
+      resolveNumpyChatCommand(),
+      "Codexa NumPy chat",
+      "local-dev-numpy",
+      "Set CODEXA_NUMPY_MODEL_ROOT if the model repository moved.",
+    );
     return;
   }
 
@@ -227,14 +245,7 @@ function launch() {
     process.exit(1);
   });
 
-  child.on("close", (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-
-    process.exit(code ?? 0);
-  });
+  forwardChildExit(child);
 }
 
 // Only launch when executed directly (not when imported by tests).
