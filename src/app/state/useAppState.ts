@@ -28,6 +28,7 @@ import type { ExternalSessionSummary } from "../../core/externalSessions/index.j
 import type { CodexModelCapabilities } from "../../core/models/codexModelCapabilities.js";
 import { loadSeededCodexCapabilities } from "../../core/models/modelCache.js";
 import { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
+import * as benchTrace from "../../core/perf/benchTrace.js";
 
 import type {
   LocalBackendId,
@@ -110,6 +111,7 @@ export function useAppState(context: UseAppStateContext) {
   const [selectionCoordinator] = useState(() => new SelectionCoordinator());
   const { providerOverride, launchArgs } = context;
 
+  benchTrace.startupMarkOnce("app-state-init");
   const workspaceRoot = useMemo(() => resolveWorkspaceRoot(), []);
   const projectInstructionsLoad = useMemo(
     () => loadProjectInstructions(workspaceRoot),
@@ -126,8 +128,7 @@ export function useAppState(context: UseAppStateContext) {
         (initialSettings.current.updateCheck ?? DEFAULT_UPDATE_CHECK_SETTINGS).enabled,
     ),
   );
-  // A cached "update available" for the running version opens the update
-  // prompt immediately; otherwise useUpdateCheck runs the startup check.
+  // Seed the header notice from a matching cached update while a fresh check runs.
   const initialUpdateCheckResult = useInitialValueRef<UpdateCheckResult | null>(() =>
     startupUpdateEnabled.current ? loadCachedUpdateForRunningVersion() : null,
   );
@@ -137,6 +138,7 @@ export function useAppState(context: UseAppStateContext) {
   const initialLayeredConfig = useRef<LayeredConfigResult | null>(null);
   if (initialLayeredConfig.current === null) {
     initialLayeredConfig.current = resolveLayeredConfig({ workspaceRoot, launchArgs });
+    benchTrace.startupMarkOnce("app-config-loaded");
   }
   const launchContext = useMemo(
     () => resolveLaunchContext({ workspaceRoot, forwardArgs: launchArgs.passthroughArgs }),
@@ -223,18 +225,10 @@ export function useAppState(context: UseAppStateContext) {
   const [headerConfig] = useState(initialSettings.current.header);
 
   // Screen and pending outside-workspace import.
-  // Hold the first interactive frame behind the update check. A cached update
-  // opens immediately; an uncached launch shows a short checking panel instead
-  // of allowing input and interrupting the user a moment later.
-  const [screen, setScreen] = useState<Screen>(
-    startupUpdateEnabled.current ? "update-prompt" : "main",
-  );
-  // A startup update check can be the first frame Ink ever renders. Do not
-  // pre-mount TranscriptShell hidden in that case: its <Static> intro would be
-  // consumed before the normal buffer has received it, leaving only the live
-  // composer/footer when the overlay exits. Mount it fresh on the first real
-  // main-screen render, then keep it mounted across later overlays so normal
-  // transcript/static-buffer preservation continues to work.
+  // Update checking runs in the background; commands are usable from the first main frame.
+  const [screen, setScreen] = useState<Screen>("main");
+  // Preserve the transcript's Static mount across overlays. Initial startup is main-screen;
+  // later explicit overlays retain the same native transcript ownership.
   const transcriptHasMountedRef = useRef(screen === "main");
   const shouldMountTranscript = screen === "main" || transcriptHasMountedRef.current;
   if (screen === "main") {

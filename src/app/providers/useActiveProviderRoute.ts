@@ -23,7 +23,7 @@ import { traceModelStateDebug } from "../../core/perf/debugLog.js";
 import { buildProviderRegistry, findProvider } from "../../core/providerLauncher/registry.js";
 import type { ProviderId } from "../../core/providerLauncher/types.js";
 import { setLocalProviderConfig } from "../../core/providerRuntime/local.js";
-import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/runtime.js";
+import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/lazyRuntime.js";
 import {
   getProviderRuntime,
   resolveActiveProviderRoute,

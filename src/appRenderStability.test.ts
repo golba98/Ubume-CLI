@@ -137,10 +137,13 @@ test("startup update overlay defers TranscriptShell's first Static mount until m
   assert.doesNotMatch(appSource, /returnFromUpdateOverlay[\s\S]*?clearViewport/);
 });
 
-test("startup update checks run before the composer can accept input", () => {
-  assert.match(appSource, /Check npm on every interactive startup before enabling the composer/);
+test("startup update checks run without blocking the composer", () => {
+  assert.match(
+    appSource,
+    /Check npm on every eligible interactive startup without taking composer focus/,
+  );
   assert.doesNotMatch(appSource, /isCacheValid\(cache, ucSettings\.intervalHours/);
-  assert.match(appSource, /startupUpdateEnabled\.current \? "update-prompt" : "main"/);
+  assert.match(appSource, /const \[screen, setScreen\] = useState<Screen>\("main"\)/);
   assert.match(appSource, /initialUpdateCheckResult/);
   assert.doesNotMatch(appSource, /startupUpdateDismissed \|\| busy \|\| screen !== "main"/);
   assert.match(appSource, /handleSkipUpdateForSession[\s\S]*?setScreen\("main"\)/);

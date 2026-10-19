@@ -221,3 +221,48 @@ test("file names matching Object prototype keys retain exact checkpoint behavior
     expect(await lstat(join(root, "__proto__")).catch(() => null)).toBeNull();
     expect(await lstat(join(root, "constructor")).catch(() => null)).toBeNull();
   }));
+
+test("capture across batches records every file in listing order with shared blobs", async () =>
+  fixture(async (root, store) => {
+    await mkdir(join(root, "nested", "deep"), { recursive: true });
+    for (let i = 0; i < 75; i += 1) {
+      // Every third file shares content, so one blob backs several paths (also within a batch).
+      const content = i % 3 === 0 ? "shared content\n" : `unique ${i}\n`;
+      await writeFile(
+        join(root, "nested", "deep", `file${String(i).padStart(3, "0")}.ts`),
+        content,
+      );
+    }
+    const boundary = await store.capture();
+    expect(boundary.complete).toBe(true);
+    expect(boundary.skipped).toEqual([]);
+    const paths = Object.keys(boundary.files);
+    expect(paths).toEqual([...paths].sort());
+    expect(paths.length).toBe(75);
+    const shared = new Set(
+      paths.filter((_, i) => i % 3 === 0).map((path) => boundary.files[path]!.hash),
+    );
+    expect(shared.size).toBe(1);
+    const again = await store.capture();
+    expect(again).toEqual(boundary);
+  }));
+
+test("capture skips paths below a symlinked directory and marks the boundary incomplete", async () =>
+  fixture(async (root, store) => {
+    await mkdir(join(root, "real"));
+    await writeFile(join(root, "real", "a.ts"), "a\n");
+    await writeFile(join(root, "plain.ts"), "plain\n");
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "real/a.ts", "plain.ts"], { cwd: root });
+    // Replace the tracked directory with a symlink: git still lists real/a.ts.
+    await rm(join(root, "real"), { recursive: true });
+    const outside = join(root, "..", "outside");
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, "a.ts"), "outside\n");
+    await symlink(outside, join(root, "real"));
+    const boundary = await store.capture();
+    expect(Object.keys(boundary.files)).toEqual(["plain.ts"]);
+    // git lists the symlink itself (untracked) and the tracked path beneath it.
+    expect(boundary.skipped).toEqual(["real", "real/a.ts"]);
+    expect(boundary.complete).toBe(false);
+  }));

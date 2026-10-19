@@ -16,6 +16,7 @@ import type { UpdateCheckSchedulerDeps } from "../../core/version/updateSchedule
 import type { Screen } from "../../session/types.js";
 import { createFakeClock, settle } from "../../test/fakeClock.js";
 import { UpdateAvailableCard } from "../../ui/chrome/UpdateAvailableCard.js";
+import { SelectionPanel } from "../../ui/panels/SelectionPanel.js";
 import { UpdatePromptPanel } from "../../ui/panels/UpdatePromptPanel.js";
 import { ThemeProvider } from "../../ui/theme.js";
 import { useUpdateCheck } from "./useUpdateCheck.js";
@@ -120,7 +121,7 @@ interface HarnessProps {
 }
 
 /**
- * Mirrors App's wiring: the startup screen gate from useAppState, the
+ * Mirrors App's wiring: the startup screen from useAppState, the
  * OverlayPanels update-prompt branch, and the header's updateAvailable
  * derivation — rendering the existing, unmodified update components.
  */
@@ -133,9 +134,7 @@ function Harness({
   onReturnFromOverlay,
 }: HarnessProps) {
   const startupUpdateEnabled = useRef(startupEnabled);
-  const [screen, setScreen] = useState<Screen>(startupEnabled ? "update-prompt" : "main");
-  const screenRef = useRef<Screen>(screen);
-  screenRef.current = screen;
+  const [screen, setScreen] = useState<Screen>("main");
   const [updateCheckResult, setUpdateCheckResult] = useState(initialResult);
   const [typed, setTyped] = useState("");
 
@@ -148,8 +147,6 @@ function Harness({
     startupUpdateEnabled,
     updateCheckResult,
     setUpdateCheckResult,
-    returnFromUpdateOverlay,
-    screenRef,
     schedulerDeps,
   });
 
@@ -197,6 +194,16 @@ function Harness({
             onRestart={() => {}}
           />
         )}
+      {screen === "update-prompt" && updateCheckResult?.status === "up-to-date" && (
+        <SelectionPanel
+          focusId="update-prompt"
+          title="Ubume is up to date"
+          subtitle=""
+          items={[{ label: "Return to chat", value: "close" }]}
+          onSelect={returnFromUpdateOverlay}
+          onCancel={returnFromUpdateOverlay}
+        />
+      )}
       {screen === "update-prompt" && updateCheckResult === null && (
         <Text>Checking for Ubume updates...</Text>
       )}
@@ -308,15 +315,15 @@ function mountHarness(options: {
   };
 }
 
-test("launching with an update available keeps the existing startup prompt open", async () => {
+test("launching with an update available shows a header notice without taking focus", async () => {
   const { check } = scriptedCheck([available("0.1.11")]);
   const harness = mountHarness({ check });
   await settle();
 
   const frame = harness.lastFrame();
-  assert.match(frame, /screen:update-prompt/);
-  assert.match(frame, /Update available: Ubume 0\.1\.11/);
-  assert.match(frame, /\[ Update now \]/);
+  assert.match(frame, /screen:main/);
+  assert.match(frame, /Ubume v0\.1\.11/);
+  assert.doesNotMatch(frame, /\[ Update now \]/);
   assert.equal(harness.overlayReturns(), 0);
   assert.equal(loadUpdateCheckCache()?.updateAvailable, true);
   assert.equal(loadUpdateCheckCache()?.latestVersion, "0.1.11");
@@ -368,8 +375,8 @@ test("a failed startup check falls back to a cached update for the running versi
   await settle();
 
   const frame = harness.lastFrame();
-  assert.match(frame, /screen:update-prompt/);
-  assert.match(frame, /Update available: Ubume 0\.1\.11/);
+  assert.match(frame, /screen:main/);
+  assert.match(frame, /Ubume v0\.1\.11/);
   assert.equal(harness.overlayReturns(), 0);
   harness.cleanup();
 });
@@ -427,10 +434,9 @@ test("a late startup result never closes an overlay opened after startup", async
   const cached: UpdateCheckResult = { ...available("0.1.11"), source: "cache" };
   const harness = mountHarness({ check: deferred.check, initialResult: cached });
   await settle();
-  assert.match(harness.lastFrame(), /Update available: Ubume 0\.1\.11/);
+  assert.match(harness.lastFrame(), /Ubume v0\.1\.11/);
 
-  // User dismisses the cached prompt and opens another overlay before npm answers.
-  await pressEscape(harness.stdin);
+  // User opens another overlay before npm answers.
   assert.match(harness.lastFrame(), /screen:main/);
   harness.api().setScreen("model-picker");
   await settle();
@@ -447,8 +453,8 @@ test("dismissal is preserved: background checks never reopen the prompt", async 
   const { check } = scriptedCheck([available("0.1.11"), available("0.1.11"), available("0.1.12")]);
   const harness = mountHarness({ check });
   await settle();
-  assert.match(harness.lastFrame(), /screen:update-prompt/);
-
+  harness.api().setScreen("update-prompt");
+  await settle();
   await pressEscape(harness.stdin);
   assert.match(harness.lastFrame(), /screen:main/);
 
@@ -509,4 +515,23 @@ test("unmounting stops polling and aborts the in-flight request", async () => {
   assert.equal(second.clock.pending().length, 0);
   harness.cleanup();
   second.cleanup();
+});
+
+test("a pending startup check accepts input and never closes an explicit update overlay", async () => {
+  const deferred = deferredCheck();
+  const harness = mountHarness({ check: deferred.check });
+  await settle();
+  harness.stdin.write("ready before npm");
+  await settle();
+  assert.match(harness.lastFrame(), /typed:ready before npm/);
+  harness.api().setScreen("update-prompt");
+  await settle();
+  deferred.pending[0]?.resolve(upToDate());
+  await settle();
+  assert.match(harness.lastFrame(), /screen:update-prompt/);
+  assert.equal(harness.overlayReturns(), 0);
+  assert.match(harness.lastFrame(), /Ubume is up to date/);
+  await pressEscape(harness.stdin);
+  assert.match(harness.lastFrame(), /screen:main/);
+  harness.cleanup();
 });

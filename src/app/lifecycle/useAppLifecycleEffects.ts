@@ -18,7 +18,7 @@ import type { loadSettings } from "../../config/persistence.js";
 import { saveSettings } from "../../config/persistence.js";
 import type { RuntimeConfig } from "../../config/runtimeConfig.js";
 import type { HeaderConfig, Theme } from "../../config/settings.js";
-import { shutdownLocalHarness } from "../../core/providerRuntime/localHarness/runtime.js";
+import { shutdownLocalHarness } from "../../core/providerRuntime/localHarness/lazyRuntime.js";
 import type { BackendProvider } from "../../core/providers/types.js";
 import type { ThemeSelectionState } from "../../ui/theme.js";
 import { buildSettingsPayload } from "../settings/useSettings.js";

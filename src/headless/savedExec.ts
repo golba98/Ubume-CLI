@@ -14,7 +14,7 @@
  * With `noSave`, nothing is written: there is no record, checkpoint or session line,
  * and the data dir is opened read-only. The execution lock is still taken.
  */
-import { closeLocalHarnessSession } from "../core/providerRuntime/localHarness/runtime.js";
+import { closeLocalHarnessSession } from "../core/providerRuntime/localHarness/lazyRuntime.js";
 import { refreshProviderModels } from "../core/providerRuntime/registry.js";
 import { errorMessage } from "../core/shared/values.js";
 import { resolveUbumeWorkspaceDataDir } from "../core/workspace/appData.js";

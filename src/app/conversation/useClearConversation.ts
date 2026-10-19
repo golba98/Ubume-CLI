@@ -13,7 +13,7 @@
 
 import { useCallback } from "react";
 import * as renderDebug from "../../core/perf/renderDebug.js";
-import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/runtime.js";
+import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/lazyRuntime.js";
 import { createStartupStaticEvents } from "../../session/eventIds.js";
 import { type PlanFlowState, resetPlanFlow } from "../../session/planFlow.js";
 import type { TimelineEvent } from "../../session/types.js";

@@ -24,9 +24,7 @@ import {
   EXIT_CODE,
   resultOutcome,
 } from "./commandResult.js";
-import { runExecCommand } from "./execCommand.js";
 import type { HeadlessExecIo } from "./execRunner.js";
-import { runInspectionCommand } from "./inspectCommands.js";
 import { redact } from "./redact.js";
 
 /** The single JSON document `--json` prints. Version 1 fields are frozen. */
@@ -159,8 +157,11 @@ export async function runTerminalCommand(
     if (command === "help" || command === "--help" || command === "-h") {
       outcome = HELP_OUTCOME;
     } else if (command === "exec" || command === "--headless-benchmark") {
+      // Command modules load only once routed, so help never pays for provider runtimes.
+      const { runExecCommand } = await import("./execCommand.js");
       outcome = await runExecCommand(command, argv.slice(1), env);
     } else {
+      const { runInspectionCommand } = await import("./inspectCommands.js");
       outcome = await runInspectionCommand(command, argv.slice(1), env);
     }
 

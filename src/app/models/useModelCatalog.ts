@@ -32,6 +32,7 @@ import {
 import { providerCatalog, providerConnectionKey } from "../../core/models/modelCatalog.js";
 import { isCatalogModelUnavailable } from "../../core/models/modelSelection.js";
 import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
+import * as benchTrace from "../../core/perf/benchTrace.js";
 import { traceInputDebug } from "../../core/perf/debugLog.js";
 import { resolveLocalBackend } from "../../core/providerLauncher/localBackend.js";
 import type { ProviderId, ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
@@ -94,6 +95,7 @@ interface UseModelCatalogContext {
 
   // Provider config and runtime
   providerWorkspaceConfig: ProviderWorkspaceConfig;
+  runtimeConfig: RuntimeConfig;
   /** Saves a transform of the latest provider config; see useRuntimeSettings. */
   updateProviderWorkspaceConfig: (
     transform: (latest: ProviderWorkspaceConfig) => ProviderWorkspaceConfig,
@@ -122,6 +124,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
     setProviderModelErrors,
     workspaceRoot,
     providerWorkspaceConfig,
+    runtimeConfig,
     setRegistryNonce,
     setAuthStatus,
     setAuthStatusBusy,
@@ -135,8 +138,8 @@ export function useModelCatalog(context: UseModelCatalogContext) {
   } = context;
 
   // Async results compare against the route and config current when they land.
-  const latest = useRef({ activeProviderRoute, providerWorkspaceConfig });
-  latest.current = { activeProviderRoute, providerWorkspaceConfig };
+  const latest = useRef({ activeProviderRoute, providerWorkspaceConfig, runtimeConfig });
+  latest.current = { activeProviderRoute, providerWorkspaceConfig, runtimeConfig };
   // Connection and generation of the in-flight Codex discovery (single-flight).
   const modelDiscoveryContextRef = useRef("");
   const modelDiscoveryGenerationRef = useRef(0);
@@ -191,11 +194,18 @@ export function useModelCatalog(context: UseModelCatalogContext) {
       // Single-flight: concurrent requests share the same in-flight discovery
       // promise so we never spawn a duplicate discovery job or emit duplicate
       // transcript messages.
-      const connection = providerConnectionKey("openai", {
-        cwd: workspaceRoot,
-        config: providerWorkspaceConfig,
-      });
+      const executableIdentity =
+        providerWorkspaceConfig.providers?.openai?.codexCommandPath ??
+        runtimeConfig.codexCommandPath;
+      const connection =
+        executableIdentity +
+        providerConnectionKey("openai", {
+          cwd: workspaceRoot,
+          config: providerWorkspaceConfig,
+        });
       const currentConnection = () =>
+        (latest.current.providerWorkspaceConfig.providers?.openai?.codexCommandPath ??
+          latest.current.runtimeConfig.codexCommandPath) +
         providerConnectionKey("openai", {
           cwd: workspaceRoot,
           config: latest.current.providerWorkspaceConfig,
@@ -223,7 +233,12 @@ export function useModelCatalog(context: UseModelCatalogContext) {
         try {
           const discovery = await refreshProviderModels("openai", {
             cwd: workspaceRoot,
-            providerConfig: providerWorkspaceConfig.providers?.openai,
+            providerConfig: {
+              ...providerWorkspaceConfig.providers?.openai,
+              codexCommandPath:
+                providerWorkspaceConfig.providers?.openai?.codexCommandPath ??
+                runtimeConfig.codexCommandPath,
+            },
             forceRefresh,
             signal: discoveryLifetime.current.signal,
           });
@@ -312,6 +327,7 @@ export function useModelCatalog(context: UseModelCatalogContext) {
       getInputDebugSnapshot,
       workspaceRoot,
       providerWorkspaceConfig.providers?.openai,
+      runtimeConfig.codexCommandPath,
       activeProviderRoute.modelId,
     ],
   );
@@ -463,15 +479,25 @@ export function useModelCatalog(context: UseModelCatalogContext) {
       }
       setAuthStatusBusy(true);
       setAuthStatus((prev) => ({ ...prev, state: "checking" }));
+      benchTrace.startupMarkOnce("auth-probe-start");
 
       try {
-        const result = await probeCodexAuthStatus();
+        // Probe the same binary the OpenAI route runs, not whatever `codex` PATH resolves.
+        const result = await probeCodexAuthStatus({
+          codexCommandPath:
+            latest.current.providerWorkspaceConfig.providers?.openai?.codexCommandPath ??
+            latest.current.runtimeConfig.codexCommandPath,
+          cwd: workspaceRoot,
+          signal: discoveryLifetime.current.signal,
+        });
+        if (discoveryLifetime.current.signal.aborted) return;
         setAuthStatus(result);
         if (announce) {
           appendEvent("system", "Auth status", getAuthStatusMessage(result));
           void ensureProviderModels(activeProviderRoute.providerId, true);
         }
       } catch (error) {
+        if (discoveryLifetime.current.signal.aborted) return;
         const message = errorMessage(error, "Unknown auth probe failure");
         const fallback: CodexAuthProbeResult = {
           state: "unknown",
@@ -484,7 +510,8 @@ export function useModelCatalog(context: UseModelCatalogContext) {
           appendEvent("error", "Auth status probe failed", message);
         }
       } finally {
-        setAuthStatusBusy(false);
+        if (!discoveryLifetime.current.signal.aborted) setAuthStatusBusy(false);
+        benchTrace.startupMarkOnce("auth-probe-end");
       }
     },
     [appendEvent, ensureProviderModels, activeProviderRoute.providerId],

@@ -31,7 +31,7 @@ import { resolveProviderIdentity } from "../../core/providerLauncher/providerIde
 import { findProvider, isKnownProviderId } from "../../core/providerLauncher/registry.js";
 import type { ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
 import { discoverLocalModels } from "../../core/providerRuntime/local.js";
-import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/runtime.js";
+import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/lazyRuntime.js";
 import { discoverProviderModels } from "../../core/providerRuntime/registry.js";
 import type { BackendProvider } from "../../core/providers/types.js";
 import { errorMessage } from "../../core/shared/values.js";
@@ -339,7 +339,15 @@ export function useResumeFlows(context: ResumeFlowsContext) {
       const label = externalSourceLabel(summary.source);
       try {
         saveCurrentChatOrThrow();
-        const prepared = await buildExternalResumeLaunch(summary, { fallbackCwd: workspaceRoot });
+        const providers = providerWorkspaceConfig.providers;
+        const prepared = await buildExternalResumeLaunch(summary, {
+          fallbackCwd: workspaceRoot,
+          configuredPaths: {
+            claude: providers?.anthropic?.claudeCommandPath,
+            codex: providers?.openai?.codexCommandPath,
+            antigravity: providers?.google?.antigravityCommandPath,
+          },
+        });
         if (!isMountedRef.current) {
           return;
         }

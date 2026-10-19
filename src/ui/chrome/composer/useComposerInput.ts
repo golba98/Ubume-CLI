@@ -20,8 +20,10 @@
  * Cleanup: stdin listeners, raw-signal timers, the file-list debounce, the elapsed
  * timer and any pending paste burst are released on unmount.
  */
+
 import { useFocus, useInput, useStdin } from "ink";
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as benchTrace from "../../../core/perf/benchTrace.js";
 import { getStdinDebugState, traceInputDebug } from "../../../core/perf/debugLog.js";
 import * as renderDebug from "../../../core/perf/renderDebug.js";
 import { clampVisualText } from "../../../core/shared/text.js";
@@ -168,6 +170,9 @@ export function useComposerInput({
   const theme = themeName === "custom" ? inheritedTheme : (THEMES[themeName] ?? inheritedTheme);
   const { mode: layoutMode } = layout;
   const { isFocused } = useFocus({ id: FOCUS_IDS.composer, autoFocus: true });
+  useEffect(() => {
+    if (isFocused) benchTrace.startupMarkOnce("composer-focused");
+  }, [isFocused]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [scrollRow, setScrollRow] = useState(0);
   const persona = getComposerPersona(uiState);

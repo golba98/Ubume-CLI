@@ -57,6 +57,34 @@ export async function containedFile(root: string, path: string): Promise<string>
   return absolute;
 }
 /**
+ * Resolves the root once for one checkpoint operation. Directory checks stay fresh for
+ * every path: caching a successful lstat could miss a directory replaced by a symlink.
+ */
+export function createContainedFileResolver(root: string): (path: string) => Promise<string> {
+  let base: Promise<string> | undefined;
+  return async (path) => {
+    if (!safeProjectPath(path)) throw new Error(`Unsupported project path: ${path}`);
+    base ??= realpath(root);
+    const resolvedBase = await base;
+    const absolute = resolve(resolvedBase, path);
+    const rel = relative(resolvedBase, absolute);
+    if (rel.startsWith(`..${sep}`) || rel === "..")
+      throw new Error("Path is outside the workspace.");
+    let current = resolvedBase;
+    for (const part of rel.split(sep)) {
+      current = join(current, part);
+      try {
+        if ((await lstat(current)).isSymbolicLink())
+          throw new Error(`Symlink paths are unsupported: ${path}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return absolute;
+  };
+}
+
+/**
  * Lists supported project files using Git, with nested-ignore walking as fallback;
  * sensitive/generated paths are excluded.
  */
