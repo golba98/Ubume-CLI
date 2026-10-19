@@ -44,7 +44,7 @@ function chatRequest(modelId: string, maxNewTokens: number): ProviderChatRequest
     route: { providerId: "codexa-native", modelId, backendKind: "codexa-native-pytorch" },
     runtime: resolveRuntimeConfig(DEFAULT_RUNTIME_CONFIG),
     workspaceRoot: process.cwd(),
-    providerConfig: { codexaNative: { generation: { preset: "custom", do_sample: false, max_new_tokens, repetition_penalty: 1, seed: 42 } } },
+    providerConfig: { codexaNative: { generation: { preset: "custom", do_sample: false, max_new_tokens: maxNewTokens, repetition_penalty: 1, seed: 42 } } },
   };
 }
 

@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 const manifest = JSON.parse(readFileSync("package.json", "utf8"));
-const bunLock = Bun.JSONC.parse(readFileSync("bun.lock", "utf8"));
+const bunLock = Bun.JSONC.parse(readFileSync("bun.lock", "utf8")) as { packages: Record<string, LockEntry> };
 type LockEntry = [spec: string, integrity: string, metadata: Record<string, unknown>, checksum: string];
 const entries = bunLock.packages as Record<string, LockEntry>;
 
