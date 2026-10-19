@@ -218,6 +218,30 @@ test("presentation caches evict by count and characters and clear at lifecycle b
   assert.equal(cache.get("c"), undefined);
 });
 
+test("presentation caches keep recently hit entries and stay within both budgets", () => {
+  const cache = new MarkdownCache<number>(3, 100);
+  cache.set("a", 1);
+  cache.set("b", 2);
+  cache.set("c", 3);
+  assert.equal(cache.get("a"), 1); // a hit earns a second chance
+  cache.set("d", 4);
+  assert.equal(cache.get("a"), 1, "the recently hit entry survives");
+  assert.equal(cache.get("b"), undefined, "the oldest unreferenced entry is evicted");
+  for (let i = 0; i < 50; i += 1) {
+    cache.get("a");
+    cache.set(`k${i}`, i, 30);
+  }
+  let retainedCost = 0;
+  let retained = 0;
+  for (const key of ["a", "c", "d", ...Array.from({ length: 50 }, (_, i) => `k${i}`)]) {
+    if (cache.get(key) === undefined) continue;
+    retained += 1;
+    retainedCost += key === "a" || key === "c" || key === "d" ? 1 : 30;
+  }
+  assert.ok(retained <= 3);
+  assert.ok(retainedCost <= 100);
+});
+
 test("prose preserves trailing Windows and UNC path separators", () => {
   for (const source of [
     ["C:", "Users", "_test", "folder", ""].join("\\"),

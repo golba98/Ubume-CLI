@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/runtime.js";
+import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarness/lazyRuntime.js";
 import type {
   ConversationMessage,
   ConversationRecord,
@@ -91,12 +91,14 @@ export function useActiveConversation(context: ActiveConversationContext) {
     activeRunCaptureRef,
   } = context;
 
-  const persist = (record: ConversationRecord) => {
-    activeConversationRef.current = record;
+  // Builds the workbench snapshot once per save; the ref and the disk get the same one.
+  const persist = (record: Omit<ConversationRecord, "session">) => {
+    const current = { ...record, session: snapshotRef.current?.() };
+    activeConversationRef.current = current;
     saveConversationRecord(
-      record,
+      current,
       { conversationStore, snapshotRef, lastSaveErrorRef, appendEvent },
-      ACTIVE_SAVE_OPTIONS,
+      { ...ACTIVE_SAVE_OPTIONS, sessionIsCurrent: true },
     );
   };
 
@@ -112,7 +114,6 @@ export function useActiveConversation(context: ActiveConversationContext) {
     }
     persist({
       ...current,
-      session: snapshotRef.current?.(),
       metadata: preserveSavedRouteRef.current
         ? current.metadata
         : withRouteMetadata(current.metadata, activeProviderRoute),

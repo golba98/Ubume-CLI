@@ -296,18 +296,24 @@ function isNativeSessionReference(value: unknown): value is NativeSessionReferen
   );
 }
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+/**
+ * Replaces `filePath` atomically (readers see the old or the new file, never a partial one).
+ * `durable` (default) also fsyncs the file and its directory so the new content survives a
+ * crash; rebuildable caches pass `durable: false`, because losing their latest write only
+ * makes readers fall back to the canonical file.
+ */
+function atomicWriteJson(filePath: string, value: unknown, { durable = true } = {}): void {
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
   try {
     const file = openSync(temporaryPath, "wx", 0o600);
     try {
       writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-      fsyncSync(file);
+      if (durable) fsyncSync(file);
     } finally {
       closeSync(file);
     }
     renameSync(temporaryPath, filePath);
-    if (process.platform !== "win32") {
+    if (durable && process.platform !== "win32") {
       const directory = openSync(dirname(filePath), "r");
       try {
         fsyncSync(directory);
@@ -464,13 +470,15 @@ export class ConversationStore {
     // One authoritative generation; legacy files are read-only migration inputs.
     const snapshotPath = join(dir, "snapshot.json");
     atomicWriteJson(snapshotPath, { version: 2, metadata, messages, session: record.session });
-    // A cache failure must not turn a successful canonical save into a failure.
+    // A cache failure must not turn a successful canonical save into a failure. The cache is
+    // validated against the snapshot's revision on read, so it needs no fsync: a lost or stale
+    // summary after a crash only makes list() read the snapshot itself.
     try {
-      atomicWriteJson(join(dir, "summary.json"), {
-        version: 1,
-        revision: snapshotRevision(snapshotPath),
-        metadata,
-      });
+      atomicWriteJson(
+        join(dir, "summary.json"),
+        { version: 1, revision: snapshotRevision(snapshotPath), metadata },
+        { durable: false },
+      );
     } catch (error) {
       this.onDiagnostic(`Summary cache unavailable: ${errorMessage(error, "filesystem error")}`);
     }

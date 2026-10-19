@@ -24,3 +24,16 @@ test("createShellLineBatcher batches lines per stream and flushes once", async (
   await new Promise((resolve) => setTimeout(resolve, LIVE_UPDATE_FLUSH_MS + 20));
   assert.equal(emitted.length, 2, "cancel drops the pending timer");
 });
+
+test("large line batches avoid argument limits and cancellation releases pending output", () => {
+  const emitted: string[][] = [];
+  const batcher = createShellLineBatcher((stdout) => emitted.push(stdout));
+  const lines = Array.from({ length: 200_000 }, (_, index) => String(index));
+  batcher.enqueue("stdout", lines);
+  batcher.flush();
+  assert.deepEqual(emitted[0], lines);
+  batcher.enqueue("stdout", ["canceled"]);
+  batcher.cancel();
+  batcher.flush();
+  assert.equal(emitted.length, 1);
+});

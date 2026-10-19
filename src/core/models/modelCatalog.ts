@@ -183,6 +183,14 @@ export class ModelCatalog {
     private now: () => number = Date.now,
     private timeoutMs = 20_000,
   ) {}
+  /** Resource counts for diagnostics; never exposes connection identities or model data. */
+  getDiagnostics(): { entries: number; pending: number; listeners: number } {
+    return {
+      entries: this.entries.size,
+      pending: [...this.entries.values()].filter((entry) => entry.pending).length,
+      listeners: this.listeners.size,
+    };
+  }
   /**
    * Reads the currently published snapshot without contacting the provider.
    */
@@ -264,17 +272,15 @@ export class ModelCatalog {
     if (context.signal?.aborted) controller.abort();
     const work = async (): Promise<ProviderModelDiscoveryResult> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let rejectOnAbort: (() => void) | undefined;
       try {
         const result = await Promise.race([
           runtime.refreshModels
             ? runtime.refreshModels({ ...context, signal: controller.signal })
             : Promise.resolve(runtime.discoverModels()),
           new Promise<never>((_, reject) => {
-            controller.signal.addEventListener(
-              "abort",
-              () => reject(new Error("Model discovery canceled.")),
-              { once: true },
-            );
+            rejectOnAbort = () => reject(new Error("Model discovery canceled."));
+            controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
             timer = setTimeout(() => {
               reject(new Error("Model discovery timed out."));
               controller.abort();
@@ -335,6 +341,7 @@ export class ModelCatalog {
         return snapshot;
       } finally {
         clearTimeout(timer);
+        if (rejectOnAbort) controller.signal.removeEventListener("abort", rejectOnAbort);
         context.signal?.removeEventListener("abort", abort);
         if (this.entries.get(id) === entry && entry.generation === generation) {
           entry.pending = undefined;

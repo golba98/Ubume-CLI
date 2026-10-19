@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { afterEach } from "node:test";
@@ -300,4 +309,68 @@ test("ConversationStore round-trips the external session a conversation was impo
     source: "claude",
     sessionId: "8b442d14-cec1-417d-b1de-917c24801914",
   });
+});
+
+function storeWithDiagnostics(id: string) {
+  const root = mkdtempSync(join(tmpdir(), "ubume-conversations-"));
+  temporaryRoots.push(root);
+  const diagnostics: string[] = [];
+  const conversations = new ConversationStore("/workspace", {
+    rootDir: root,
+    now: () => new Date("2026-10-18T10:00:00.000Z"),
+    idFactory: () => id,
+    onDiagnostic: (message) => diagnostics.push(message),
+  });
+  const record = conversations.createConversation({
+    providerId: "openai",
+    modelId: "gpt-test",
+    backendKind: "codex-cli-auth",
+  });
+  record.messages.push({ role: "user", content: "First message" });
+  conversations.save(record);
+  return { root, conversations, record, diagnostics, dir: join(root, record.metadata.id) };
+}
+
+test("a failed canonical write leaves the previous snapshot intact and no temporary files", {
+  skip: process.platform === "win32" || process.getuid?.() === 0,
+}, () => {
+  const { conversations, record, dir } = storeWithDiagnostics("interrupted");
+  const before = readFileSync(join(dir, "snapshot.json"), "utf8");
+  record.messages.push({ role: "assistant", content: "Never persisted" });
+  chmodSync(dir, 0o500);
+  try {
+    assert.throws(() => conversations.save(record));
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  assert.equal(readFileSync(join(dir, "snapshot.json"), "utf8"), before);
+  assert.equal(conversations.load(record.metadata.id)?.messages.length, 1);
+  assert.deepEqual(
+    readdirSync(dir).filter((name) => name.endsWith(".tmp")),
+    [],
+  );
+});
+
+test("summary cache failures are isolated and list() falls back to the snapshot", () => {
+  const { conversations, record, diagnostics, dir } = storeWithDiagnostics("cache-failure");
+  // A directory where the cache file belongs makes every cache write fail.
+  rmSync(join(dir, "summary.json"));
+  mkdirSync(join(dir, "summary.json"));
+  record.messages.push({ role: "assistant", content: "Saved despite cache" });
+  conversations.save(record);
+  assert.match(diagnostics.join("\n"), /Summary cache unavailable/);
+  assert.equal(conversations.load(record.metadata.id)?.messages.length, 2);
+  assert.equal(conversations.list()[0]?.messageCount, 2);
+});
+
+test("a stale or truncated summary cache is never trusted", () => {
+  const { conversations, record, dir } = storeWithDiagnostics("stale-cache");
+  const stale = readFileSync(join(dir, "summary.json"), "utf8");
+  record.messages.push({ role: "assistant", content: "Second" });
+  conversations.save(record);
+  // Simulates a crash that kept an older cache (or lost the unsynced latest one).
+  writeFileSync(join(dir, "summary.json"), stale);
+  assert.equal(conversations.list()[0]?.messageCount, 2);
+  writeFileSync(join(dir, "summary.json"), stale.slice(0, 10));
+  assert.equal(conversations.list()[0]?.messageCount, 2);
 });
