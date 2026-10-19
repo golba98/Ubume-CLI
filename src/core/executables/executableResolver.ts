@@ -379,16 +379,25 @@ interface CachedExecutableOptions {
 function createCachedExecutableResolver(
   spec: (options?: CachedExecutableOptions) => ExecutableResolverOptions,
 ) {
-  let cached: string | null = null;
+  let cached: { key: string; executable: string } | null = null;
   return {
     reset: () => {
       cached = null;
     },
     resolve: async (options?: CachedExecutableOptions): Promise<string> => {
       const cacheable = !options?.configuredPath && !options?.runCommandImpl;
-      if (cacheable && cached !== null) return cached;
-      const result = await resolveExecutable(spec(options));
-      if (cacheable) cached = result;
+      const resolution = spec(options);
+      const key = JSON.stringify([
+        resolution.cwd ?? process.cwd(),
+        process.env.PATH,
+        process.env.PATHEXT,
+        resolution.envOverrides?.map((name) => process.env[name]),
+        resolution.knownPathDirectories,
+        resolution.knownFilePaths,
+      ]);
+      if (cacheable && cached?.key === key) return cached.executable;
+      const result = await resolveExecutable(resolution);
+      if (cacheable) cached = { key, executable: result };
       return result;
     },
   };

@@ -9,7 +9,7 @@ import {
   mergeRuntimeIntoTomlConfig,
   resolveLayeredConfig,
 } from "./layeredConfig.js";
-import { DEFAULT_RUNTIME_CONFIG } from "./runtimeConfig.js";
+import { DEFAULT_RUNTIME_CONFIG, resolveRuntimeConfig } from "./runtimeConfig.js";
 
 test("resolves user config, trusted project config, profiles, and CLI overrides deterministically", async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "ubume-layered-config-"));
@@ -361,4 +361,60 @@ test("handles antigravity_command_path override and reports gemini_command_path 
       entry.includes("gemini_command_path (removed; not an Antigravity executable)"),
     ),
   );
+});
+
+test("codex_command_path follows user < profile < CLI precedence and survives resolution", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "ubume-layered-codex-path-"));
+  const tempHome = join(tempRoot, "home");
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = tempHome;
+  const launchArgs = (profile: string | null, configOverrides: string[] = []) => ({
+    help: false,
+    version: false,
+    initialPrompt: null,
+    profile,
+    configOverrides,
+    passthroughArgs: [],
+    modelOverride: null,
+    noClear: false,
+  });
+  try {
+    mkdirSync(tempHome, { recursive: true });
+    writeFileSync(
+      join(tempHome, "config.toml"),
+      [
+        'codex_command_path = "/opt/user/codex"',
+        "[profiles.alt]",
+        'codexCommandPath = "/opt/profile/codex"',
+        "[profiles.blank]",
+        'codex_command_path = "  "',
+      ].join("\n"),
+    );
+    const workspaceRoot = join(tempRoot, "workspace");
+    mkdirSync(workspaceRoot);
+    const user = resolveLayeredConfig({ workspaceRoot, launchArgs: launchArgs(null) });
+    assert.equal(user.runtime.codexCommandPath, "/opt/user/codex");
+    assert.match(user.diagnostics.fieldSources.codexCommandPath, /User config/i);
+    assert.equal(resolveRuntimeConfig(user.runtime).codexCommandPath, "/opt/user/codex");
+
+    const profile = resolveLayeredConfig({ workspaceRoot, launchArgs: launchArgs("alt") });
+    assert.equal(profile.runtime.codexCommandPath, "/opt/profile/codex");
+
+    const cli = resolveLayeredConfig({
+      workspaceRoot,
+      launchArgs: launchArgs("alt", ['codex_command_path="/opt/cli/codex"']),
+    });
+    assert.equal(cli.runtime.codexCommandPath, "/opt/cli/codex");
+    assert.match(cli.diagnostics.fieldSources.codexCommandPath, /CLI override/i);
+
+    const blank = resolveLayeredConfig({ workspaceRoot, launchArgs: launchArgs("blank") });
+    assert.equal(blank.runtime.codexCommandPath, "/opt/user/codex");
+    assert.ok(
+      blank.diagnostics.ignoredEntries.some((entry) => entry.includes("codex_command_path")),
+    );
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });

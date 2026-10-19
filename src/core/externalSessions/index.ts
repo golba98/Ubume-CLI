@@ -80,9 +80,17 @@ type ExternalResumeLaunchResult =
   | { ok: true; launch: ExternalResumeLaunch }
   | { ok: false; message: string };
 
+/** Configured provider executables (from providers.json), honored before env/PATH lookup. */
+export interface ExternalSessionExecutablePaths {
+  claude?: string;
+  codex?: string;
+  antigravity?: string;
+}
+
 interface ResumeLaunchOptions {
   /** Current folder retained for API compatibility; unknown original workspaces are never guessed. */
   fallbackCwd: string;
+  configuredPaths?: ExternalSessionExecutablePaths;
   resolveExecutable?: (source: ExternalSessionSource) => Promise<string>;
   folderExists?: (path: string) => boolean;
 }
@@ -101,19 +109,28 @@ function resumeArgs(summary: ExternalSessionSummary): string[] {
   }
 }
 
-/** Honors CLAUDE_EXECUTABLE / CODEX_EXECUTABLE / AGY_EXECUTABLE / VIBE_EXECUTABLE like the provider runtimes do. */
-function resolveSourceExecutable(source: ExternalSessionSource, cwd: string): Promise<string> {
+/**
+ * Resolves the native CLI like the provider runtimes do: a configured path first, then
+ * CLAUDE_EXECUTABLE / CODEX_EXECUTABLE / AGY_EXECUTABLE / VIBE_EXECUTABLE, then PATH.
+ */
+function resolveSourceExecutable(
+  source: ExternalSessionSource,
+  cwd: string,
+  configured: ExternalSessionExecutablePaths = {},
+): Promise<string> {
   switch (source) {
     case "claude":
-      return resolveClaudeExecutable();
+      return resolveClaudeExecutable({ configuredPath: configured.claude });
     case "codex":
-      return resolveCodexExecutable();
+      return resolveCodexExecutable({ configuredPath: configured.codex });
     case "google":
     case "antigravity":
-      return resolveAgyExecutable({ cwd }).then(async (executable) => {
-        await verifyAgyExecutable(executable, { cwd });
-        return executable;
-      });
+      return resolveAgyExecutable({ cwd, configuredPath: configured.antigravity }).then(
+        async (executable) => {
+          await verifyAgyExecutable(executable, { cwd });
+          return executable;
+        },
+      );
     case "vibe":
       return resolveVibeExecutable().then((path) => {
         if (!path) throw new Error("Mistral Vibe executable is unavailable.");
@@ -151,7 +168,8 @@ export async function buildExternalResumeLaunch(
     return { ok: false, message: `The session's folder no longer exists: ${cwd}` };
   }
   const executable = await (
-    options.resolveExecutable ?? ((source) => resolveSourceExecutable(source, cwd))
+    options.resolveExecutable ??
+    ((source) => resolveSourceExecutable(source, cwd, options.configuredPaths))
   )(summary.source);
   return { ok: true, launch: { displayName, executable, args: resumeArgs(summary), cwd } };
 }

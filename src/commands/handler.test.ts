@@ -36,6 +36,7 @@ const baseConfig: LayeredConfigResult = {
       mode: "Built-in defaults",
       planMode: "Built-in defaults",
       antigravityCommandPath: "Built-in defaults",
+      codexCommandPath: "Built-in defaults",
       "policy.approvalPolicy": "Built-in defaults",
       "policy.sandboxMode": "Built-in defaults",
       "policy.networkAccess": "Built-in defaults",

@@ -268,3 +268,47 @@ test("spawnCodexProcess rejects executable candidates with injected commands or 
     );
   }
 });
+
+test("Codex resolver: changed environment invalidates cached selection without a reset", async () => {
+  await withEnv({ CODEX_EXECUTABLE: "first-fake" }, async () => {
+    assert.equal(await resolveCodexExecutable(), "first-fake");
+    process.env.CODEX_EXECUTABLE = "second-fake";
+    assert.equal(await resolveCodexExecutable(), "second-fake");
+    process.env.CODEX_EXECUTABLE = "/missing/explicit/codex";
+    await assert.rejects(resolveCodexExecutable, /does not exist/);
+  });
+});
+
+test("Codex resolver: missing configured executable cannot fall back to cached or env selection", async () => {
+  await withEnv({ CODEX_EXECUTABLE: "env-fake" }, async () => {
+    await resolveCodexExecutable();
+    await assert.rejects(
+      () => resolveCodexExecutable({ configuredPath: "/missing/explicit/codex" }),
+      /does not exist/,
+    );
+    assert.equal(await resolveCodexExecutable(), "env-fake");
+  });
+});
+
+test("Codex resolver: relative explicit paths use the requested workspace", async () => {
+  const root = join(tmpdir(), `ubume-relative-executable-${Date.now()}`);
+  mkdirSync(root);
+  const target = join(root, "fake codex");
+  writeFileSync(target, "fixture", { mode: 0o700 });
+  try {
+    await withEnv({ CODEX_EXECUTABLE: "unused-env-fake" }, async () => {
+      assert.equal(
+        await resolveCodexExecutable({ cwd: root, configuredPath: "./fake codex" }),
+        target,
+      );
+      process.env.CODEX_EXECUTABLE = "./fake codex";
+      assert.equal(await resolveCodexExecutable({ cwd: root }), target);
+      await assert.rejects(
+        () => resolveCodexExecutable({ cwd: join(root, "other") }),
+        /does not exist/,
+      );
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

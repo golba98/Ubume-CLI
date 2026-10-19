@@ -129,7 +129,10 @@ export async function prepareCodexExecLaunch(
   const capabilityResolver = dependencies.getCapabilities ?? getCodexCliCapabilities;
   const diagnosticsLogger = dependencies.diagnosticsLogger;
   perf.mark("exec_resolve_start");
-  const executable = await executableResolver({ configuredPath: options.codexCommandPath });
+  const executable = await executableResolver({
+    configuredPath: options.codexCommandPath,
+    cwd: options.cwd,
+  });
   perf.mark("exec_resolve_end");
   perf.mark("caps_probe_start");
   const capabilities = options.probeCapabilities
