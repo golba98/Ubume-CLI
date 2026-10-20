@@ -28,6 +28,11 @@ export const FOCUS_IDS = {
   modePicker: "mode-picker",
   reasoningPicker: "reasoning-picker",
   themePicker: "theme-picker",
+  preferencesPanel: "preferences-panel",
+  startupLogoPicker: "startup-logo-picker",
+  startupAnimationPicker: "startup-animation-picker",
+  startupHeaderPicker: "startup-header-picker",
+  startupRenderingPicker: "startup-rendering-picker",
   settingsPanel: "settings-panel",
   authPanel: "auth-panel",
   permissionsPanel: "permissions-panel",
@@ -75,6 +80,16 @@ export function getFocusTargetForScreen(screen: Screen): FocusTargetId {
       return FOCUS_IDS.reasoningPicker;
     case "theme-picker":
       return FOCUS_IDS.themePicker;
+    case "preferences":
+      return FOCUS_IDS.preferencesPanel;
+    case "startup-logo-picker":
+      return FOCUS_IDS.startupLogoPicker;
+    case "startup-header-picker":
+      return FOCUS_IDS.startupHeaderPicker;
+    case "startup-rendering-picker":
+      return FOCUS_IDS.startupRenderingPicker;
+    case "startup-animation-picker":
+      return FOCUS_IDS.startupAnimationPicker;
     case "settings-panel":
       return FOCUS_IDS.settingsPanel;
     case "auth-panel":

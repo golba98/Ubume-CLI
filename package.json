@@ -152,7 +152,9 @@
     "@opentelemetry/api": "1.9.1",
     "express": "5.2.1",
     "zod": "4.5.4",
-    "string-width": "^8.2.0"
+    "sharp": "0.35.5",
+    "string-width": "^8.2.0",
+    "sixel": "0.16.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

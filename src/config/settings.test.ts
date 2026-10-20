@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   DEFAULT_MODE,
   DEFAULT_SHOW_BUSY_LOADER,
+  DEFAULT_STARTUP_ANIMATION,
+  DEFAULT_STARTUP_LOGO_STYLE,
   DEFAULT_TERMINAL_TITLE_MODE,
   DEFAULT_WORKSPACE_DISPLAY_MODE,
   estimateTokens,
@@ -14,9 +16,11 @@ import {
   formatModeCommandHelp,
   formatModeLabel,
   formatReasoningLabel,
+  formatStartupLogoStyleLabel,
   formatTerminalTitleModeLabel,
   formatTerminalTitlePath,
   formatThemeLabel,
+  formatWorkspaceBrandingPath,
   formatWorkspaceDisplayModeLabel,
   formatWorkspaceDisplayPath,
   getCodexConfigFile,
@@ -28,7 +32,10 @@ import {
   getNextRotatingMode,
   getSettingsFile,
   getUbumeTrustStoreFile,
+  normalizeStartupAnimation,
+  normalizeStartupLogoStyle,
   resolveModeCommand,
+  STARTUP_LOGO_STYLES,
   USER_SETTING_DEFINITIONS,
 } from "./settings.js";
 
@@ -187,6 +194,39 @@ test("formats labels for backend, reasoning, theme, and estimates tokens", () =>
   assert.equal(formatAuthPreferenceLabel("chatgpt-login-goal"), "ChatGPT login goal");
   assert.equal(estimateTokens(100), 25);
   assert.equal(estimateTokens(0), 0);
+});
+
+test("startup logo styles expose labels and validate stored values", () => {
+  assert.equal(STARTUP_LOGO_STYLES.length, 3);
+  assert.equal(STARTUP_LOGO_STYLES.map((style) => style.id).join(","), "normal,minimal,simple");
+  assert.equal(formatStartupLogoStyleLabel("minimal"), "Minimal");
+  assert.equal(formatStartupLogoStyleLabel("unknown-style"), "unknown-style");
+  assert.equal(DEFAULT_STARTUP_LOGO_STYLE, "normal");
+  assert.equal(normalizeStartupLogoStyle("simple"), "simple");
+  assert.equal(normalizeStartupLogoStyle("hologram"), "normal");
+  assert.equal(normalizeStartupLogoStyle(null), "normal");
+  assert.equal(normalizeStartupLogoStyle(undefined), "normal");
+});
+
+test("startup animation normalizes persisted values with an enabled default", () => {
+  assert.equal(normalizeStartupAnimation(true), true);
+  assert.equal(normalizeStartupAnimation(false), false);
+  assert.equal(normalizeStartupAnimation("true"), true);
+  assert.equal(normalizeStartupAnimation(null), true);
+  assert.equal(normalizeStartupAnimation(undefined), true);
+  assert.equal(DEFAULT_STARTUP_ANIMATION, true);
+});
+
+test("workspace branding paths shorten the current home directory to ~", () => {
+  const home = getHomeDir();
+  assert.equal(
+    formatWorkspaceBrandingPath(join(home, "Development", "2-TypeScript", "8-Ubume CLI")),
+    "~/Development/2-TypeScript/8-Ubume CLI",
+  );
+  assert.equal(formatWorkspaceBrandingPath(home), "~");
+  assert.equal(formatWorkspaceBrandingPath("/srv/project"), "/srv/project");
+  assert.equal(formatWorkspaceBrandingPath(null), "");
+  assert.equal(formatWorkspaceBrandingPath("  "), "");
 });
 
 test("settings files follow HOME/USERPROFILE at call time, not at import time", () => {

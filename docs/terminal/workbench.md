@@ -30,6 +30,7 @@ delete, reorder, pause, or continue pending instructions.
 | Preview recovery | `/rewind` |
 | Resume | `/resume` picker (Ubume, Claude Code, Codex, Mistral Vibe), or `/resume <id>` |
 | Clear conversation | `/clear` |
+| Preferences | `/preferences` (Startup Logo, Color Theme) |
 | Exit | Ctrl+Q or `/exit`; on an empty prompt, Ctrl+C shows "Press Ctrl+C again to exit" for 2 seconds and a second press exits |
 
 Up/Down move through visual lines before entering prompt history. Leaving history
@@ -46,6 +47,101 @@ adapters use interrupt-and-continue: cancel the current process, await cleanup,
 and start one follow-up containing the pending instructions and current draft.
 The queue remains paused after this explicit continuation. Late callbacks from a
 canceled run cannot overwrite the new turn.
+
+## Appearance and preferences
+
+`/preferences` opens the centralized preferences panel. Today it holds the
+appearance category; more categories will be added over time.
+
+| Entry | Opens | Notes |
+|---|---|---|
+| Startup Logo | Startup Logo picker (Normal / Minimal / Simple) | Applies immediately and persists across restarts |
+| Startup Animation | Enabled / Disabled picker | Plays the compact logo's assembly animation at interactive startup (Minimal and Simple) |
+| Color Theme | The `/theme` picker | Same setting and same commit path as `/theme` |
+
+Keyboard controls: Up/Down (or `k`/`j`) move, Enter opens the highlighted
+entry, Esc closes the current screen and returns to the previous one. Inside
+the Color Theme picker, moving the cursor previews the highlighted theme
+immediately; Enter commits it and Escape restores the previously committed
+theme.
+
+A committed theme or logo style applies at once: the visible home screen is
+repainted atomically (the startup banner included) without clearing your
+terminal scrollback, and without touching the conversation, input buffer,
+provider or model. Transcript content that has already scrolled into history
+keeps the colors it was printed with; only the live region and future output
+use the new palette. Changing a theme never triggers provider calls or model
+requests.
+
+Startup logo styles:
+
+- **Normal** — the original large `UBUME` ASCII banner, with its existing layout
+  and behavior (the default for new and older configurations).
+- **Minimal / Simple** — the same developer mark on the left, sized to the terminal. The right
+  column shows `Ubume CLI vX.Y.Z`, the provider by default, and the current directory.
+  Metadata is truncated within its column; below 40 inner columns the logo is hidden.
+
+**Responsive size.** The mark grows in whole rows, always four columns per row, from 12×3
+cells up to 40×10: about one seventh of the terminal height or 18% of the header width,
+whichever is smaller (80×24 → 12×3, 100×30 → 16×4, 120×40 → 20×5, 160×45 → 24×6,
+200×60 → 32×8, 240×70 and larger → 40×10). The metadata column always keeps at least 24
+cells, the header always leaves room for the startup notice and composer, and taller marks
+center their metadata vertically. A small hysteresis band keeps the size steady while a
+window edge is dragged across a boundary. Solid and graphical output share one cell
+footprint, so the layout never shifts when an image replaces the solid fallback. Sizing
+lives in `src/ui/render/startupLogoLayout.ts`; a terminal cannot change its font size, so
+"larger" always means more cells, never a scaled font.
+
+While the compact header is live, every resize (width or height) repaints with a
+scrollback-inclusive clear, as every other screen does on width changes. A shrinking
+window pushes the top of the live frame (the header) into scrollback, and only that clear
+removes those copies; otherwise each small → big cycle would leave another header behind.
+Theme and logo changes, which do not change geometry, still redraw only the visible screen.
+
+`Startup Header → Middle Line` selects **Provider**, **Model**, **Provider + Model**,
+**Usage**, or **Hidden**. Hidden places the title and directory on adjacent rows.
+Usage prefers estimated context utilization, clearly labeled as an estimate. If no
+context window is known, it uses an already cached allowance for the current account
+scope, or displays `Usage unavailable`. Rendering never requests provider usage.
+The bottom provider/model/reasoning status bar is independent of this setting.
+
+`Appearance → Logo Rendering` offers **Auto**, **Kitty Graphics**, **iTerm2 Images**,
+**Sixel**, and **Solid Text**. The picker shows the effective backend and a live
+preview; press `r` to replay. Short viewports open a separate preview screen.
+Highlighting previews a renderer without persisting it; Enter saves the selection.
+
+Auto prefers positively verified Kitty placeholder placements, then native iTerm2
+images, then Sixel, and finally solid text. Native row-image placement requires a
+recognized terminal profile (WezTerm or iTerm2) and measured pixel cell dimensions;
+Sixel also requires a confirmed background color. Unknown or unsafe placements fall
+back rather than forcing escape sequences. Native row protocols are disabled inside
+multiplexers. Kitty through tmux requires successful end-to-end replies; Screen falls
+back. SSH uses inline data and the same positive capability checks.
+
+Sharp rasterizes the shared SVG to the measured cell region of the selected size while
+preserving its aspect ratio (the vector is rendered at the target resolution, never a
+scaled-up bitmap). The solid half-block fallback uses pixel-hinted versions
+of the same paths, with no Braille or dotted artwork. Its edges are necessarily coarser
+than graphical output. All protocols travel through Ink's existing frame writer.
+Kitty image residency is refreshed across screen-buffer changes, and after a resize the
+data-free placements are re-issued (≈350ms and 1.2s later) because Kitty can leave an image
+placed while it is still settling an OS-window resize unpainted until the next redraw.
+Native image tiles are placed and erased with their owning rows. If an image cannot be
+prepared (for example Sharp is unavailable), the header falls back to solid text for the
+session and Logo Rendering reports "Image rendering failed". Once the header enters scrollback it
+uses solid text. Historical rows retain their original colors.
+
+**Startup animation.** Minimal and Simple show the slash first, then inward-moving
+brackets, a short theme highlight, and the completed mark. Fourteen sampled frames use eased movement over
+520ms. Late frames are skipped rather than extending the animation. Input is available throughout. Theme, provider, model and usage changes do not
+replay the animation. Disabling Startup Animation or setting
+`UBUME_NO_STARTUP_ANIMATION=1` renders the completed mark immediately. Non-TTY and
+small-terminal output never animates. No animation timer remains after completion.
+
+Settings persist in `~/.ubume-settings.json`: `ui.theme`, `ui.startup_logo_style`,
+`ui.startup_animation`, `ui.startup_logo_rendering`, and `ui.startup_header_middle_line`.
+Missing or invalid new values default to Auto rendering and Provider middle line.
+Changing a header preference leaves the bottom bar and provider session intact.
 
 ## Inspect and recover
 

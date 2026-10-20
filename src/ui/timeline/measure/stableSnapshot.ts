@@ -77,6 +77,12 @@ function buildStableIntroRows(
     item.intro.authLabel,
     textCacheToken(item.intro.workspaceLabel),
     item.intro.providerLabel ?? "",
+    item.intro.modelLabel ?? "",
+    item.intro.middleLine ?? "provider",
+    item.intro.startupModelLabel ?? "",
+    item.intro.usageLabel ?? "",
+    textCacheToken(item.intro.workspacePath ?? ""),
+    item.intro.logoStyle ?? "normal",
   ]);
   return getCachedFrozenRows(cacheKey, () => buildIntroRows(item, innerWidth));
 }
@@ -442,7 +448,7 @@ export function buildTimelineSnapshot(
     let builtRows: TimelineRow[];
 
     if (item.type === "intro") {
-      const cacheKey = `i:${item.key}:${innerWidth}:${item.intro.version}:${item.intro.layoutMode}:${item.intro.startupHeaderMode ?? ""}:${item.intro.authLabel}:${item.intro.workspaceLabel}:${item.intro.providerLabel ?? ""}:v${LOGO_LARGE_MIN_COLS}`;
+      const cacheKey = `i:${item.key}:${innerWidth}:${item.intro.version}:${item.intro.layoutMode}:${item.intro.startupHeaderMode ?? ""}:${item.intro.authLabel}:${item.intro.workspaceLabel}:${item.intro.providerLabel ?? ""}:${item.intro.modelLabel ?? ""}:${item.intro.workspacePath ?? ""}:${item.intro.logoStyle ?? "normal"}:v${LOGO_LARGE_MIN_COLS}`;
       builtRows = getStaticRows(cacheKey, () => buildIntroRows(item, innerWidth), {
         itemKey: item.key,
         itemType: "intro",

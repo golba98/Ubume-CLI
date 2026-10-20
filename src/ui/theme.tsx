@@ -241,6 +241,17 @@ export const THEMES: Record<string, Theme> = {
 
 const ThemeContext = createContext<Theme>(DARK_THEME);
 
+/**
+ * Resolve a persisted theme name (plus optional custom overrides) to a concrete
+ * palette outside React — the same rules `ThemeProvider` applies in-tree.
+ * Unknown names fall back to `dark`; `"custom"` layers `customTheme` over
+ * `DARK_THEME`. Used by pre-render output like the startup logo animation.
+ */
+export function resolveThemeByName(themeName: string, customTheme?: Partial<Theme>): Theme {
+  if (themeName === "custom") return { ...DARK_THEME, ...customTheme } as Theme;
+  return THEMES[themeName] ?? DARK_THEME;
+}
+
 interface ThemeProviderProps {
   /** Theme name; unknown names fall back to `dark`. `"custom"` selects `customTheme`. */
   theme?: string;
@@ -263,9 +274,8 @@ export function ThemeProvider({
     themeName,
     customTheme: Boolean(customTheme),
   });
-  const baseTheme = THEMES[themeName] || DARK_THEME;
-  const activeTheme = themeName === "custom" ? { ...DARK_THEME, ...customTheme } : baseTheme;
-  return <ThemeContext.Provider value={activeTheme as Theme}>{children}</ThemeContext.Provider>;
+  const activeTheme = resolveThemeByName(themeName, customTheme);
+  return <ThemeContext.Provider value={activeTheme}>{children}</ThemeContext.Provider>;
 }
 
 /** Current palette; `DARK_THEME` when rendered outside a `ThemeProvider` (e.g. in tests). */

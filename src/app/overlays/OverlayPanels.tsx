@@ -1,3 +1,14 @@
+import {
+  APP_VERSION,
+  formatWorkspaceBrandingPath,
+  STARTUP_HEADER_LINES,
+  type StartupHeaderMiddleLine,
+  type StartupLogoRendering,
+} from "../../config/settings.js";
+import { logoRendererStatus } from "../../core/terminal/startupGraphics.js";
+import { formatUbumeVersionLabel } from "../../core/version/channel.js";
+import { LogoRenderingPanel } from "../../ui/panels/LogoRenderingPanel.js";
+import { useStartupGraphicsCapabilities } from "../../ui/render/useStartupGraphicsCapabilities.js";
 /**
  * Renders whichever overlay the current `screen` names: pickers, panels,
  * viewers and prompts shown in the alternate screen above the transcript.
@@ -23,7 +34,12 @@ import {
   type AuthPreference,
   type AvailableMode,
   type AvailableModel,
+  formatStartupLogoStyleLabel,
+  formatThemeLabel,
+  normalizeStartupLogoStyle,
   type ReasoningLevel,
+  STARTUP_LOGO_STYLES,
+  type StartupLogoStyle,
   USER_SETTING_DEFINITIONS,
   type UserSettingValues,
 } from "../../config/settings.js";
@@ -78,7 +94,7 @@ import {
 } from "../../ui/panels/ExternalSessionViewer.js";
 import { ModelPickerScreen } from "../../ui/panels/ModelPickerScreen.js";
 import { PermissionsPanel, type PermissionsPanelAction } from "../../ui/panels/PermissionsPanel.js";
-
+import { type PreferencesEntry, PreferencesPanel } from "../../ui/panels/PreferencesPanel.js";
 import { type LocalBackendStatus, ProviderPicker } from "../../ui/panels/ProviderPicker.js";
 import { ProviderSetupPrompt } from "../../ui/panels/ProviderSetupPrompt.js";
 import { ResumePicker } from "../../ui/panels/ResumePicker.js";
@@ -224,6 +240,22 @@ interface OverlayPanelsProps {
   currentUserSettings: UserSettingValues;
   saveSettingsFromPanel: (nextSettings: UserSettingValues) => void;
 
+  // Preferences panel
+  startupLogoStyle: StartupLogoStyle;
+  commitStartupLogoStyle: (style: StartupLogoStyle) => void;
+  startupAnimation: boolean;
+  startupHeaderMiddleLine: StartupHeaderMiddleLine;
+  setStartupHeaderMiddleLine: (value: StartupHeaderMiddleLine) => void;
+  startupLogoRendering: StartupLogoRendering;
+  startupPreviewProvider?: string | null;
+  startupPreviewModel?: string;
+  startupPreviewUsage?: string;
+  setStartupLogoRendering: (value: StartupLogoRendering) => void;
+  setStartupAnimation: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Screen the theme picker returns to when it was opened from /preferences. */
+  themePickerReturnScreen: Screen;
+  setThemePickerReturnScreen: React.Dispatch<React.SetStateAction<Screen>>;
+
   // Import confirmation and tool approval
   pendingImport: {
     prompt: string;
@@ -351,6 +383,21 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     currentUserSettings,
     saveSettingsFromPanel,
 
+    // Preferences panel
+    startupLogoStyle,
+    commitStartupLogoStyle,
+    startupAnimation,
+    startupHeaderMiddleLine,
+    setStartupHeaderMiddleLine,
+    startupLogoRendering,
+    startupPreviewProvider,
+    startupPreviewModel,
+    startupPreviewUsage,
+    setStartupLogoRendering,
+    setStartupAnimation,
+    themePickerReturnScreen,
+    setThemePickerReturnScreen,
+
     // Import confirmation and tool approval
     pendingImport,
     workspaceRoot,
@@ -448,7 +495,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
   const commitTheme = (value: string) => {
     clearThemePreviewTimer();
     repaintCommittedTheme(value);
-    setScreen("main");
+    setScreen(themePickerReturnScreen);
+    setThemePickerReturnScreen("main");
     // The custom theme starts from Purple the first time it is chosen.
     if (value === "custom" && !customTheme) {
       setCustomTheme({ ...THEMES.purple });
@@ -463,8 +511,74 @@ export function OverlayPanels(props: OverlayPanelsProps) {
   const cancelThemePicker = () => {
     clearThemePreviewTimer();
     setThemeSelection((current) => cancelThemeSelection(current));
-    setScreen("main");
+    setScreen(themePickerReturnScreen);
+    setThemePickerReturnScreen("main");
   };
+
+  // --- Preferences panel --------------------------------------------------------------
+
+  const selectPreferencesEntry = (entry: PreferencesEntry) => {
+    if (entry.target === "theme-picker") {
+      // The theme picker commits through the same repaintCommittedTheme path
+      // as /theme; it just returns to the preferences panel afterwards.
+      setThemePickerReturnScreen("preferences");
+      setScreen("theme-picker");
+      return;
+    }
+    setScreen(entry.target);
+  };
+
+  const selectStartupLogoStyle = (value: string) => {
+    commitStartupLogoStyle(normalizeStartupLogoStyle(value));
+    setScreen("preferences");
+  };
+
+  const { capabilities: graphicsCapabilities, trueColor: graphicsTrueColor } =
+    useStartupGraphicsCapabilities();
+  const graphicsStatus = logoRendererStatus(
+    startupLogoRendering,
+    graphicsCapabilities,
+    graphicsTrueColor,
+  );
+
+  const selectStartupAnimation = (value: string) => {
+    setStartupAnimation(value === "on");
+    setScreen("preferences");
+  };
+
+  const preferencesEntries: readonly PreferencesEntry[] = [
+    {
+      id: "startup-logo",
+      label: "Startup Logo",
+      value: formatStartupLogoStyleLabel(startupLogoStyle),
+      target: "startup-logo-picker",
+    },
+    {
+      id: "startup-animation",
+      label: "Startup Animation",
+      value: startupAnimation ? "Enabled" : "Disabled",
+      target: "startup-animation-picker",
+    },
+    {
+      id: "color-theme",
+      label: "Color Theme",
+      value: formatThemeLabel(themeSelection.committedTheme),
+      target: "theme-picker",
+    },
+    {
+      id: "startup-rendering",
+      label: "Logo Rendering",
+      value: graphicsStatus,
+      target: "startup-rendering-picker",
+    },
+    {
+      id: "startup-header",
+      label: "Middle Line",
+      section: "Startup Header",
+      value: STARTUP_HEADER_LINES.find((entry) => entry.id === startupHeaderMiddleLine)!.label,
+      target: "startup-header-picker",
+    },
+  ];
 
   // --- Codexa settings -----------------------------------------------------------------
 
@@ -727,6 +841,91 @@ export function OverlayPanels(props: OverlayPanelsProps) {
           onSelect={commitTheme}
           onHighlight={previewTheme}
           onCancel={cancelThemePicker}
+        />
+      )}
+
+      {screen === "preferences" && (
+        <PreferencesPanel
+          focusId={FOCUS_IDS.preferencesPanel}
+          entries={preferencesEntries}
+          onSelect={selectPreferencesEntry}
+          onCancel={() => setScreen("main")}
+        />
+      )}
+
+      {screen === "startup-logo-picker" && (
+        <SelectionPanel
+          focusId={FOCUS_IDS.startupLogoPicker}
+          title="Startup Logo"
+          subtitle="Choose how Ubume presents itself on startup"
+          items={STARTUP_LOGO_STYLES.map((style) => ({
+            label: style.id === startupLogoStyle ? `${style.label}  ✓` : style.label,
+            value: style.id,
+          }))}
+          initialValue={startupLogoStyle}
+          onSelect={selectStartupLogoStyle}
+          onCancel={() => setScreen("preferences")}
+        />
+      )}
+
+      {screen === "startup-header-picker" && (
+        <SelectionPanel
+          focusId={FOCUS_IDS.startupHeaderPicker}
+          title="Middle Line"
+          subtitle="Startup header only; the bottom model status stays visible"
+          items={STARTUP_HEADER_LINES.map((entry) => ({
+            label: entry.label + (entry.id === startupHeaderMiddleLine ? "  ✓" : ""),
+            value: entry.id,
+          }))}
+          initialValue={startupHeaderMiddleLine}
+          onSelect={(value) => {
+            setStartupHeaderMiddleLine(value as StartupHeaderMiddleLine);
+            setScreen("preferences");
+          }}
+          onCancel={() => setScreen("preferences")}
+        />
+      )}
+      {screen === "startup-rendering-picker" && (
+        <LogoRenderingPanel
+          focusId={FOCUS_IDS.startupRenderingPicker}
+          value={startupLogoRendering}
+          animation={startupAnimation}
+          item={{
+            key: "startup-preview",
+            type: "intro",
+            padded: false,
+            intro: {
+              version: formatUbumeVersionLabel(APP_VERSION),
+              layoutMode: "regular",
+              authLabel: "",
+              workspaceLabel: "",
+              logoStyle: "minimal",
+              providerLabel: startupPreviewProvider ?? activeRouteProvider.displayName,
+              startupModelLabel: startupPreviewModel,
+              usageLabel: startupPreviewUsage,
+              workspacePath: formatWorkspaceBrandingPath(workspaceRoot),
+              middleLine: startupHeaderMiddleLine,
+            },
+          }}
+          onSelect={(value) => {
+            setStartupLogoRendering(value);
+            setScreen("preferences");
+          }}
+          onCancel={() => setScreen("preferences")}
+        />
+      )}
+      {screen === "startup-animation-picker" && (
+        <SelectionPanel
+          focusId={FOCUS_IDS.startupAnimationPicker}
+          title="Startup Animation"
+          subtitle="Play the logo assembly animation when Ubume starts"
+          items={[
+            { label: startupAnimation ? "Enabled  ✓" : "Enabled", value: "on" },
+            { label: !startupAnimation ? "Disabled  ✓" : "Disabled", value: "off" },
+          ]}
+          initialValue={startupAnimation ? "on" : "off"}
+          onSelect={selectStartupAnimation}
+          onCancel={() => setScreen("preferences")}
         />
       )}
 

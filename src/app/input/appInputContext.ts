@@ -111,6 +111,7 @@ export interface UseAppInputContext {
   openReasoningPicker: () => void;
   openSettingsPanel: () => void;
   openThemePicker: () => void;
+  openPreferencesPanel: () => void;
   openPermissionsPanel: () => void;
   openAuthPanel: () => void;
   openUsagePanel: () => void;

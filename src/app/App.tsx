@@ -1,3 +1,4 @@
+import { startupHeaderUsage } from "../ui/render/startupHeaderUsage.js";
 /**
  * The interactive app's root component.
  *
@@ -75,7 +76,7 @@ import { measurePlanActionPickerRows } from "../ui/panels/PlanActionPicker.js";
 import { measureTextEntryPanelRows } from "../ui/panels/TextEntryPanel.js";
 import { buildActiveRuntimeDisplay, runtimeDisplayToSummary } from "../ui/render/runtimeDisplay.js";
 import { getDisplayedThemeName, THEMES, ThemeProvider } from "../ui/theme.js";
-import { TranscriptShell } from "../ui/timeline/TranscriptShell.js";
+import { isTranscriptEvent, TranscriptShell } from "../ui/timeline/TranscriptShell.js";
 import { rewindCheckpoints } from "./conversation/conversationMetadata.js";
 import { useClearConversation } from "./conversation/useClearConversation.js";
 import { useConversation } from "./conversation/useConversation.js";
@@ -105,6 +106,7 @@ import { usePromptRun } from "./run/usePromptRun.js";
 import { useRunLifecycle } from "./run/useRunLifecycle.js";
 import { useRuntimeSettings } from "./settings/useRuntimeSettings.js";
 import { useSettings } from "./settings/useSettings.js";
+import { useStartupLogoCommit } from "./settings/useStartupLogoCommit.js";
 import { useThemeCommit } from "./settings/useThemeCommit.js";
 import { useAppState } from "./state/useAppState.js";
 
@@ -130,6 +132,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     initialProviderWorkspaceConfig,
     terminalLayout,
     terminalLayoutColsRef,
+    terminalLayoutRowsRef,
     staticRepaintGeneration,
     bumpStaticRepaintGeneration,
     staticRepaintGenerationRef,
@@ -139,6 +142,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     workspaceDisplayMode,
     terminalTitleMode,
     showBusyLoader,
+    startupLogoStyle,
+    startupAnimation,
+    setStartupAnimation,
+    startupHeaderMiddleLine,
+    setStartupHeaderMiddleLine,
+    startupLogoRendering,
+    setStartupLogoRendering,
     providerWorkspaceConfig,
     localBackendStatuses,
     pendingRouteProviderId,
@@ -221,6 +231,10 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   // Live Ink instance behind this stdout, used to reset Ink's frame caches on
   // the /clear boundary so the next frame is authoritative (see handleClear).
   const inkInstance = useMemo(() => resolveInkRenderInstance(stdout), [stdout]);
+  const liveStartupHeaderRef = useRef(false);
+  const reportStartupLive = useCallback((live: boolean) => {
+    liveStartupHeaderRef.current = live;
+  }, []);
   const clearFrameBoundaryController = useMemo(
     () =>
       createClearFrameBoundaryController({
@@ -231,14 +245,19 @@ export function App({ launchArgs, providerOverride }: AppProps) {
         onWidthResizeRefresh: () => bumpStaticRepaintGeneration((tick) => tick + 1),
         getRenderedRepaintGeneration: () => staticRepaintGenerationRef.current,
         getRenderedLayoutCols: () => terminalLayoutColsRef.current,
+        getRenderedLayoutRows: () => terminalLayoutRowsRef.current,
         // Read at frame-write time; screenRef is assigned during render, so it
         // always reflects the render that produced the frame being written.
         isOverlayActive: () => screenRef.current !== "main",
+        hasLiveStartupHeader: () => liveStartupHeaderRef.current,
       }),
     [inkInstance, stdout, terminalControl],
   );
   const [verboseMode, setVerboseMode] = useState(false);
   const [planFlow, setPlanFlow] = useState<PlanFlowState>(createInitialPlanFlowState);
+  // Which screen the theme picker returns to when it closes: the preferences
+  // panel sets this to itself, every other opener resets it to `main`.
+  const [themePickerReturnScreen, setThemePickerReturnScreen] = useState<Screen>("main");
 
   // The workbench snapshot saved with the active conversation. Defined as a
   // named builder, then assigned during render (never in an effect) so save
@@ -276,6 +295,47 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       clearFrameBoundaryController?.dispose();
     };
   }, [clearFrameBoundaryController]);
+
+  // ─── Appearance home repaint ─────────────────────────────────────────────────
+  // Normal's historical static banner needs the existing atomic home repaint.
+  // Compact branding stays live on home and recolors without remounting input.
+  // Switching between Normal and compact styles still needs a static reset.
+  // Requests wait for overlays to close; conversation history stays untouched.
+  const [homeRepaintTick, setHomeRepaintTick] = useState(0);
+  const lastRepaintStyleRef = useRef(startupLogoStyle);
+  const handledHomeRepaintTickRef = useRef(0);
+  const requestHomeRepaint = useCallback(() => {
+    setHomeRepaintTick((tick) => tick + 1);
+  }, []);
+  useEffect(() => {
+    if (homeRepaintTick === handledHomeRepaintTickRef.current) return;
+    if (screen !== "main") return;
+    handledHomeRepaintTickRef.current = homeRepaintTick;
+    const previousStyle = lastRepaintStyleRef.current;
+    lastRepaintStyleRef.current = startupLogoStyle;
+    // Compact home branding already reads the live theme. Repainting it would
+    // unnecessarily remount the composer and interrupt input readiness.
+    if (previousStyle !== "normal" && startupLogoStyle !== "normal") return;
+    if (previousStyle !== startupLogoStyle) {
+      if (
+        sessionState.staticEvents.some(isTranscriptEvent) ||
+        sessionState.activeEvents.some(isTranscriptEvent)
+      )
+        return;
+    } else if (sessionState.staticEvents.length > 0 || sessionState.activeEvents.length > 0) return;
+    if (!clearFrameBoundaryController?.requestHomeRepaint("appearanceChange")) return;
+    // The boundary acts on incoming frames; force one so the armed repaint
+    // begins immediately instead of waiting for an incidental re-render.
+    bumpPostClearRepaint((tick) => tick + 1);
+  }, [
+    bumpPostClearRepaint,
+    clearFrameBoundaryController,
+    homeRepaintTick,
+    screen,
+    sessionState.activeEvents.length,
+    sessionState.staticEvents.length,
+    startupLogoStyle,
+  ]);
 
   useEffect(() => {
     if (!clearFrameBoundaryController) return;
@@ -744,6 +804,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   const { repaintCommittedTheme } = useThemeCommit({
     ...appState,
     themeNoticeTimerRef,
+    requestHomeRepaint,
+  });
+
+  const { commitStartupLogoStyle } = useStartupLogoCommit({
+    ...appState,
+    themeNoticeTimerRef,
+    requestHomeRepaint,
   });
 
   // Mirror session values into refs read by async callbacks. The clear epoch
@@ -853,6 +920,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     currentModelCapability,
     model,
     runtimeConfig,
+    setThemePickerReturnScreen,
   });
   const { handlePermissionsPanelAction } = overlayRouting;
 
@@ -961,6 +1029,14 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     activeContextMetadata,
     setScreen,
   });
+
+  const startupUsageLabel = startupHeaderUsage(
+    estimateTokens(conversationChars),
+    currentModelSpec,
+    providerUsage.usageView,
+    providerUsage.usageScopeKey,
+    activeProviderRoute.providerId,
+  );
 
   const { handleSubmit } = useAppInput({
     ...appState,
@@ -1085,6 +1161,13 @@ export function App({ launchArgs, providerOverride }: AppProps) {
           workspaceLabel={workspaceLabel}
           workspaceRoot={workspaceRoot}
           runtimeSummary={headerRuntimeSummary}
+          logoStyle={startupLogoStyle}
+          onStartupLiveChange={reportStartupLive}
+          startupAnimation={startupAnimation}
+          startupHeaderMiddleLine={startupHeaderMiddleLine}
+          startupLogoRendering={startupLogoRendering}
+          startupModelLabel={activeRuntimeDisplay.modelOnlyDisplay}
+          startupUsageLabel={startupUsageLabel}
           staticEvents={staticEvents}
           activeEvents={activeEvents}
           uiState={uiState}
@@ -1196,6 +1279,19 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               setThemeSelection={setThemeSelection}
               currentUserSettings={currentUserSettings}
               saveSettingsFromPanel={saveSettingsFromPanel}
+              startupLogoStyle={startupLogoStyle}
+              commitStartupLogoStyle={commitStartupLogoStyle}
+              startupAnimation={startupAnimation}
+              setStartupAnimation={setStartupAnimation}
+              startupHeaderMiddleLine={startupHeaderMiddleLine}
+              setStartupHeaderMiddleLine={setStartupHeaderMiddleLine}
+              startupLogoRendering={startupLogoRendering}
+              startupPreviewProvider={headerRuntimeSummary.providerLabel}
+              startupPreviewModel={activeRuntimeDisplay.modelOnlyDisplay}
+              startupPreviewUsage={startupUsageLabel}
+              setStartupLogoRendering={setStartupLogoRendering}
+              themePickerReturnScreen={themePickerReturnScreen}
+              setThemePickerReturnScreen={setThemePickerReturnScreen}
               pendingImport={pendingImport}
               workspaceRoot={workspaceRoot}
               activeRouteProvider={activeRouteProvider}

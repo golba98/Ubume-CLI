@@ -117,7 +117,8 @@ export function useProviderUsage({
   }, [refreshUsage, setScreen]);
 
   return {
-    usageView: view,
+    usageView: view.scopeKey === target.scopeKey ? view : service.peek(target.scopeKey),
+    usageScopeKey: target.scopeKey,
     usageRefreshAvailableAt: target.adapter.passive ? 0 : view.nextRefreshAt,
     refreshUsage,
     openUsagePanel,

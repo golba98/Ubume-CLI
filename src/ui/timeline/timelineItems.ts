@@ -1,3 +1,4 @@
+import type { StartupHeaderMiddleLine } from "../../config/settings.js";
 /**
  * First stage of timeline rendering: session events → render items.
  *
@@ -10,10 +11,11 @@
  * Item keys (`turn-<turnId>`, `event-<id>`, `ubume-intro`) prefix every row
  * and cache key downstream, so they must stay stable. Pure; no caching.
  */
+
+import type { StartupLogoStyle } from "../../config/settings.js";
 import { APP_VERSION } from "../../config/settings.js";
 import type { CodexAuthState } from "../../core/codex/codexAuth.js";
 import { getAuthStateLabel } from "../../core/codex/codexAuth.js";
-
 import { formatUbumeVersionLabel } from "../../core/version/channel.js";
 import {
   getRunPlanText,
@@ -22,6 +24,7 @@ import {
   type UIState,
 } from "../../session/types.js";
 import type { Layout, StartupHeaderMode } from "../layout.js";
+import type { StartupLogoSize } from "../render/startupLogoLayout.js";
 
 import type {
   IntroRenderTimelineItem,
@@ -282,6 +285,17 @@ export function buildIntroRenderItem(params: {
   layout: Layout;
   startupHeaderMode?: StartupHeaderMode;
   providerLabel?: string | null;
+  /** Display label for the active model; omitted when none is resolved. */
+  modelLabel?: string | null;
+  middleLine?: StartupHeaderMiddleLine;
+  startupModelLabel?: string | null;
+  usageLabel?: string | null;
+  /** Tilde-shortened workspace path used by the compact logo styles. */
+  workspacePath?: string | null;
+  /** Startup branding presentation; defaults to the classic banner. */
+  logoStyle?: StartupLogoStyle;
+  /** Responsive compact mark size (see `render/startupLogoLayout.ts`). */
+  logoSize?: StartupLogoSize | null;
 }): IntroRenderTimelineItem {
   return {
     key: "ubume-intro",
@@ -294,6 +308,13 @@ export function buildIntroRenderItem(params: {
       authLabel: formatAuthLabel(params.authState),
       workspaceLabel: params.workspaceLabel,
       providerLabel: params.providerLabel ?? null,
+      modelLabel: params.modelLabel ?? null,
+      middleLine: params.middleLine,
+      startupModelLabel: params.startupModelLabel,
+      usageLabel: params.usageLabel,
+      workspacePath: params.workspacePath ?? null,
+      logoStyle: params.logoStyle ?? "normal",
+      logoSize: params.logoSize,
     },
   };
 }

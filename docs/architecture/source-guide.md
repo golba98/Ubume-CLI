@@ -84,7 +84,8 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | `src/app/run/useRunLifecycle.ts` | Finalizes and cancels runs, Esc handling, quit, transcript copy, plan files. |
 | `src/app/settings/useRuntimeSettings.ts` | Session runtime overrides and every `providers.json` write (`updateProviderWorkspaceConfig`, `persistActiveRoute`). |
 | `src/app/settings/useSettings.ts` | UI preference and runtime-policy setters, and the settings save payload. |
-| `src/app/settings/useThemeCommit.ts` | Commits a theme choice, saves it synchronously and shows the header notice. |
+| `src/app/settings/useThemeCommit.ts` | Commits a theme choice, saves it synchronously, shows the header notice, and requests the atomic home repaint. |
+| `src/app/settings/useStartupLogoCommit.ts` | Commits a startup-logo-style choice through the same payload and repaint flow as the theme commit. |
 | `src/app/state/useAppState.ts` | Startup initialization (disk reads once) and every shared state slot and ref. |
 | `src/app/state/useRunRefs.ts` | Stable refs for the active run and background work (stopping promises, submission/recovery guards). |
 
@@ -240,6 +241,7 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | --- | --- |
 | `src/core/shared/clipboard.ts` | Copies text through platform-specific clipboard commands with explicit success/failure reporting. |
 | `src/core/shared/githubDiagnostics.ts` | Checks Git/GitHub CLI, remote identity, and local write readiness and classifies diagnostic results. |
+| `src/core/shared/startupLogoDimensions.ts` | The `LogoCellSize` type, the four-columns-per-row aspect and the 12×3 base region shared by core graphics transport and UI layout. |
 | `src/core/shared/text.ts` | Unicode width and grapheme-based wrapping/input helpers, line normalization, duration/title formatting and truncation. |
 | `src/core/shared/values.ts` | Import-free value guards: isRecord, errorMessage and clampIndex. |
 
@@ -395,6 +397,7 @@ Subsystem guide: [src/ui/README.md](../../src/ui/README.md).
 | `src/ui/panels/ProviderSetupPrompt.tsx` | Explains provider setup and routes install/login choices. |
 | `src/ui/panels/ResumePicker.tsx` | Tabbed `/resume` picker: Ubume conversations plus Claude Code, Codex, and Mistral Vibe sessions for this folder or all projects. |
 | `src/ui/panels/SelectionPanel.tsx` | Provides the reusable keyboard-driven selection list with visible-window management. |
+| `src/ui/panels/PreferencesPanel.tsx` | The `/preferences` overlay: categorized appearance entries (Startup Logo, Color Theme) with their current values, opening each setting's picker. |
 | `src/ui/panels/SettingsPanel.tsx` | Displays and edits persistent user interface settings. |
 | `src/ui/panels/SimplePickers.tsx` | Selects execution mode and explains its behavior. Selects Codex reasoning effort for the active model. Previews and selects a persisted color theme. |
 | `src/ui/panels/TextEntryPanel.tsx` | Provides a reusable focused text-entry overlay. |
@@ -413,6 +416,13 @@ Subsystem guide: [src/ui/README.md](../../src/ui/README.md).
 | `src/ui/render/Markdown.tsx` | Provides common bordered panel layout and hint treatment. Parses and renders terminal-safe Markdown blocks, inline styles, lists, links, tables, and code. |
 | `src/ui/render/diffRenderer.ts` | Parses unified diffs and emits width-aware colored terminal rows. |
 | `src/ui/render/logoVariants.ts` | Chooses full, compact, or tiny Ubume branding for the available terminal dimensions. |
+| `src/ui/render/startupLogoAsset.ts` | Original SVG paths and solid half-cell geometry shared by both compact styles. |
+| `src/ui/render/useStartupLogoGraphic.ts` | Bounded, asynchronous Sharp rasterization with stale-result cancellation. |
+| `src/core/terminal/startupGraphics.ts` | Positive capability negotiation, Kitty cell placeholders and frame-owned inline graphics transport. |
+| `src/core/terminal/terminalQueryInput.ts` | Filters correlated terminal probe replies without discarding concurrent keyboard input. |
+| `src/ui/render/startupAnimation.ts` | Theme-neutral assembly frames, memoized solid developer glyphs per responsive size and frame, and the interactive-startup gate for Minimal and Simple. |
+| `src/ui/render/startupLogoLayout.ts` | Pure responsive sizing for the compact mark: proportional row budget, hard fit constraints, hysteresis, metadata offset and centering. |
+| `src/ui/render/useStartupLogoAnimation.ts` | Cancellable, one-shot React playback owned above transcript repaint remounts; no terminal writes. |
 | `src/ui/render/outputPipeline.ts` | Normalizes provider output before it reaches higher-level terminal rendering. |
 | `src/ui/render/runtimeDisplay.ts` | Formats execution-mode labels and descriptions for terminal display. Formats runtime policy and provider/model metadata into compact display values. |
 | `src/ui/render/terminalAnswerFormat.ts` | Normalizes assistant answer conventions, especially local file references, for terminal presentation. |
@@ -447,6 +457,7 @@ Subsystem guide: [src/ui/README.md](../../src/ui/README.md).
 | `src/ui/timeline/measure/markdownRows.ts` | Markdown and code-block row measurement. |
 | `src/ui/timeline/measure/nativeTranscript.ts` | Native scrollback transcript parts and turn build instrumentation. |
 | `src/ui/timeline/measure/rows.ts` | Styled row wrapping, width, padding, and snapshot assembly. |
+| `src/ui/timeline/measure/startupBrandingRows.ts` | Compact startup branding renderers for the `minimal` and `simple` logo styles, built around the `</>` mark. Theme-neutral, width-clamped rows. |
 | `src/ui/timeline/measure/stableSnapshot.ts` | Stable and live snapshot construction with frozen row groups. |
 | `src/ui/timeline/measure/streamRows.ts` | Stream event rendering, coalescing, live indicators, and turn rows. |
 | `src/ui/timeline/measure/types.ts` | Timeline measurement and render-item types without a component dependency. |

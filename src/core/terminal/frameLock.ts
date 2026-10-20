@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as benchTrace from "../perf/benchTrace.js";
 import { resolveUbumeDebugLogPath } from "../workspace/appData.js";
+import { getStartupGraphicsChannel } from "./startupGraphics.js";
 import { isTerminalResizing } from "./terminalControl.js";
 
 /** The writable surface the frame lock wraps; satisfied by `NodeJS.WriteStream`. */
@@ -111,7 +112,7 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
     // Only apply if the chunk is non-empty and doesn't look like a control-only
     // sequence (e.g. terminal title OSC).
     let processed = chunk;
-    const isControlSequence = chunk.includes("\x1b]");
+    const isControlSequence = /\x1b[\]_P]/.test(chunk);
     if (chunk.length > 0 && !isControlSequence) {
       processed = chunk.replace(/\n/g, "\x1b[K\n");
       if (!processed.endsWith("\x1b[K") && !processed.endsWith("\x1b[K\n")) {
@@ -139,7 +140,10 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
       logDebug(
         `Frame written: length=${processed.length} original=${chunk.length} resizing=${resizing}`,
       );
-      return originalWrite(processed);
+      return originalWrite(
+        (getStartupGraphicsChannel(stdout)?.prepareFrame(chunk) ?? "") +
+          (getStartupGraphicsChannel(stdout)?.transformFrame(processed) ?? processed),
+      );
     } finally {
       isFlushing = false;
     }

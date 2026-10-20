@@ -37,6 +37,7 @@ interface ActiveRuntimeDisplayInput {
 interface ActiveRuntimeDisplay {
   providerLabel: string;
   modelDisplay: string;
+  modelOnlyDisplay: string;
   footerModelDisplay: string;
   contextDisplay: string;
   showContext: boolean;
@@ -160,6 +161,8 @@ export function buildActiveRuntimeDisplay({
 
   return {
     providerLabel,
+    modelOnlyDisplay:
+      reasoning && !reasoningAlreadyInLabel ? `${modelLabel} (${reasoning})` : modelLabel,
     modelDisplay:
       reasoning && !reasoningAlreadyInLabel
         ? `${providerLabel} / ${modelLabel} / reasoning: ${reasoning}`

@@ -1,3 +1,7 @@
+import {
+  normalizeStartupHeaderMiddleLine,
+  normalizeStartupLogoRendering,
+} from "../../config/settings.js";
 /**
  * Startup initialization and the app's top-level state.
  *
@@ -20,6 +24,7 @@ import { DEFAULT_UPDATE_CHECK_SETTINGS, loadSettings } from "../../config/persis
 import type { PartialRuntimeConfig } from "../../config/runtimeConfig.js";
 import type {
   AuthPreference,
+  StartupLogoStyle,
   TerminalTitleMode,
   WorkspaceDisplayMode,
 } from "../../config/settings.js";
@@ -157,6 +162,10 @@ export function useAppState(context: UseAppStateContext) {
     terminalLayout.rawCols ?? terminalLayout.cols,
   );
   terminalLayoutColsRef.current = terminalLayout.rawCols ?? terminalLayout.cols;
+  const terminalLayoutRowsRef = useRef<number | undefined>(
+    terminalLayout.rawRows ?? terminalLayout.rows,
+  );
+  terminalLayoutRowsRef.current = terminalLayout.rawRows ?? terminalLayout.rows;
   const [staticRepaintGeneration, bumpStaticRepaintGeneration] = useState(0);
   const staticRepaintGenerationRef = useRef(0);
   staticRepaintGenerationRef.current = staticRepaintGeneration;
@@ -192,6 +201,21 @@ export function useAppState(context: UseAppStateContext) {
     initialSettings.current.ui.terminalTitleMode,
   );
   const [showBusyLoader, setShowBusyLoader] = useState(initialSettings.current.ui.showBusyLoader);
+  const [startupLogoStyle, setStartupLogoStyle] = useState<StartupLogoStyle>(
+    initialSettings.current.ui.startupLogoStyle,
+  );
+  const [startupHeaderMiddleLine, setStartupHeaderMiddleLine] = useState(
+    normalizeStartupHeaderMiddleLine(initialSettings.current.ui.startupHeaderMiddleLine),
+  );
+  const [startupLogoRendering, setStartupLogoRendering] = useState(
+    normalizeStartupLogoRendering(initialSettings.current.ui.startupLogoRendering),
+  );
+  // All preference writers build from this shared settings snapshot.
+  initialSettings.current.ui.startupHeaderMiddleLine = startupHeaderMiddleLine;
+  initialSettings.current.ui.startupLogoRendering = startupLogoRendering;
+  const [startupAnimation, setStartupAnimation] = useState(
+    initialSettings.current.ui.startupAnimation,
+  );
 
   // Provider routing state.
   const [providerWorkspaceConfig, setProviderWorkspaceConfig] = useState<ProviderWorkspaceConfig>(
@@ -367,6 +391,7 @@ export function useAppState(context: UseAppStateContext) {
     // Terminal layout & repaint
     terminalLayout,
     terminalLayoutColsRef,
+    terminalLayoutRowsRef,
     staticRepaintGeneration,
     bumpStaticRepaintGeneration,
     staticRepaintGenerationRef,
@@ -386,6 +411,14 @@ export function useAppState(context: UseAppStateContext) {
     setTerminalTitleMode,
     showBusyLoader,
     setShowBusyLoader,
+    startupLogoStyle,
+    setStartupLogoStyle,
+    startupHeaderMiddleLine,
+    setStartupHeaderMiddleLine,
+    startupLogoRendering,
+    setStartupLogoRendering,
+    startupAnimation,
+    setStartupAnimation,
 
     // Provider routing
     providerWorkspaceConfig,

@@ -1,3 +1,4 @@
+import type { StartupHeaderMiddleLine, StartupLogoRendering } from "../../config/settings.js";
 /**
  * App-wide effects that are not about focus or rendering:
  *
@@ -17,7 +18,7 @@ import type { LayeredConfigResult } from "../../config/layeredConfig.js";
 import type { loadSettings } from "../../config/persistence.js";
 import { saveSettings } from "../../config/persistence.js";
 import type { RuntimeConfig } from "../../config/runtimeConfig.js";
-import type { HeaderConfig, Theme } from "../../config/settings.js";
+import type { HeaderConfig, StartupLogoStyle, Theme } from "../../config/settings.js";
 import { shutdownLocalHarness } from "../../core/providerRuntime/localHarness/lazyRuntime.js";
 import type { BackendProvider } from "../../core/providers/types.js";
 import type { ThemeSelectionState } from "../../ui/theme.js";
@@ -35,6 +36,10 @@ interface UseAppLifecycleEffectsContext {
   workspaceDisplayMode: "dir" | "name" | "simple";
   terminalTitleMode: "dir" | "name" | "simple";
   showBusyLoader: boolean;
+  startupLogoStyle: StartupLogoStyle;
+  startupAnimation: boolean;
+  startupHeaderMiddleLine?: StartupHeaderMiddleLine;
+  startupLogoRendering?: StartupLogoRendering;
   customTheme: Partial<Theme> | undefined;
   authPreference: "chatgpt-login-goal" | "api-key-first" | "runner-managed";
   headerConfig: HeaderConfig;
@@ -56,6 +61,10 @@ export function useAppLifecycleEffects(context: UseAppLifecycleEffectsContext) {
     workspaceDisplayMode,
     terminalTitleMode,
     showBusyLoader,
+    startupLogoStyle,
+    startupAnimation,
+    startupHeaderMiddleLine,
+    startupLogoRendering,
     customTheme,
     authPreference,
     headerConfig,
@@ -81,6 +90,10 @@ export function useAppLifecycleEffects(context: UseAppLifecycleEffectsContext) {
           workspaceDisplayMode,
           terminalTitleMode,
           showBusyLoader,
+          startupLogoStyle,
+          startupAnimation,
+          startupHeaderMiddleLine,
+          startupLogoRendering,
           customTheme,
         },
         authPreference,
@@ -91,6 +104,10 @@ export function useAppLifecycleEffects(context: UseAppLifecycleEffectsContext) {
     authPreference,
     customTheme,
     showBusyLoader,
+    startupAnimation,
+    startupHeaderMiddleLine,
+    startupLogoRendering,
+    startupLogoStyle,
     terminalTitleMode,
     themeSelection.committedTheme,
     workspaceDisplayMode,

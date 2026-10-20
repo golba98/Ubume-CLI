@@ -61,6 +61,17 @@ interface ClearFrameBoundaryRenderState {
 interface ClearFrameBoundaryController {
   beginClearGeneration: (generation: number) => boolean;
   /**
+   * Request an atomic repaint of the visible home screen: frames are
+   * suppressed until the caller re-renders with a fresh `<Static>` (see
+   * `onWidthResizeRefresh`), then the screen is cleared — viewport only, so
+   * scrollback above the app survives — and the re-flushed frame is written
+   * in one piece. Used by appearance changes (theme, startup logo) on a
+   * pristine home screen, where the startup banner is already flushed to
+   * `<Static>` and can otherwise never be recolored. Returns false when the
+   * request cannot be armed (clear pending, overlay active, no live Ink).
+   */
+  requestHomeRepaint: (reason: string) => boolean;
+  /**
    * Mirror the React render state into the boundary's gate. Returns `true` when
    * a post-clear authoritative frame is now ready to commit but hasn't been
    * written yet — the caller must force one more render so Ink's
@@ -95,6 +106,8 @@ interface CreateClearFrameBoundaryOptions {
    * (app.tsx passes a ref assigned during render).
    */
   isOverlayActive?: () => boolean;
+  /** The compact startup and its complete short transcript still live in Ink. */
+  hasLiveStartupHeader?: () => boolean;
   /**
    * Called synchronously whenever a width change requires the home/transcript
    * content to be rebuilt. The physical clear is DEFERRED until the caller has
@@ -123,6 +136,13 @@ interface CreateClearFrameBoundaryOptions {
    * transcript at the pre-resize width.
    */
   getRenderedLayoutCols?: () => number | undefined;
+  /**
+   * Like getRenderedLayoutCols, for rows. Height-only repaints (armed while the
+   * compact startup header is live) wait for a frame laid out at the new
+   * height: a stale, taller frame written after the clear would scroll its top
+   * straight back into the scrollback that was just cleared.
+   */
+  getRenderedLayoutRows?: () => number | undefined;
 }
 
 interface FrameMarkerCounts {
@@ -348,9 +368,11 @@ export function createClearFrameBoundaryController({
   stdout,
   source = "src/core/terminal/clearFrameBoundary.ts",
   isOverlayActive,
+  hasLiveStartupHeader,
   onWidthResizeRefresh,
   getRenderedRepaintGeneration,
   getRenderedLayoutCols,
+  getRenderedLayoutRows,
 }: CreateClearFrameBoundaryOptions): ClearFrameBoundaryController | null {
   const originalRenderInteractiveFrame = instance?.renderInteractiveFrame;
   if (!instance || typeof originalRenderInteractiveFrame !== "function") {
@@ -379,6 +401,12 @@ export function createClearFrameBoundaryController({
   let widthRepaintSuppressedFrames = 0;
   let widthRepaintTargetGeneration: number | null = null;
   let widthRepaintReflushRequested = false;
+  // Physical clear used when the deferred repaint commits. Every resize repaint
+  // clears scrollback ("transcript"): a shrinking window pushes the top of the
+  // live frame into scrollback, and only a scrollback-inclusive clear removes
+  // those copies. Explicit home repaints (no geometry change) only redraw the
+  // visible screen ("viewport") so pre-existing scrollback is kept.
+  let widthRepaintClearMode: "transcript" | "viewport" = "transcript";
   // Alternate-screen overlay state. While an overlay is active, the normal
   // buffer's Ink caches are parked here so diffing can resume against the
   // buffer's true contents when the overlay exits (DECSET 1049 restores the
@@ -416,7 +444,10 @@ export function createClearFrameBoundaryController({
     }
   };
 
-  const armWidthRepaint = (reason: string): void => {
+  const armWidthRepaint = (
+    reason: string,
+    clearMode: "transcript" | "viewport" = "transcript",
+  ): void => {
     widthRepaintPending = true;
     widthRepaintSuppressedFrames = 0;
     widthRepaintTargetGeneration = null;
@@ -425,9 +456,11 @@ export function createClearFrameBoundaryController({
     // requesting it here would remount <Static> against the pre-resize layout
     // (the viewport hook commits dimensions on a trailing settle).
     widthRepaintReflushRequested = false;
+    widthRepaintClearMode = clearMode;
     renderDebug.traceEvent("terminal", "widthRepaintArmed", {
       source,
       reason,
+      clearMode,
       currentCols: stdout.columns,
     });
   };
@@ -472,7 +505,8 @@ export function createClearFrameBoundaryController({
     const currentCols = stdout.columns;
     const currentRows = stdout.rows;
     const widthChanged = previousCols !== currentCols;
-    const resizeDetected = widthChanged || previousRows !== currentRows;
+    const heightChanged = previousRows !== currentRows;
+    const resizeDetected = widthChanged || heightChanged;
     const overlayNow = Boolean(isOverlayActive?.());
     previousCols = currentCols;
     previousRows = currentRows;
@@ -609,6 +643,12 @@ export function createClearFrameBoundaryController({
     if (widthChanged && !clearPending && !widthRepaintPending) {
       armWidthRepaint("widthChanged");
     }
+    // The live compact header sits at the top of the live frame, so a height
+    // shrink pushes a copy of it into scrollback (Static content, as in Normal
+    // mode, is legitimately there once). Repaint with a scrollback clear.
+    if (heightChanged && hasLiveStartupHeader?.() && !clearPending && !widthRepaintPending) {
+      armWidthRepaint("heightChangedLiveHeader");
+    }
 
     if (widthRepaintPending && !clearPending) {
       widthRepaintSuppressedFrames += 1;
@@ -617,7 +657,10 @@ export function createClearFrameBoundaryController({
       // width (the viewport hook commits dimensions on a trailing settle),
       // then request the <Static> re-flush exactly once.
       const renderedLayoutCols = getRenderedLayoutCols?.();
-      const layoutReady = getRenderedLayoutCols === undefined || renderedLayoutCols === currentCols;
+      const renderedLayoutRows = getRenderedLayoutRows?.();
+      const layoutReady =
+        (getRenderedLayoutCols === undefined || renderedLayoutCols === currentCols) &&
+        (getRenderedLayoutRows === undefined || renderedLayoutRows === currentRows);
       if (!widthRepaintReflushRequested) {
         if (layoutReady && widthRepaintSuppressedFrames <= WIDTH_REPAINT_MAX_SUPPRESSED_FRAMES) {
           widthRepaintReflushRequested = true;
@@ -645,15 +688,27 @@ export function createClearFrameBoundaryController({
         widthRepaintTargetGeneration === null ||
         (getRenderedRepaintGeneration?.() ?? 0) >= widthRepaintTargetGeneration;
       const repaintFrameReady =
-        staticOutput !== "" && repaintGenerationRendered && widthRepaintReflushRequested;
+        (staticOutput !== "" || hasLiveStartupHeader?.() === true) &&
+        layoutReady &&
+        repaintGenerationRendered &&
+        widthRepaintReflushRequested;
       if (repaintFrameReady) {
+        const clearMode = widthRepaintClearMode;
         widthRepaintPending = false;
         widthRepaintTargetGeneration = null;
         widthRepaintReflushRequested = false;
-        commitAuthoritativeFrame(output, outputHeight, staticOutput, "transcript", "resizeRefresh");
+        widthRepaintClearMode = "transcript";
+        commitAuthoritativeFrame(
+          output,
+          outputHeight,
+          staticOutput,
+          clearMode,
+          clearMode === "viewport" ? "homeRepaint" : "resizeRefresh",
+        );
         renderDebug.traceEventLazy("terminal", "resizeRefreshCommitted", () => ({
           committedGeneration,
           currentCols,
+          clearMode,
           resizeRefreshConsumed: true,
           ...countFrameMarkers(`${staticOutput}${output}`),
         }));
@@ -671,15 +726,17 @@ export function createClearFrameBoundaryController({
       }
       // Safety valve: never freeze the UI behind the gate. Repaint with the
       // static content Ink has accumulated, even if it predates the resize.
+      const clearMode = widthRepaintClearMode;
       widthRepaintPending = false;
       widthRepaintTargetGeneration = null;
       widthRepaintReflushRequested = false;
+      widthRepaintClearMode = "transcript";
       commitAuthoritativeFrame(
         output,
         outputHeight,
         staticOutput || (instance.fullStaticOutput ?? ""),
-        "transcript",
-        "resizeRefreshFallback",
+        clearMode,
+        clearMode === "viewport" ? "homeRepaintFallback" : "resizeRefreshFallback",
       );
       return;
     }
@@ -820,6 +877,7 @@ export function createClearFrameBoundaryController({
       // The post-clear frame repaints from a physically cleared baseline, which
       // supersedes any in-flight width repaint.
       widthRepaintPending = false;
+      widthRepaintClearMode = "transcript";
       renderDebug.traceEvent("terminal", "clearBoundaryBegin", {
         clearGeneration: generation,
         clearPending,
@@ -830,6 +888,15 @@ export function createClearFrameBoundaryController({
         uiStateKind,
         before: snapshotFrameState(instance, logShadow),
       });
+      return true;
+    },
+    requestHomeRepaint(reason) {
+      // The deferred-repaint machinery only acts on main-screen frames; a
+      // request while an overlay owns the alternate screen would stall the
+      // gate behind frames that never reach the repaint branch.
+      if (clearPending || overlayActive || Boolean(isOverlayActive?.())) return false;
+      if (widthRepaintPending) return true;
+      armWidthRepaint(reason, "viewport");
       return true;
     },
     syncRenderState(state) {
