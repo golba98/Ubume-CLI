@@ -40,6 +40,10 @@ test("open_usage_panel opens the panel without appending transcript events", () 
   assert.deepEqual(dispatch({ action: "open_usage_panel" }), ["openUsagePanel()"]);
 });
 
+test("open_preferences_panel opens the preferences panel without transcript events", () => {
+  assert.deepEqual(dispatch({ action: "open_preferences_panel" }), ["openPreferencesPanel()"]);
+});
+
 // Setter-or-notice handlers: a value applies the setting; without a value the
 // handler's message (if any) is posted under a fixed title.
 const setterOrNotice: Array<[CommandResult["action"], string, string, string, string | null]> = [

@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { render, Text } from "ink";
 import type { RuntimeSummary } from "../../config/runtimeConfig.js";
+import type { StartupLogoStyle } from "../../config/settings.js";
 import { getTextWidth } from "../../core/shared/text.js";
 import {
   resetInkOutputForFreshFrame,
@@ -162,9 +163,14 @@ function transcriptNode({
   visible = true,
   prompt = "LIVE PROMPT",
   clearCount = 0,
+  repaintGeneration = 0,
   cols = 120,
   rows = 30,
   notice = null,
+  logoStyle = "normal",
+  theme = "purple",
+  runtimeSummary = TEST_RUNTIME_SUMMARY,
+  startupAnimation = false,
 }: {
   staticEvents: TimelineEvent[];
   activeEvents?: TimelineEvent[];
@@ -172,25 +178,33 @@ function transcriptNode({
   visible?: boolean;
   prompt?: string;
   clearCount?: number;
+  repaintGeneration?: number;
   cols?: number;
   rows?: number;
   notice?: string | null;
+  logoStyle?: StartupLogoStyle;
+  theme?: string;
+  runtimeSummary?: RuntimeSummary | null;
+  startupAnimation?: boolean;
 }) {
   const layout = createLayoutSnapshot(cols, rows);
   return (
-    <ThemeProvider theme="purple">
+    <ThemeProvider theme={theme}>
       <TranscriptShell
         layout={layout}
         authState="authenticated"
         workspaceLabel="/workspace/ubume"
         workspaceRoot="/workspace/ubume"
-        runtimeSummary={TEST_RUNTIME_SUMMARY}
+        runtimeSummary={runtimeSummary}
+        logoStyle={logoStyle}
+        startupAnimation={startupAnimation}
         staticEvents={staticEvents}
         activeEvents={activeEvents}
         uiState={uiState}
         composer={<Text>{prompt}</Text>}
         composerRows={5}
         clearCount={clearCount}
+        repaintGeneration={repaintGeneration}
         notice={notice}
         visible={visible}
       />
@@ -226,6 +240,8 @@ function renderTranscript(
     uiState?: UIState;
     cols?: number;
     rows?: number;
+    logoStyle?: StartupLogoStyle;
+    startupAnimation?: boolean;
   } = {},
 ) {
   const stdin = new TestInput();
@@ -886,4 +902,369 @@ test("Markdown streaming and width changes preserve the live composer/footer and
   const committed = stripAnsi(getOutput());
   for (let index = 0; index < 12; index += 1) assert.match(committed, new RegExp(`alpha ${index}`));
   instance.unmount();
+});
+
+test("startup logo styles render the selected branding at the shell level", async () => {
+  const events: TimelineEvent[] = [launchEvent(900)];
+
+  // Compact styles use one live, three-row header before conversation begins.
+  const minimal = renderTranscript(events, { cols: 120, rows: 30, logoStyle: "minimal" });
+  try {
+    await sleep();
+    const output = stripAnsi(minimal.getOutput());
+    assert.match(output, /Ubume CLI v/);
+    assert.match(output, /Local/);
+    assert.equal(countOccurrences(output, "██████"), 0, "minimal must not draw the banner");
+  } finally {
+    minimal.instance.cleanup();
+    await sleep(20);
+  }
+
+  const simple = renderTranscript(events, { cols: 120, rows: 30, logoStyle: "simple" });
+  try {
+    await sleep();
+    const output = stripAnsi(simple.getOutput());
+    assert.match(output, /Ubume CLI v/);
+    assert.match(output, /Local/);
+    assert.equal(countOccurrences(output, "██████"), 0, "simple must not draw the banner");
+  } finally {
+    simple.instance.cleanup();
+    await sleep(20);
+  }
+});
+
+test("normal startup logo keeps the classic large banner", async () => {
+  const events: TimelineEvent[] = [launchEvent(910)];
+  const harness = renderTranscript(events, { cols: 120, rows: 40, logoStyle: "normal" });
+  try {
+    await sleep();
+    const output = stripAnsi(harness.getOutput());
+    assert.ok(countOccurrences(output, "██████") > 0, "normal must keep the ASCII banner");
+  } finally {
+    harness.instance.cleanup();
+    await sleep(20);
+  }
+});
+
+test("compact home stays at the top and updates metadata and themes without a static repaint", async () => {
+  const events = [launchEvent(1000)];
+  const h = renderTranscript(events, { logoStyle: "minimal" });
+  try {
+    await h.instance.waitUntilRenderFlush();
+    const initial = stripAnsi(h.getFrame());
+    assert.equal(firstLineIndex(initial, "Ubume CLI v"), 0);
+    assert.equal(firstLineIndex(initial, "Local"), 1);
+    assert.equal(firstLineIndex(initial, "/workspace/ubume"), 2);
+    assert.equal(countOccurrences(initial, "LIVE PROMPT"), 1);
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        logoStyle: "minimal",
+        theme: "mono",
+        runtimeSummary: {
+          ...TEST_RUNTIME_SUMMARY,
+          providerLabel: "Updated",
+          modelLabel: "New Model",
+        },
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    const updated = stripAnsi(h.getFrame());
+    assert.match(updated, /Updated/);
+    assert.equal(countOccurrences(updated, "Ubume CLI v"), 1);
+    assert.equal(countOccurrences(updated, "Launch mode"), 1);
+    assert.equal(firstLineIndex(updated, "Ubume CLI v"), 0);
+    assert.equal(updated.split("\n")[0]!.slice(0, 15), initial.split("\n")[0]!.slice(0, 15));
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+test("compact header stays live beside a short first turn without duplicating notices", async () => {
+  const events = [launchEvent(1100), providerMigrationEvent(1101)];
+  const h = renderTranscript(events, { logoStyle: "simple" });
+  try {
+    await h.instance.waitUntilRenderFlush();
+    const before = h.getOutput().length;
+    const activeEvents = [
+      userPromptEvent(1110, "FIRST PROMPT"),
+      runningRunEvent(1110, "FIRST PROMPT"),
+    ];
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        activeEvents,
+        uiState: { kind: "THINKING", turnId: 1110 },
+        logoStyle: "simple",
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    const committed = stripAnsi(h.getOutput().slice(before));
+    assert.equal(countOccurrences(committed, "Ubume CLI v"), 1);
+    assert.equal(countOccurrences(committed, "Launch mode"), 1);
+    assert.equal(countOccurrences(committed, "Provider migrated"), 1);
+    assert.ok(committed.indexOf("Ubume CLI v") < committed.indexOf("Launch mode"));
+    assert.ok(committed.indexOf("Launch mode") < committed.indexOf("FIRST PROMPT"));
+    const afterCommit = h.getOutput().length;
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        activeEvents,
+        uiState: { kind: "THINKING", turnId: 1110 },
+        logoStyle: "simple",
+        prompt: "TYPED WHILE RUNNING",
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    assert.ok(h.getOutput().length >= afterCommit);
+    assert.equal(countOccurrences(stripAnsi(h.getFrame()), "Ubume CLI v"), 1);
+    assert.match(stripAnsi(h.getFrame()), /TYPED WHILE RUNNING/);
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+test("compact home resize, overlays and clear keep one complete bounded header", async () => {
+  const events = [launchEvent(1200)];
+  const h = renderTranscript(events, { logoStyle: "minimal" });
+  try {
+    for (const [cols, rows] of [
+      [120, 30],
+      [43, 14],
+      [24, 12],
+      [80, 24],
+    ]) {
+      h.stdout.columns = cols!;
+      h.stdout.rows = rows!;
+      h.instance.rerender(
+        transcriptNode({ staticEvents: events, logoStyle: "minimal", cols, rows }),
+      );
+      await h.instance.waitUntilRenderFlush();
+      const frame = stripAnsi(h.getFrame());
+      const lines = frame.split("\n");
+      assert.ok(lines.length <= rows!, `${cols}x${rows} stays inside viewport`);
+      assert.ok(
+        lines.every((line) => getTextWidth(line) <= cols!),
+        `width at ${cols}`,
+      );
+      assert.equal(firstLineIndex(frame, "Ubume CLI v"), 0);
+      assert.equal(countOccurrences(frame, "LIVE PROMPT"), 1);
+      if (cols! < 43) assert.doesNotMatch(lines.slice(0, 3).join("\n"), /[\u2801-\u28ff]/);
+    }
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        logoStyle: "minimal",
+        visible: false,
+        cols: 80,
+        rows: 24,
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    assert.doesNotMatch(stripAnsi(h.getFrame()), /LIVE PROMPT/);
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        logoStyle: "minimal",
+        clearCount: 1,
+        cols: 80,
+        rows: 24,
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    const frame = stripAnsi(h.getFrame());
+    assert.equal(countOccurrences(frame, "Ubume CLI v"), 1);
+    assert.equal(countOccurrences(frame, "LIVE PROMPT"), 1);
+    assert.match(frame.split("\n")[firstLineIndex(frame, "Ubume CLI v") + 1]!, /[█▀▄]/);
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+test("compact header hands off once and stays historical after a larger resize remount", async () => {
+  const h = renderTranscript([], { logoStyle: "minimal", rows: 18 });
+  const history = [
+    userPromptEvent(1300, Array.from({ length: 30 }, (_, i) => `history line ${i}`).join("\n")),
+  ];
+  try {
+    await h.instance.waitUntilRenderFlush();
+    assert.match(stripAnsi(h.getFrame()), /Ubume CLI v/);
+    h.instance.rerender(transcriptNode({ staticEvents: history, logoStyle: "minimal", rows: 18 }));
+    await h.instance.waitUntilRenderFlush();
+    assert.match(stripAnsi(h.getOutput()), /history line 29/);
+    assert.doesNotMatch(stripAnsi(h.getFrame()), /Ubume CLI v/);
+    h.stdout.rows = 100;
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: history,
+        logoStyle: "minimal",
+        rows: 100,
+        repaintGeneration: 1,
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    assert.doesNotMatch(stripAnsi(h.getFrame()), /Ubume CLI v/);
+    assert.match(stripAnsi(h.getFrame()), /LIVE PROMPT/);
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: [],
+        logoStyle: "minimal",
+        rows: 100,
+        clearCount: 1,
+        repaintGeneration: 1,
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    assert.equal(countOccurrences(stripAnsi(h.getFrame()), "Ubume CLI v"), 1);
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+/** Rows at the top of the frame drawn by the compact mark (solid half blocks). */
+function logoRowCount(frame: string): number {
+  const lines = stripAnsi(frame).split("\n");
+  const end = lines.findIndex((line) => !/[█▀▄]/.test(line));
+  return end === -1 ? lines.length : end;
+}
+
+test("compact home scales the mark through live resize sequences without corruption", async () => {
+  const events = [launchEvent(1400)];
+  const sizes: [number, number, number][] = [
+    // cols, rows, expected logo rows (0 = metadata only)
+    [60, 20, 3],
+    [100, 30, 4],
+    [120, 40, 5],
+    [200, 60, 8],
+    [60, 20, 3],
+    [80, 24, 3],
+    [240, 70, 10],
+    [40, 12, 0],
+    [300, 90, 10],
+    [300, 24, 3],
+    [60, 90, 3],
+    [160, 45, 6],
+    [20, 10, 0],
+  ];
+  const h = renderTranscript(events, { logoStyle: "simple", cols: 60, rows: 20 });
+  try {
+    for (const [cols, rows, expected] of sizes) {
+      h.stdout.columns = cols;
+      h.stdout.rows = rows;
+      h.instance.rerender(
+        transcriptNode({
+          staticEvents: events,
+          logoStyle: "simple",
+          cols,
+          rows,
+          prompt: "KEEP ME",
+        }),
+      );
+      await h.instance.waitUntilRenderFlush();
+      const frame = stripAnsi(h.getFrame());
+      const lines = frame.split("\n");
+      const label = `${cols}x${rows}`;
+      assert.ok(lines.length <= rows, `${label}: frame stays inside the viewport`);
+      assert.ok(
+        lines.every((line) => getTextWidth(line) <= cols),
+        `${label}: no line wider than the terminal`,
+      );
+      assert.equal(countOccurrences(frame, "Ubume CLI v"), 1, `${label}: one header`);
+      assert.equal(countOccurrences(frame, "KEEP ME"), 1, `${label}: prompt stays visible`);
+      // Very short viewports window the notice to its tail (pre-existing behavior).
+      if (rows >= 20) assert.equal(countOccurrences(frame, "Launch mode"), 1, `${label}: notice`);
+      assert.equal(logoRowCount(frame), expected, `${label}: logo rows`);
+      if (expected >= 5) {
+        const header = lines.slice(0, expected).join("\n");
+        assert.ok(firstLineIndex(header, "Ubume CLI v") > 0, `${label}: metadata is centered`);
+      }
+    }
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+test("rapid resizes during the startup animation settle on one complete header", async () => {
+  const events = [launchEvent(1500)];
+  const h = renderTranscript(events, {
+    logoStyle: "minimal",
+    cols: 120,
+    rows: 40,
+    startupAnimation: true,
+  });
+  try {
+    // Twenty resize steps inside the 520ms animation, shrinking and growing.
+    for (let step = 0; step < 20; step++) {
+      const cols = 60 + ((step * 37) % 200);
+      const rows = 16 + ((step * 13) % 60);
+      h.stdout.columns = cols;
+      h.stdout.rows = rows;
+      h.instance.rerender(
+        transcriptNode({
+          staticEvents: events,
+          logoStyle: "minimal",
+          cols,
+          rows,
+          startupAnimation: true,
+        }),
+      );
+      await sleep(10);
+    }
+    h.stdout.columns = 200;
+    h.stdout.rows = 60;
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        logoStyle: "minimal",
+        cols: 200,
+        rows: 60,
+        startupAnimation: true,
+      }),
+    );
+    await sleep(700);
+    await h.instance.waitUntilRenderFlush();
+    const frame = stripAnsi(h.getFrame());
+    assert.equal(countOccurrences(frame, "Ubume CLI v"), 1);
+    assert.equal(logoRowCount(frame), 8);
+    const lines = frame.split("\n");
+    // The animation finished: the final 32×8 mark, both brackets in place.
+    assert.match(lines[0]!, /▄█.*▄█.*█▄/);
+    assert.ok(lines.every((line) => getTextWidth(line) <= 200));
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+test("a stale wider frame during a shrink truncates rows instead of wrapping them", async () => {
+  const events = [launchEvent(1600)];
+  const h = renderTranscript(events, { logoStyle: "simple", cols: 300, rows: 90 });
+  try {
+    await h.instance.waitUntilRenderFlush();
+    const before = stripAnsi(h.getFrame()).split("\n").length;
+    // The terminal shrank but the viewport hook has not committed the new layout yet.
+    h.stdout.columns = 240;
+    h.instance.rerender(
+      transcriptNode({
+        staticEvents: events,
+        logoStyle: "simple",
+        cols: 300,
+        rows: 90,
+        prompt: "P",
+      }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    const lines = stripAnsi(h.getFrame()).split("\n");
+    assert.equal(lines.length, before, "no wrapped continuation lines");
+    assert.ok(lines.every((line) => getTextWidth(line) <= 240));
+    assert.equal(logoRowCount(lines.join("\n")), 10);
+  } finally {
+    h.instance.unmount();
+    h.instance.cleanup();
+  }
 });

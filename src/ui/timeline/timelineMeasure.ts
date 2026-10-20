@@ -27,6 +27,11 @@ export {
 } from "./measure/nativeTranscript.js";
 export { __wrapStyledSpansForTests } from "./measure/rows.js";
 export { buildStableTimelineSnapshot, buildTimelineSnapshot } from "./measure/stableSnapshot.js";
+export {
+  buildCompactStartupRows,
+  buildMinimalStartupRows,
+  buildSimpleStartupRows,
+} from "./measure/startupBrandingRows.js";
 export { buildActionEventRows, compactActionBursts } from "./measure/streamRows.js";
 export type {
   BuiltTimelineItem,

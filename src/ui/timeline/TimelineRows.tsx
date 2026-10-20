@@ -55,6 +55,10 @@ export function getToneColor(
       return theme.surface;
     case "star":
       return theme.warning;
+    case "provider":
+      return theme.provider;
+    case "model":
+      return theme.model;
     case "logoPrimary":
       return theme.logoPrimary;
     case "logoSecondary":
@@ -101,7 +105,11 @@ export const TimelineRowView = memo(
 
     return (
       <Box width="100%" overflow="hidden">
-        <Text>
+        {/* Rows are measured to exactly one line. Between a terminal shrink and
+            the layout settling, a frame is drawn with the previous, wider rows:
+            wrapping those cost ~1s of grapheme measurement on large live
+            headers and briefly doubled their height; truncation is O(width). */}
+        <Text wrap="truncate-end">
           {row.spans.map((span, index) => (
             <Text
               key={index}

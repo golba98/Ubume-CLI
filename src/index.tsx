@@ -16,14 +16,22 @@ import {
   type InkRenderInstance,
   resolveInkRenderInstance,
 } from "./core/terminal/inkRenderReset.js";
+import {
+  createStartupGraphicsChannel,
+  registerStartupGraphicsChannel,
+} from "./core/terminal/startupGraphics.js";
 import { getTerminalCapability } from "./core/terminal/terminalCapabilities.js";
 import {
   createTerminalModeController,
   writeTerminalControl,
 } from "./core/terminal/terminalControl.js";
+import { createTerminalQueryInput } from "./core/terminal/terminalQueryInput.js";
 import { setIntendedTerminalTitle } from "./core/terminal/terminalTitle.js";
 import { resolveWorkspaceRoot } from "./core/workspace/workspaceRoot.js";
 import { MIN_VIEWPORT_COLS, MIN_VIEWPORT_ROWS } from "./ui/layout.js";
+
+/** After the resize repaint, then once more for slow (large or remote) frames. */
+const KITTY_PLACEMENT_REFRESH_DELAYS_MS = [350, 1200];
 
 type RenderHandle = Pick<Instance, "clear" | "cleanup" | "waitUntilExit">;
 
@@ -187,6 +195,20 @@ export function startApp({
   terminal.setMouseReporting(false, "src/index.tsx:startup.nativeScroll");
   terminal.setBracketedPaste(true, "src/index.tsx:startup.bracketedPaste");
 
+  const queryInput =
+    stdin.isTTY && stdout.isTTY && "setRawMode" in stdin && "on" in stdin
+      ? createTerminalQueryInput(stdin as NodeJS.ReadStream, (chunk) => wrappedStdout.write(chunk))
+      : null;
+  const graphics = queryInput
+    ? createStartupGraphicsChannel({
+        query: queryInput.query,
+        tmux: Boolean(env.TMUX),
+        disabled: Boolean(env.STY) || env.TERM === "dumb" || env.INK_SCREEN_READER === "true",
+      })
+    : null;
+  const unregisterGraphics = graphics
+    ? registerStartupGraphicsChannel(wrappedStdout, graphics)
+    : null;
   let unregisterExitHandler: void | (() => void);
   let cleanupDone = false;
   let repaintArmed = false;
@@ -195,7 +217,27 @@ export function startApp({
   let previousResizeCols = stdout.columns;
   let previousResizeRows = stdout.rows;
 
+  // Kitty may leave an image placed while it is still settling an OS-window
+  // resize unpainted until some unrelated redraw. Once the resize repaint has
+  // landed (the viewport settles ~100ms after the last event), re-issue the
+  // data-free placements so the logo appears without waiting for input.
+  let placementRefreshTimers: ReturnType<typeof setTimeout>[] = [];
+  const schedulePlacementRefresh = () => {
+    for (const timer of placementRefreshTimers) clearTimeout(timer);
+    placementRefreshTimers = graphics
+      ? KITTY_PLACEMENT_REFRESH_DELAYS_MS.map((delay) =>
+          // Best effort: a pending refresh must never delay process exit.
+          setTimeout(() => {
+            const commands = graphics.refreshPlacements();
+            if (commands) writeStdout(commands, "src/index.tsx:kittyPlacementRefresh");
+          }, delay).unref(),
+        )
+      : [];
+  };
+
   const onResize = () => {
+    graphics?.probe(true);
+    schedulePlacementRefresh();
     resetFrameLockForResize(wrappedStdout);
     renderDebug.traceEvent("terminal", "resize", {
       previousCols: previousResizeCols,
@@ -243,8 +285,17 @@ export function startApp({
         terminal.setAlternateScreen(false, "src/index.tsx:cleanup.alternateScreen");
         terminal.resetModes();
       } finally {
-        releaseFrameLock(stdout);
-        activeRoot = null;
+        for (const timer of placementRefreshTimers) clearTimeout(timer);
+        try {
+          // Deleting owned Kitty images is best effort on a closing terminal;
+          // a failed write must not skip stdin/frame-lock restoration below.
+          if (graphics) wrappedStdout.write(graphics.dispose());
+        } finally {
+          unregisterGraphics?.();
+          queryInput?.dispose();
+          releaseFrameLock(stdout);
+          activeRoot = null;
+        }
       }
     }
   };
@@ -287,6 +338,7 @@ export function startApp({
       ...(kittyKeyboard ? { kittyKeyboard } : {}),
       // AppStdout is the narrow surface the app uses; Ink wants the full stream type.
       stdout: wrappedStdout as unknown as NodeJS.WriteStream,
+      ...(queryInput ? { stdin: queryInput.stream as unknown as NodeJS.ReadStream } : {}),
     });
   } catch (error) {
     cleanup();

@@ -35,6 +35,7 @@ export const SLASH_COMMANDS = [
   { cmd: "/permissions", desc: "Inspect or update permissions and sandbox controls" },
   { cmd: "/runtime", desc: "Compatibility runtime policy controls" },
   { cmd: "/themes", desc: "Open visual theme picker" },
+  { cmd: "/preferences", desc: "Open preferences (startup logo, color theme)" },
   { cmd: "/verbose", desc: "Toggle verbose mode (detailed processing info)" },
   { cmd: "/auth", desc: "Manage authentication" },
   { cmd: "/workspace", desc: "Show the locked workspace" },

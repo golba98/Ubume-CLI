@@ -108,6 +108,7 @@ interface CommandDispatchContext {
   openReasoningPicker: () => void;
   openSettingsPanel: () => void;
   openThemePicker: () => void;
+  openPreferencesPanel: () => void;
   openPermissionsPanel: () => void;
   openAuthPanel: () => void;
   openUsagePanel: () => void;
@@ -293,6 +294,7 @@ export function dispatchCommand(context: CommandDispatchContext): void | Promise
     open_reasoning_picker: run(context.openReasoningPicker),
     open_settings_panel: run(context.openSettingsPanel),
     open_theme_picker: run(context.openThemePicker),
+    open_preferences_panel: run(context.openPreferencesPanel),
     open_permissions_panel: run(context.openPermissionsPanel),
     open_auth_panel: run(context.openAuthPanel),
     open_usage_panel: run(context.openUsagePanel),

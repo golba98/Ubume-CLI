@@ -31,6 +31,8 @@ test("keeps UI and auth settings separate from runtime persistence", () => {
     ui: {
       layoutStyle: "gemini-shell",
       theme: "purple",
+      startupLogoStyle: "minimal" as const,
+      startupAnimation: false,
       workspaceDisplayMode: "simple" as const,
       terminalTitleMode: "name" as const,
       showBusyLoader: false,
@@ -59,10 +61,53 @@ test("keeps UI and auth settings separate from runtime persistence", () => {
 
   assert.equal("runtime" in serialized, false);
   assert.equal(parsed.ui.theme, "purple");
+  assert.equal(parsed.ui.startupLogoStyle, "minimal");
+  assert.equal(parsed.ui.startupAnimation, false);
   assert.equal(parsed.ui.workspaceDisplayMode, "simple");
   assert.equal(parsed.ui.terminalTitleMode, "name");
   assert.equal(parsed.ui.showBusyLoader, false);
   assert.equal(parsed.auth.preference, "runner-managed");
+});
+
+test("startup logo style round-trips snake_case and survives legacy configurations", () => {
+  // Pre-logo-style settings files must load with the Normal banner default.
+  const legacy = parseSettingsData({
+    ui: {
+      layout_style: "gemini-shell",
+      theme: "purple",
+      workspace_display_mode: "dir",
+      terminal_title_mode: "dir",
+      show_busy_loader: true,
+    },
+  });
+  assert.equal(legacy.ui.startupLogoStyle, "normal");
+
+  const snakeCase = parseSettingsData({ ui: { startup_logo_style: "simple" } });
+  assert.equal(snakeCase.ui.startupLogoStyle, "simple");
+
+  // Invalid or corrupted values fall back to the default instead of failing.
+  assert.equal(
+    parseSettingsData({ ui: { startup_logo_style: "hologram" } }).ui.startupLogoStyle,
+    "normal",
+  );
+  assert.equal(parseSettingsData({ ui: { startup_logo_style: 42 } }).ui.startupLogoStyle, "normal");
+
+  const serialized = serializeSettings(snakeCase);
+  assert.equal((serialized.ui as Record<string, unknown>).startup_logo_style, "simple");
+
+  // Startup animation round-trips and defaults to enabled for legacy files.
+  const animationOn = parseSettingsData({ ui: { startup_animation: true } });
+  assert.equal(animationOn.ui.startupAnimation, true);
+  assert.equal(legacy.ui.startupAnimation, true, "legacy files default to enabled");
+  assert.equal(
+    parseSettingsData({ ui: { startup_animation: "yes" } }).ui.startupAnimation,
+    true,
+    "corrupt values fall back to the enabled default",
+  );
+  assert.equal(
+    (serializeSettings(animationOn).ui as Record<string, unknown>).startup_animation,
+    true,
+  );
 });
 
 test("falls back to defaults for missing UI or auth preferences", () => {
@@ -71,6 +116,7 @@ test("falls back to defaults for missing UI or auth preferences", () => {
 
   assert.equal(parsed.ui.layoutStyle, defaults.ui.layoutStyle);
   assert.equal(parsed.ui.theme, defaults.ui.theme);
+  assert.equal(parsed.ui.startupLogoStyle, defaults.ui.startupLogoStyle);
   assert.equal(parsed.ui.workspaceDisplayMode, defaults.ui.workspaceDisplayMode);
   assert.equal(parsed.ui.terminalTitleMode, defaults.ui.terminalTitleMode);
   assert.equal(parsed.ui.showBusyLoader, defaults.ui.showBusyLoader);
@@ -247,4 +293,36 @@ test("loadSettings recovers safely from corrupt JSON", () => {
   const defaults = getDefaultSettings();
   const parsed = parseSettingsData("INVALID_JSON_STRING");
   assert.deepEqual(parsed, defaults);
+});
+
+test("startup header and renderer choices survive serialization and safely migrate old files", () => {
+  const defaults = parseSettingsData({});
+  assert.equal(defaults.ui.startupHeaderMiddleLine, "provider");
+  assert.equal(defaults.ui.startupLogoRendering, "auto");
+  for (const middle of ["provider", "model", "provider-model", "usage", "hidden"]) {
+    for (const rendering of ["auto", "kitty", "iterm2", "sixel", "solid"]) {
+      const parsed = parseSettingsData({
+        ui: {
+          startup_header_middle_line: middle,
+          startup_logo_rendering: rendering,
+          theme: "purple",
+          startup_logo_style: "simple",
+          startup_animation: false,
+        },
+      });
+      const restarted = parseSettingsData(serializeSettings(parsed));
+      assert.equal(restarted.ui.startupHeaderMiddleLine, middle);
+      assert.equal(restarted.ui.startupLogoRendering, rendering);
+      assert.equal(restarted.ui.theme, "purple");
+      assert.equal(restarted.ui.startupLogoStyle, "simple");
+      assert.equal(restarted.ui.startupAnimation, false);
+    }
+  }
+  for (const value of [null, 123, "old-mode", {}, false]) {
+    const invalid = parseSettingsData({
+      ui: { startupHeaderMiddleLine: value, startupLogoRendering: value },
+    });
+    assert.equal(invalid.ui.startupHeaderMiddleLine, "provider");
+    assert.equal(invalid.ui.startupLogoRendering, "auto");
+  }
 });

@@ -24,7 +24,7 @@ import { PlanActionPicker } from "../panels/PlanActionPicker.js";
 import { ProviderPicker } from "../panels/ProviderPicker.js";
 import { TextEntryPanel } from "../panels/TextEntryPanel.js";
 import { shouldBumpComposerInstance, ThemeProvider } from "../theme.js";
-import { getFocusTargetForScreen } from "./focus.js";
+import { FOCUS_IDS, getFocusTargetForScreen } from "./focus.js";
 
 class TestInput extends PassThrough {
   readonly isTTY = true;
@@ -1258,4 +1258,15 @@ test("global editing controls remain available during history search", async () 
   } finally {
     await harness.cleanup();
   }
+});
+
+test("preferences screens route focus to their panels and back to the composer", () => {
+  assert.equal(getFocusTargetForScreen("preferences"), FOCUS_IDS.preferencesPanel);
+  assert.equal(getFocusTargetForScreen("startup-logo-picker"), FOCUS_IDS.startupLogoPicker);
+  assert.equal(
+    getFocusTargetForScreen("startup-animation-picker"),
+    FOCUS_IDS.startupAnimationPicker,
+  );
+  assert.equal(getFocusTargetForScreen("theme-picker"), FOCUS_IDS.themePicker);
+  assert.equal(getFocusTargetForScreen("main"), FOCUS_IDS.composer);
 });

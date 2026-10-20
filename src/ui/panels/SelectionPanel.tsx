@@ -36,6 +36,7 @@ interface SelectionPanelProps {
   /** Called on every keyboard move (not on mount), e.g. for live theme preview. */
   onHighlight?: (value: string) => void;
   onCancel: () => void;
+  onReplay?: () => void;
 }
 
 export function SelectionPanel({
@@ -47,6 +48,7 @@ export function SelectionPanel({
   onSelect,
   onHighlight,
   onCancel,
+  onReplay,
 }: SelectionPanelProps) {
   const theme = useTheme();
   const panelLayout = usePanelLayout();
@@ -90,6 +92,10 @@ export function SelectionPanel({
 
   useInput(
     (input, key) => {
+      if (input === "r" && onReplay) {
+        onReplay();
+        return;
+      }
       if (key.escape) {
         onCancel();
         return;
@@ -158,7 +164,11 @@ export function SelectionPanel({
           </Box>
         );
       })}
-      {availableRows >= 3 && <Text color={theme.textDim}>↑↓ move · Enter confirm · Esc close</Text>}
+      {availableRows >= 3 && (
+        <Text color={theme.textDim}>
+          ↑↓ move · Enter confirm{onReplay ? " · r preview/replay" : ""} · Esc close
+        </Text>
+      )}
     </Box>
   );
 }

@@ -881,6 +881,7 @@ test("parses simple panel and action commands", () => {
     ["/verbose", "verbose_toggle"],
     ["/themes", "open_theme_picker"],
     ["/models", "open_model_picker"],
+    ["/preferences", "open_preferences_panel"],
   ] as const;
 
   for (const [command, expectedAction] of cases) {

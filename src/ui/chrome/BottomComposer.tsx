@@ -193,7 +193,7 @@ export function BottomComposer({
             >
               {" "}
             </Text>
-            <Text color={theme.textDim}>{placeholderText}</Text>
+            <Text color={theme.textMuted}>{placeholderText}</Text>
           </Box>
         ) : (
           promptViewport.visibleRows.map((row, index) => {

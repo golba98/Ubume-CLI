@@ -1,3 +1,4 @@
+import type { StartupHeaderMiddleLine } from "../../../config/settings.js";
 /**
  * Shared types for timeline measurement and render items.
  *
@@ -11,6 +12,8 @@
  * state such as opacity, run phase and pending question). Item keys feed every
  * row key and cache key, so they must be stable across renders.
  */
+
+import type { StartupLogoStyle } from "../../../config/settings.js";
 import type {
   RunEvent,
   RunProgressBlock,
@@ -18,6 +21,7 @@ import type {
   RunToolActivity,
   ShellEvent,
 } from "../../../session/types.js";
+import type { StartupLogoSize } from "../../render/startupLogoLayout.js";
 
 // ─── Exported types ───────────────────────────────────────────────────────────
 
@@ -39,6 +43,8 @@ export type TimelineTone =
   | "borderActive"
   | "panel"
   | "star"
+  | "provider"
+  | "model"
   | "logoPrimary"
   | "logoSecondary"
   | "logoShadow";
@@ -229,6 +235,20 @@ export interface IntroRenderTimelineItem {
     authLabel: string;
     workspaceLabel: string;
     providerLabel?: string | null;
+    /** Display label for the active model; null when none has been resolved yet. */
+    modelLabel?: string | null;
+    middleLine?: StartupHeaderMiddleLine;
+    startupModelLabel?: string | null;
+    usageLabel?: string | null;
+    /** Tilde-shortened absolute workspace path, used by the compact logo styles. */
+    workspacePath?: string | null;
+    /** Startup branding presentation; defaults to the classic `normal` banner. */
+    logoStyle?: StartupLogoStyle;
+    /**
+     * Responsive compact mark size; `null` hides the mark, `undefined` uses the
+     * base size (callers without terminal dimensions).
+     */
+    logoSize?: StartupLogoSize | null;
   };
 }
 

@@ -9,3 +9,11 @@ test("/usage is in the slash-command menu", () => {
     ["/usage"],
   );
 });
+
+test("/preferences is suggested from the slash-command menu", () => {
+  assert.ok(SLASH_COMMANDS.some((command) => command.cmd === "/preferences"));
+  assert.deepEqual(
+    getSlashCommandSuggestions("/pref").map((command) => command.cmd),
+    ["/preferences"],
+  );
+});

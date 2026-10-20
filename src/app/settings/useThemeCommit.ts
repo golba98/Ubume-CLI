@@ -6,7 +6,12 @@
 import { useCallback } from "react";
 import type { loadSettings } from "../../config/persistence.js";
 import { saveSettings } from "../../config/persistence.js";
-import { formatThemeLabel, type HeaderConfig, type Theme } from "../../config/settings.js";
+import {
+  formatThemeLabel,
+  type HeaderConfig,
+  type StartupLogoStyle,
+  type Theme,
+} from "../../config/settings.js";
 import { commitThemeSelection, type ThemeSelectionState } from "../../ui/theme.js";
 import { buildSettingsPayload } from "./useSettings.js";
 
@@ -19,6 +24,8 @@ interface UseThemeCommitContext {
   workspaceDisplayMode: "dir" | "name" | "simple";
   terminalTitleMode: "dir" | "name" | "simple";
   showBusyLoader: boolean;
+  startupLogoStyle: StartupLogoStyle;
+  startupAnimation: boolean;
   customTheme: Partial<Theme> | undefined;
   authPreference: "chatgpt-login-goal" | "api-key-first" | "runner-managed";
   headerConfig: HeaderConfig;
@@ -27,6 +34,8 @@ interface UseThemeCommitContext {
   setThemeSelection: React.Dispatch<React.SetStateAction<ThemeSelectionState>>;
   setThemeNotice: React.Dispatch<React.SetStateAction<string | null>>;
   themeNoticeTimerRef: React.RefObject<ReturnType<typeof setTimeout> | null>;
+  /** Requests an atomic home-screen repaint (see App's appearance repaint effect). */
+  requestHomeRepaint: () => void;
 }
 
 export function useThemeCommit(context: UseThemeCommitContext) {
@@ -35,12 +44,15 @@ export function useThemeCommit(context: UseThemeCommitContext) {
     workspaceDisplayMode,
     terminalTitleMode,
     showBusyLoader,
+    startupLogoStyle,
+    startupAnimation,
     customTheme,
     authPreference,
     headerConfig,
     setThemeSelection,
     setThemeNotice,
     themeNoticeTimerRef,
+    requestHomeRepaint,
   } = context;
 
   const repaintCommittedTheme = useCallback(
@@ -56,6 +68,8 @@ export function useThemeCommit(context: UseThemeCommitContext) {
             workspaceDisplayMode,
             terminalTitleMode,
             showBusyLoader,
+            startupLogoStyle,
+            startupAnimation,
             customTheme,
           },
           authPreference,
@@ -64,6 +78,9 @@ export function useThemeCommit(context: UseThemeCommitContext) {
       );
       setThemeSelection((currentTheme) => commitThemeSelection(currentTheme, themeName));
       setThemeNotice(`Theme switched to ${formatThemeLabel(themeName)}.`);
+      // The flushed startup banner cannot recolor through React alone; ask
+      // the clear-frame boundary for an atomic home repaint (pristine home only).
+      requestHomeRepaint();
       if (themeNoticeTimerRef.current) {
         clearTimeout(themeNoticeTimerRef.current);
       }
@@ -76,7 +93,10 @@ export function useThemeCommit(context: UseThemeCommitContext) {
       authPreference,
       customTheme,
       headerConfig,
+      requestHomeRepaint,
       showBusyLoader,
+      startupAnimation,
+      startupLogoStyle,
       terminalTitleMode,
       workspaceDisplayMode,
     ],

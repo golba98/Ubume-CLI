@@ -265,13 +265,21 @@ export function buildSettingsPayload(
   initial: ReturnType<typeof loadSettings>,
   ui: Pick<
     ReturnType<typeof loadSettings>["ui"],
-    "theme" | "workspaceDisplayMode" | "terminalTitleMode" | "showBusyLoader" | "customTheme"
+    | "theme"
+    | "workspaceDisplayMode"
+    | "terminalTitleMode"
+    | "showBusyLoader"
+    | "customTheme"
+    | "startupLogoStyle"
+    | "startupAnimation"
+    | "startupHeaderMiddleLine"
+    | "startupLogoRendering"
   >,
   authPreference: AuthPreference,
   header: ReturnType<typeof loadSettings>["header"],
 ): ReturnType<typeof loadSettings> {
   return {
-    ui: { layoutStyle: initial.ui.layoutStyle, ...ui },
+    ui: { ...initial.ui, ...ui },
     auth: { preference: authPreference },
     header,
     updateCheck: initial.updateCheck,

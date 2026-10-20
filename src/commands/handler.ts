@@ -100,6 +100,7 @@ type CommandAction =
   | "config_trust_set"
   | "open_auth_panel"
   | "open_theme_picker"
+  | "open_preferences_panel"
   | "open_permissions_panel"
   | "themes"
   | "verbose_toggle"
@@ -452,6 +453,7 @@ function buildHelpMessage(context: CommandContext): string {
     "  /runtime personality [status|none|friendly|pragmatic]",
     "  /theme [name]      Switch theme directly (no arg opens picker)",
     "  /themes            Open visual theme picker (Up/Down + Enter)",
+    "  /preferences       Open the preferences panel (startup logo, color theme)",
     "  /verbose           Toggle verbose mode (shows detailed processing info)",
     "  /auth [option]     Open auth panel or set auth preference",
     "  /auth status       Probe Ubume auth status",
@@ -1117,6 +1119,7 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 
   setting: handleSettingCommand,
   settings: handleSettingCommand,
+  preferences: () => ({ action: "open_preferences_panel" }),
   theme: handleThemeCommand,
   themes: () => ({ action: "open_theme_picker" }),
   workspace: handleWorkspaceCommand,

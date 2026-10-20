@@ -23,6 +23,7 @@ import {
   createRow,
   createSpan,
 } from "./rows.js";
+import { buildCompactStartupRows } from "./startupBrandingRows.js";
 import type {
   RenderTimelineItem,
   TimelineRow,
@@ -273,6 +274,15 @@ export function buildIntroRows(
   const safeWidth = Math.max(10, width);
   const startupHeaderMode =
     intro.startupHeaderMode ?? (intro.layoutMode === "expanded" ? "large" : "compact");
+
+  // Compact branding styles (`minimal`, `simple`) have their own renderers and
+  // stay readable across narrow and wide terminals; `normal` keeps the
+  // historical ASCII logo layout below with its "tiny" fallback.
+  const compactRows = buildCompactStartupRows(item, safeWidth);
+  if (compactRows) {
+    return compactRows;
+  }
+
   const workspaceName = getWorkspaceDisplayName(intro.workspaceLabel);
   if (startupHeaderMode === "tiny") {
     const messageRows = [

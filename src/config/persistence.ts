@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { writeJsonFileAtomic, writeTextFileAtomic, writeTextFileIfAbsent } from "./atomicFile.js";
 import { mergeRuntimeIntoTomlConfig, parseTomlDocument } from "./layeredConfig.js";
 import { normalizeRuntimeConfig, type RuntimeConfig } from "./runtimeConfig.js";
-import type { AvailableMode, Theme } from "./settings.js";
+import type { AvailableMode, StartupLogoStyle, Theme } from "./settings.js";
 import {
   AUTH_PREFERENCES,
   type AuthPreference,
@@ -31,6 +31,12 @@ import {
   type HeaderConfig,
   LEGACY_DIRECTORY_DISPLAY_MODES,
   normalizeLegacyDirectoryDisplayMode,
+  normalizeStartupAnimation,
+  normalizeStartupHeaderMiddleLine,
+  normalizeStartupLogoRendering,
+  normalizeStartupLogoStyle,
+  type StartupHeaderMiddleLine,
+  type StartupLogoRendering,
   type TerminalTitleMode,
   WORKSPACE_DISPLAY_MODES,
   type WorkspaceDisplayMode,
@@ -40,6 +46,10 @@ import { serializeTomlDocument } from "./tomlSerialize.js";
 export interface UiSettings {
   layoutStyle: string;
   theme: string;
+  startupLogoStyle: StartupLogoStyle;
+  startupAnimation: boolean;
+  startupHeaderMiddleLine?: StartupHeaderMiddleLine;
+  startupLogoRendering?: StartupLogoRendering;
   workspaceDisplayMode: WorkspaceDisplayMode;
   terminalTitleMode: TerminalTitleMode;
   showBusyLoader: boolean;
@@ -102,6 +112,10 @@ function normalizeUiSettings(input: Partial<UiSettings> | null | undefined): UiS
   return {
     layoutStyle: input?.layoutStyle ?? DEFAULT_LAYOUT_STYLE,
     theme: input?.theme ?? DEFAULT_THEME,
+    startupLogoStyle: normalizeStartupLogoStyle(input?.startupLogoStyle),
+    startupAnimation: normalizeStartupAnimation(input?.startupAnimation),
+    startupHeaderMiddleLine: normalizeStartupHeaderMiddleLine(input?.startupHeaderMiddleLine),
+    startupLogoRendering: normalizeStartupLogoRendering(input?.startupLogoRendering),
     workspaceDisplayMode: input?.workspaceDisplayMode ?? DEFAULT_WORKSPACE_DISPLAY_MODE,
     terminalTitleMode: input?.terminalTitleMode ?? DEFAULT_TERMINAL_TITLE_MODE,
     showBusyLoader:
@@ -294,6 +308,18 @@ export function parseSettingsData(data: unknown): AppSettings {
     ui: normalizeUiSettings({
       layoutStyle: pickStr(uiSource, "layoutStyle", "layout_style") ?? defaults.ui.layoutStyle,
       theme: pickStr(uiSource, "theme", "theme") ?? defaults.ui.theme,
+      startupLogoStyle: normalizeStartupLogoStyle(
+        uiSource.startupLogoStyle ?? uiSource.startup_logo_style,
+      ),
+      startupHeaderMiddleLine: normalizeStartupHeaderMiddleLine(
+        uiSource.startupHeaderMiddleLine ?? uiSource.startup_header_middle_line,
+      ),
+      startupLogoRendering: normalizeStartupLogoRendering(
+        uiSource.startupLogoRendering ?? uiSource.startup_logo_rendering,
+      ),
+      startupAnimation: normalizeStartupAnimation(
+        uiSource.startupAnimation ?? uiSource.startup_animation,
+      ),
       workspaceDisplayMode: parseWorkspaceDisplayMode(uiSource, defaults.ui.workspaceDisplayMode),
       terminalTitleMode: parseTerminalTitleMode(uiSource, defaults.ui.terminalTitleMode),
       showBusyLoader:
@@ -338,6 +364,12 @@ export function serializeSettings(settings: AppSettings): Record<string, unknown
     ui: {
       layout_style: settings.ui.layoutStyle,
       theme: settings.ui.theme,
+      startup_logo_style: settings.ui.startupLogoStyle,
+      startup_animation: settings.ui.startupAnimation,
+      startup_header_middle_line: normalizeStartupHeaderMiddleLine(
+        settings.ui.startupHeaderMiddleLine,
+      ),
+      startup_logo_rendering: normalizeStartupLogoRendering(settings.ui.startupLogoRendering),
       workspace_display_mode: settings.ui.workspaceDisplayMode,
       terminal_title_mode: settings.ui.terminalTitleMode,
       show_busy_loader: settings.ui.showBusyLoader,

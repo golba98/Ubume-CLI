@@ -15,8 +15,10 @@ function createHarness(
   overrides: {
     onWidthResizeRefresh?: () => void;
     isOverlayActive?: () => boolean;
+    hasLiveStartupHeader?: () => boolean;
     getRenderedRepaintGeneration?: () => number;
     getRenderedLayoutCols?: () => number | undefined;
+    getRenderedLayoutRows?: () => number | undefined;
   } = {},
 ) {
   const events: string[] = [];
@@ -399,6 +401,70 @@ test("defers the width repaint until the re-flushed static frame arrives, then c
     resetBeforeResize + 1,
     "the repaint resets Ink's caches exactly once",
   );
+});
+
+test("requestHomeRepaint repaints the visible screen atomically without clearing scrollback", () => {
+  // Appearance changes (theme, startup logo) must recolor the startup banner
+  // that Ink already flushed to <Static>. The boundary suppresses frames until
+  // the caller re-mounts the shell, then clears ONLY the viewport (the user's
+  // scrollback above the app must survive) and writes the re-flushed frame in
+  // one piece.
+  let renderedGeneration = 0;
+  let refreshCount = 0;
+  const harness = createHarness({
+    onWidthResizeRefresh: () => {
+      refreshCount += 1;
+      renderedGeneration += 1;
+    },
+    getRenderedRepaintGeneration: () => renderedGeneration,
+  });
+  const { controller, instance, events } = harness;
+
+  instance.renderInteractiveFrame?.("home-frame", 4, "");
+  events.length = 0;
+
+  assert.equal(controller.requestHomeRepaint("appearanceChange"), true);
+  instance.renderInteractiveFrame?.("stale-home-frame", 4, "");
+  assert.equal(refreshCount, 1, "the repaint should request the <Static> re-flush");
+  assert.equal(controller.getState().widthRepaintPending, true);
+  assert.equal(
+    events.some((entry) => entry.startsWith("write:")),
+    false,
+    "the stale frame must be suppressed, not written",
+  );
+  assert.equal(
+    events.some((entry) => entry.startsWith("clear:")),
+    false,
+    "no physical clear before the rebuilt frame exists",
+  );
+
+  instance.renderInteractiveFrame?.("recolored-home-frame", 6, "banner re-flushed\n");
+  const clearIndex = events.findIndex((entry) =>
+    entry.startsWith("clearViewport:test:clearBoundary:homeRepaint"),
+  );
+  const writeIndex = events.findIndex((entry) => entry.startsWith("write:recolored-home-frame"));
+  assert.ok(clearIndex >= 0, "the repaint must use the viewport-only clear");
+  assert.ok(writeIndex > clearIndex, "clear must immediately precede the rebuilt frame write");
+  assert.equal(
+    events.some((entry) => entry.startsWith("clear:test:clearBoundary")),
+    false,
+    "the scrollback-inclusive transcript clear must never run for a home repaint",
+  );
+  assert.equal(controller.getState().widthRepaintPending, false);
+  assert.equal(controller.getState().lastFrameWasAuthoritative, true);
+});
+
+test("requestHomeRepaint refuses to arm while a clear is pending or an overlay owns the screen", () => {
+  const overlayHarness = createHarness({ isOverlayActive: () => true });
+  assert.equal(overlayHarness.controller.requestHomeRepaint("appearanceChange"), false);
+  assert.equal(overlayHarness.controller.getState().widthRepaintPending, false);
+
+  const harness = createHarness();
+  const { controller, instance } = harness;
+  assert.equal(controller.beginClearGeneration(3), true);
+  assert.equal(controller.requestHomeRepaint("appearanceChange"), false);
+  assert.equal(controller.getState().widthRepaintPending, false);
+  void instance;
 });
 
 test("a width shrink (maximize→restore) also repaints atomically instead of stranding the wider frame", () => {
@@ -1051,4 +1117,95 @@ test("returns null when no live Ink instance is available", () => {
     stdout: { columns: 100, rows: 30 },
   });
   assert.equal(controller, null);
+});
+
+test("a live compact header width resize commits a settled frame with a scrollback-inclusive clear", () => {
+  let generation = 0;
+  let layoutCols = 120;
+  const h = createHarness({
+    hasLiveStartupHeader: () => true,
+    getRenderedRepaintGeneration: () => generation,
+    getRenderedLayoutCols: () => layoutCols,
+    onWidthResizeRefresh: () => {
+      generation++;
+    },
+  });
+  h.instance.renderInteractiveFrame?.("initial", 10, "");
+  h.events.length = 0;
+  h.stdout.columns = 80;
+  h.instance.renderInteractiveFrame?.("stale", 10, "");
+  assert.equal(
+    h.events.some((event) => event.startsWith("write:")),
+    false,
+  );
+  layoutCols = 80;
+  h.instance.renderInteractiveFrame?.("pre-remount", 10, "");
+  assert.equal(generation, 1);
+  h.instance.renderInteractiveFrame?.("rebuilt live header and composer", 10, "");
+  assert.equal(h.controller.getState().widthRepaintPending, false);
+  // A shrinking window pushed the top of the live header into scrollback; only
+  // the transcript clear (ESC[3J) removes that copy.
+  assert.ok(h.events.some((event) => event.startsWith("clear:")));
+  assert.equal(
+    h.events.some((event) => event.startsWith("clearViewport:")),
+    false,
+  );
+  assert.ok(h.events.includes("write:rebuilt live header and composer:10:0"));
+  h.instance.renderInteractiveFrame?.("typing after resize", 10, "");
+  assert.ok(h.events.includes("write:typing after resize:10:0"));
+  h.controller.dispose();
+});
+
+test("a height-only resize under a live compact header repaints once the new height is laid out", () => {
+  let generation = 0;
+  let layoutRows = 40;
+  const h = createHarness({
+    hasLiveStartupHeader: () => true,
+    getRenderedRepaintGeneration: () => generation,
+    getRenderedLayoutCols: () => 120,
+    getRenderedLayoutRows: () => layoutRows,
+    onWidthResizeRefresh: () => {
+      generation++;
+    },
+  });
+  h.instance.renderInteractiveFrame?.("initial", 30, "");
+  h.events.length = 0;
+  h.stdout.rows = 20;
+  // The 40-row frame is stale: writing it after a clear would scroll its top
+  // straight back into scrollback, so it is suppressed.
+  h.instance.renderInteractiveFrame?.("stale tall frame", 30, "");
+  assert.equal(h.controller.getState().widthRepaintPending, true);
+  assert.equal(
+    h.events.some((event) => event.startsWith("write:") || event.startsWith("clear")),
+    false,
+  );
+  layoutRows = 20;
+  h.instance.renderInteractiveFrame?.("pre-remount", 15, "");
+  assert.equal(generation, 1);
+  h.instance.renderInteractiveFrame?.("short header and composer", 15, "");
+  assert.equal(h.controller.getState().widthRepaintPending, false);
+  const clearIndex = h.events.findIndex((event) => event.startsWith("clear:"));
+  const writeIndex = h.events.indexOf("write:short header and composer:15:0");
+  assert.ok(clearIndex >= 0 && writeIndex > clearIndex, "clear, then the settled frame");
+  assert.equal(h.events.filter((event) => event.startsWith("write:")).length, 1);
+  h.controller.dispose();
+});
+
+test("height-only resizes without a live compact header keep diffing in place", () => {
+  const h = createHarness({
+    hasLiveStartupHeader: () => false,
+    getRenderedLayoutCols: () => 120,
+    getRenderedLayoutRows: () => 20,
+  });
+  h.instance.renderInteractiveFrame?.("initial", 30, "");
+  h.events.length = 0;
+  h.stdout.rows = 20;
+  h.instance.renderInteractiveFrame?.("normal mode frame", 15, "");
+  assert.equal(h.controller.getState().widthRepaintPending, false);
+  assert.ok(h.events.includes("write:normal mode frame:15:0"));
+  assert.equal(
+    h.events.some((event) => event.startsWith("clear")),
+    false,
+  );
+  h.controller.dispose();
 });

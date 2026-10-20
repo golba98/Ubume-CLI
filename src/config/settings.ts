@@ -31,6 +31,7 @@ export const DEFAULT_THEME = "dark";
 export const DEFAULT_WORKSPACE_DISPLAY_MODE = "dir";
 export const DEFAULT_TERMINAL_TITLE_MODE = "dir";
 export const DEFAULT_SHOW_BUSY_LOADER = true;
+export const DEFAULT_STARTUP_ANIMATION = true;
 export const DEFAULT_AUTH_PREFERENCE = "chatgpt-login-goal";
 export const MAX_CHAT_LINES = 2000;
 
@@ -380,6 +381,53 @@ export function formatThemeLabel(themeId: string): string {
   return found?.label ?? themeId;
 }
 
+// ─── 6b. Startup logo styles ──────────────────────────────────────────────────
+
+/**
+ * Selectable startup branding presentations. `normal` keeps the historical
+ * large ASCII banner; `minimal` and `simple` are compact developer-style
+ * headers built around the `</>` mark (see `ui/timeline/measure/startupBrandingRows.ts`).
+ */
+export const STARTUP_LOGO_STYLES = [
+  {
+    id: "normal",
+    label: "Normal",
+    description: "The classic large UBUME ASCII banner.",
+  },
+  {
+    id: "minimal",
+    label: "Minimal",
+    description: "An animated developer mark beside three compact metadata rows.",
+  },
+  {
+    id: "simple",
+    label: "Simple",
+    description: "The shared animated developer mark with product info alongside it.",
+  },
+] as const;
+
+export type StartupLogoStyle = (typeof STARTUP_LOGO_STYLES)[number]["id"];
+
+/** Default for new and pre-existing configurations that predate the setting. */
+export const DEFAULT_STARTUP_LOGO_STYLE: StartupLogoStyle = "normal";
+
+export function formatStartupLogoStyleLabel(styleId: string): string {
+  const found = STARTUP_LOGO_STYLES.find((item) => item.id === styleId);
+  return found?.label ?? styleId;
+}
+
+/** Maps any stored value to a valid style, falling back to `normal` (see persistence). */
+export function normalizeStartupLogoStyle(value: unknown): StartupLogoStyle {
+  return typeof value === "string" && STARTUP_LOGO_STYLES.some((item) => item.id === value)
+    ? (value as StartupLogoStyle)
+    : DEFAULT_STARTUP_LOGO_STYLE;
+}
+
+/** Maps any stored startup-animation value to a boolean, defaulting to enabled. */
+export function normalizeStartupAnimation(value: unknown): boolean {
+  return typeof value === "boolean" ? value : DEFAULT_STARTUP_ANIMATION;
+}
+
 // ─── 7. Path & Display Formatters ─────────────────────────────────────────────
 
 export function formatWorkspaceDisplayModeLabel(mode: WorkspaceDisplayMode): string {
@@ -444,6 +492,31 @@ export function formatWorkspaceDisplayPath(
   return formatWorkspaceLeaf(workspaceRoot);
 }
 
+/**
+ * Tilde-shortened absolute workspace path for the compact startup branding
+ * (`minimal` / `simple` styles). Falls back to the raw path when the workspace
+ * is not under the current home directory.
+ */
+export function formatWorkspaceBrandingPath(workspaceRoot: string | null | undefined): string {
+  const trimmed = (workspaceRoot ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const home = getHomeDir();
+  if (!home) {
+    return trimmed;
+  }
+
+  if (trimmed === home) {
+    return "~";
+  }
+
+  const startsWithHome =
+    trimmed.startsWith(`${home}/`) || (isWindowsStylePath(home) && trimmed.startsWith(`${home}\\`));
+  return startsWithHome ? `~${trimmed.slice(home.length)}` : trimmed;
+}
+
 export function formatTerminalTitlePath(
   workspaceRoot: string,
   terminalTitleMode: TerminalTitleMode,
@@ -453,4 +526,32 @@ export function formatTerminalTitlePath(
   }
 
   return formatWorkspaceLeaf(workspaceRoot);
+}
+
+/** Compact startup presentation choices; stored independently of runtime metadata. */
+export const STARTUP_HEADER_LINES = [
+  { id: "provider", label: "Provider" },
+  { id: "model", label: "Model" },
+  { id: "provider-model", label: "Provider + Model" },
+  { id: "usage", label: "Usage" },
+  { id: "hidden", label: "Hidden" },
+] as const;
+export type StartupHeaderMiddleLine = (typeof STARTUP_HEADER_LINES)[number]["id"];
+export const STARTUP_LOGO_RENDERERS = [
+  { id: "auto", label: "Auto" },
+  { id: "kitty", label: "Kitty Graphics" },
+  { id: "iterm2", label: "iTerm2 Images" },
+  { id: "sixel", label: "Sixel" },
+  { id: "solid", label: "Solid Text" },
+] as const;
+export type StartupLogoRendering = (typeof STARTUP_LOGO_RENDERERS)[number]["id"];
+export function normalizeStartupHeaderMiddleLine(value: unknown): StartupHeaderMiddleLine {
+  return STARTUP_HEADER_LINES.some((entry) => entry.id === value)
+    ? (value as StartupHeaderMiddleLine)
+    : "provider";
+}
+export function normalizeStartupLogoRendering(value: unknown): StartupLogoRendering {
+  return STARTUP_LOGO_RENDERERS.some((entry) => entry.id === value)
+    ? (value as StartupLogoRendering)
+    : "auto";
 }

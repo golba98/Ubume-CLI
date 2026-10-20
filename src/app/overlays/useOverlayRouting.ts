@@ -37,6 +37,8 @@ interface UseOverlayRoutingContext {
   focusManager: ReturnType<typeof useFocusManager>;
   pendingRouteProviderId: ProviderId | null;
   setScreen: React.Dispatch<React.SetStateAction<Screen>>;
+  /** Tracks which screen the theme picker returns to (preferences or main). */
+  setThemePickerReturnScreen: React.Dispatch<React.SetStateAction<Screen>>;
   screen: Screen;
 
   // Model discovery and capabilities
@@ -76,6 +78,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
     refreshModelCapabilities,
     ensureProviderModels,
     setScreen,
+    setThemePickerReturnScreen,
     appendEvent,
     busy,
     currentModelCapability,
@@ -182,8 +185,16 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
   }, [appendEvent, currentModelCapability, model, modelCapabilitiesBusy, refreshModelCapabilities]);
 
   const openThemePicker = useCallback(() => {
+    // Opened directly (command or shortcut): return to the main screen after
+    // the picker commits or cancels. The preferences panel overrides this to
+    // itself so Color Theme feels native inside /preferences.
+    setThemePickerReturnScreen("main");
     setScreen("theme-picker");
-  }, []);
+  }, [setScreen, setThemePickerReturnScreen]);
+
+  const openPreferencesPanel = useCallback(() => {
+    setScreen("preferences");
+  }, [setScreen]);
 
   const openSettingsPanel = useCallback(() => {
     setScreen("settings-panel");
@@ -277,6 +288,7 @@ export function useOverlayRouting(context: UseOverlayRoutingContext) {
     openModePicker,
     openReasoningPicker,
     openThemePicker,
+    openPreferencesPanel,
     openSettingsPanel,
     openAuthPanel,
     openPermissionsPanel,
