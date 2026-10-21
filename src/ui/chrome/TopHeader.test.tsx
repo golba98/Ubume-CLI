@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { render } from "ink";
+import { Box, render } from "ink";
 import { buildRuntimeSummary } from "../../config/runtimeConfig.js";
 import type { HeaderConfig } from "../../config/settings.js";
 import {
@@ -10,9 +10,11 @@ import {
   HEADER_CONFIG_DEFAULTS,
 } from "../../config/settings.js";
 import type { CodexAuthState } from "../../core/codex/codexAuth.js";
+import { getTextWidth } from "../../core/shared/text.js";
 import { TEST_RUNTIME } from "../../test/runtimeTestUtils.js";
+import { createTestTerminal } from "../../test/terminal.js";
 import { createLayoutSnapshot } from "../layout.js";
-import { LOGO_LARGE, LOGO_LARGE_MIN_COLS, LOGO_MEDIUM } from "../render/logoVariants.js";
+import { LOGO_LARGE, LOGO_LARGE_MIN_COLS } from "../render/logoVariants.js";
 import { ThemeProvider } from "../theme.js";
 import {
   getHeaderHeroLayout,
@@ -184,7 +186,7 @@ test("local-dev channel makes header version obvious", async () => {
 test("wide header centers metadata beside the logo with a clear column gap", async () => {
   const output = await renderHeader(140, "authenticated", HEADER_CONFIG_WITH_AUTH);
   const rows = output.split("\n");
-  const firstLogoRow = rows.findIndex((row) => row.includes("██╗"));
+  const firstLogoRow = rows.findIndex((row) => /[█▀▄]/.test(row));
   const brandRow = rows.findIndex((row) => row.includes(`Ubume v${APP_VERSION}`));
   const workspaceRow = rows.findIndex((row) => row.includes("Workspace:"));
 
@@ -228,7 +230,7 @@ test("normal header keeps metadata beside the canonical logo with compact trunca
   );
   const rows = output.split("\n");
   const brandRow = rows.findIndex((row) => row.includes(`Ubume v${APP_VERSION}`));
-  const firstLogoRow = rows.findIndex((row) => row.includes("██╗"));
+  const firstLogoRow = rows.findIndex((row) => /[█▀▄]/.test(row));
   const workspaceRow = rows.find((row) => row.includes("Workspace:")) ?? "";
 
   assert.equal(getHeaderHeroLayout(createLayoutSnapshot(100, 40)).mode, "medium");
@@ -374,7 +376,7 @@ test("header layout changes when width changes without duplicating the component
 
   const rows = stripAnsi(output).split("\n");
   const brandRows = rows.filter((row) => row.includes(`Ubume v${APP_VERSION}`));
-  const firstLogoRow = rows.findIndex((row) => row.includes("██╗"));
+  const firstLogoRow = rows.findIndex((row) => /[█▀▄]/.test(row));
   const firstBrandRow = rows.findIndex((row) => row.includes(`Ubume v${APP_VERSION}`));
 
   assert.equal(
@@ -453,14 +455,16 @@ test("100x21 keeps a normal logo header instead of collapsing to compact", () =>
   );
 });
 
-test("normal, wide, and max header modes select the same canonical logo", () => {
-  assert.equal(selectHeaderLogo(createLayoutSnapshot(100, 21)), LOGO_LARGE);
-  assert.equal(selectHeaderLogo(createLayoutSnapshot(140, 30)), LOGO_LARGE);
-  assert.equal(selectHeaderLogo(createLayoutSnapshot(180, 45)), LOGO_LARGE);
-  assert.deepEqual(selectHeaderLogo(createLayoutSnapshot(80, 24)), LOGO_LARGE);
+test("canonical native wordmark keeps its native size in wide and tall layouts", () => {
+  for (const [cols, rows] of [
+    [100, 21],
+    [140, 30],
+    [180, 45],
+    [300, 80],
+  ] as const)
+    assert.equal(selectHeaderLogo(createLayoutSnapshot(cols, rows)), LOGO_LARGE);
   assert.deepEqual(selectHeaderLogo(createLayoutSnapshot(71, 24)), []);
   assert.deepEqual(selectHeaderLogo(createLayoutSnapshot(39, 13)), []);
-  assert.notEqual(selectHeaderLogo(createLayoutSnapshot(100, 21)), LOGO_MEDIUM);
 });
 
 test("full header is selected when both columns and rows are sufficient", () => {
@@ -598,8 +602,8 @@ test("measureTopHeaderRows increases when hasUpdate is true in medium mode", () 
 
 // ─── Responsive threshold parity tests ──────────────────────────────────────
 
-test("80 cols selects narrow mode and renders logo art with metadata below", async () => {
-  assert.equal(getHeaderHeroLayout(createLayoutSnapshot(80, 40)).mode, "narrow");
+test("80 cols fits reduced artwork beside readable metadata", async () => {
+  assert.equal(getHeaderHeroLayout(createLayoutSnapshot(80, 40)).mode, "medium");
 
   const output = await renderHeader(80, "authenticated", HEADER_CONFIG_WITH_AUTH);
   assert.match(output, /[█╔╗╚╝═║]/);
@@ -616,7 +620,7 @@ test("70 cols selects compact mode and renders no logo art", async () => {
   assert.match(output, /Ubume/);
 });
 
-test("95 cols is the minimum for placing metadata beside logo", () => {
+test("metadata placement follows actual artwork width at adjacent column sizes", () => {
   assert.equal(
     getHeaderHeroLayout(createLayoutSnapshot(95, 40)).mode,
     "medium",
@@ -624,8 +628,8 @@ test("95 cols is the minimum for placing metadata beside logo", () => {
   );
   assert.equal(
     getHeaderHeroLayout(createLayoutSnapshot(94, 40)).mode,
-    "narrow",
-    "94 → narrow layout with logo and metadata below",
+    "medium",
+    "94 → reduced wordmark fits beside metadata",
   );
 });
 
@@ -778,4 +782,48 @@ test("update notice at 100 cols (medium mode) renders card in right column", asy
   assert.equal(getHeaderHeroLayout(createLayoutSnapshot(100, 40)).mode, "medium");
   assert.match(output, /[╭╰]/, "update card border should appear in medium mode at 100 cols");
   assert.match(output, /1\.0\.3/, "latest version should appear in card");
+});
+
+test("overlay header obeys its parent region independently of the physical viewport", async () => {
+  const layout = createLayoutSnapshot(300, 80);
+  for (const availableColumns of [30, 60, 100, 160])
+    for (const availableRows of [0, 1, 5, 8, 12, 20]) {
+      const hero = getHeaderHeroLayout(
+        layout,
+        HEADER_CONFIG_WITH_AUTH,
+        true,
+        availableRows,
+        availableColumns,
+      );
+      assert.ok(hero.totalRows <= availableRows, `${availableColumns}x${availableRows}`);
+      const terminal = createTestTerminal(
+        <ThemeProvider theme="purple">
+          <Box width={availableColumns}>
+            <TopHeader
+              authState="authenticated"
+              workspaceLabel="/開発/👩🏽‍💻/long-workspace"
+              layout={layout}
+              runtimeSummary={buildRuntimeSummary(TEST_RUNTIME)}
+              headerConfig={HEADER_CONFIG_WITH_AUTH}
+              updateAvailable={MOCK_UPDATE}
+              availableRows={availableRows}
+              availableColumns={availableColumns}
+            />
+          </Box>
+        </ThemeProvider>,
+        { columns: 300, rows: 80 },
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const output = stripAnsi(terminal.lastFrame()).trimEnd();
+        const lines = output ? output.split("\n") : [];
+        assert.ok(
+          lines.length <= hero.totalRows,
+          `measured ${hero.totalRows} but drew ${lines.length}`,
+        );
+        assert.ok(lines.every((line) => getTextWidth(line) <= availableColumns));
+      } finally {
+        await terminal.dispose();
+      }
+    }
 });

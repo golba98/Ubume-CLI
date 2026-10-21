@@ -28,7 +28,7 @@ import { HEADER_CONFIG_DEFAULTS, type HeaderConfig } from "../../config/settings
 import type { CodexAuthState } from "../../core/codex/codexAuth.js";
 import { getAuthStateLabel } from "../../core/codex/codexAuth.js";
 import * as renderDebug from "../../core/perf/renderDebug.js";
-import { clampVisualText, getTextWidth } from "../../core/shared/text.js";
+import { clampVisualText, getTextUnits, getTextWidth } from "../../core/shared/text.js";
 import { formatUbumeBrandLabel } from "../../core/version/channel.js";
 import { formatVersionLabel, UBUME_UPDATE_COMMAND } from "../../core/version/updateCheck.js";
 import { isDecorativeLayoutMode, type Layout } from "../layout.js";
@@ -39,6 +39,8 @@ import {
   LOGO_LARGE_MIN_COLS,
   LOGO_LARGE_MIN_ROWS,
 } from "../render/logoVariants.js";
+import { computeResponsiveHeader, HEADER_CONSTRAINTS } from "../render/responsiveHeader.js";
+import { wordmarkArt, wordmarkBand } from "../render/wordmarkArt.js";
 import { useTheme } from "../theme.js";
 import { UPDATE_CARD_ROWS, UpdateAvailableCard } from "./UpdateAvailableCard.js";
 
@@ -90,11 +92,16 @@ interface TopHeaderProps {
   runtimeSummary?: RuntimeSummary | null;
   headerConfig?: HeaderConfig;
   updateAvailable?: UpdateAvailableInfo | null;
+  availableRows?: number;
+  availableColumns?: number;
 }
 
 /** Usable header width after the shell gutter and the header's own horizontal padding. */
-function getHeaderContentWidth(cols: number): number {
-  return Math.max(1, cols - SHELL_GUTTER_COLUMNS - HEADER_PADDING_COLUMNS);
+function getHeaderContentWidth(cols: number, availableColumns?: number): number {
+  return Math.max(
+    1,
+    Math.min(cols - SHELL_GUTTER_COLUMNS, availableColumns ?? Infinity) - HEADER_PADDING_COLUMNS,
+  );
 }
 
 /**
@@ -137,7 +144,12 @@ function getHeaderVerticalMargins(layout: Layout): {
  * (non-regular/expanded modes, or compact below 72 cols), the compact art when
  * `UBUME_COMPACT_LOGO=1`, otherwise the large wordmark.
  */
-export function selectHeaderLogo(layout: Layout): readonly string[] {
+export function selectHeaderLogo(
+  layout: Layout,
+  availableRows?: number,
+  metadataRows = 4,
+  availableColumns?: number,
+): readonly string[] {
   if (process.env["UBUME_NO_ASCII_LOGO"] === "1") return [];
   const showNormalLogo =
     process.env["UBUME_NO_ASCII_LOGO"] !== "1" &&
@@ -146,7 +158,27 @@ export function selectHeaderLogo(layout: Layout): readonly string[] {
       (layout.mode === "compact" && layout.cols >= 72));
   if (!showNormalLogo) return [];
   if (process.env["UBUME_COMPACT_LOGO"] === "1") return LOGO_COMPACT;
-  return LOGO_LARGE;
+  const allocation = computeResponsiveHeader({
+    innerWidth: getHeaderContentWidth(layout.cols, availableColumns),
+    terminalRows: layout.rows,
+    availableRows:
+      availableRows ??
+      Math.max(
+        0,
+        layout.rows -
+          HEADER_CONSTRAINTS.defaultComposerRows -
+          HEADER_CONSTRAINTS.overlayContentReserveRows -
+          HEADER_CONSTRAINTS.viewportGutterRows -
+          HEADER_CONSTRAINTS.liveSafetyRows,
+      ),
+    metadataRows,
+    style: "normal",
+  });
+  return allocation.logo === "identity"
+    ? LOGO_COMPACT
+    : allocation.size
+      ? wordmarkArt(allocation.size.rows)
+      : [];
 }
 
 /**
@@ -158,17 +190,26 @@ export function getHeaderHeroLayout(
   layout: Layout,
   headerConfig: HeaderConfig = HEADER_CONFIG_DEFAULTS,
   hasUpdate = false,
+  availableRows?: number,
+  availableColumns?: number,
 ): HeaderHeroLayout {
-  const { topMarginRows, bottomMarginRows } = getHeaderVerticalMargins(layout);
+  const rowBudget =
+    availableRows === undefined
+      ? Infinity
+      : Number.isFinite(availableRows)
+        ? Math.max(0, Math.floor(availableRows))
+        : 0;
+  const margins = getHeaderVerticalMargins(layout);
+  const topMarginRows = Math.min(margins.topMarginRows, Math.max(0, rowBudget - 1));
+  const bottomMarginRows = margins.bottomMarginRows;
   const metadataRows = getMetadataRowCount(headerConfig);
 
+  const logo = selectHeaderLogo(layout, availableRows, metadataRows, availableColumns);
   const showNormalLogo =
-    process.env["UBUME_NO_ASCII_LOGO"] !== "1" &&
-    (layout.mode === "regular" ||
-      layout.mode === "expanded" ||
-      (layout.mode === "compact" && layout.cols >= 72));
-
-  const placeMetadataBesideLogo = showNormalLogo && layout.cols >= 95;
+    logo.length > 0 && getLogoWidth(logo) <= getHeaderContentWidth(layout.cols, availableColumns);
+  const placeMetadataBesideLogo =
+    showNormalLogo &&
+    getHeaderContentWidth(layout.cols, availableColumns) >= getLogoWidth(logo) + 2 + 24;
 
   let mode: HeaderHeroMode;
   if (!showNormalLogo) {
@@ -179,21 +220,20 @@ export function getHeaderHeroLayout(
     mode = "narrow";
   }
 
-  const logo = selectHeaderLogo(layout);
-
+  const compactLayout = (): HeaderHeroLayout => ({
+    mode: "compact",
+    topMarginRows,
+    bottomMarginRows,
+    metadataGapColumns: 0,
+    metadataGapRows: 0,
+    logoRows: Math.min(1, rowBudget),
+    metadataRows: 0,
+    compactHintRows: 0,
+    totalRows: Math.min(rowBudget, topMarginRows + 1 + bottomMarginRows),
+  });
   if (mode === "compact") {
     // Compact / micro text-only header.
-    return {
-      mode: "compact",
-      topMarginRows,
-      bottomMarginRows,
-      metadataGapColumns: 0,
-      metadataGapRows: 0,
-      logoRows: 1,
-      metadataRows: 0,
-      compactHintRows: 0,
-      totalRows: topMarginRows + 1 + bottomMarginRows,
-    };
+    return compactLayout();
   }
 
   const logoRowCount = logo.length;
@@ -215,6 +255,7 @@ export function getHeaderHeroLayout(
       metadataRows +
       (hasUpdate ? STACKED_METADATA_GAP_ROWS + 1 : 0);
 
+  if (topMarginRows + contentRows + bottomMarginRows > rowBudget) return compactLayout();
   return {
     mode,
     topMarginRows,
@@ -233,8 +274,11 @@ export function measureTopHeaderRows(
   layout: Layout,
   headerConfig: HeaderConfig = HEADER_CONFIG_DEFAULTS,
   hasUpdate = false,
+  availableRows?: number,
+  availableColumns?: number,
 ): number {
-  return getHeaderHeroLayout(layout, headerConfig, hasUpdate).totalRows;
+  return getHeaderHeroLayout(layout, headerConfig, hasUpdate, availableRows, availableColumns)
+    .totalRows;
 }
 
 /** Longest suffix of `text` whose terminal cell width fits in `maxWidth`. */
@@ -242,7 +286,7 @@ function takeVisualSuffix(text: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
   let output = "";
 
-  for (const char of Array.from(text).reverse()) {
+  for (const { text: char } of getTextUnits(text).reverse()) {
     if (getTextWidth(char + output) > maxWidth) break;
     output = char + output;
   }
@@ -288,6 +332,8 @@ export function TopHeader({
   runtimeSummary = null,
   headerConfig = HEADER_CONFIG_DEFAULTS,
   updateAvailable = null,
+  availableRows,
+  availableColumns,
 }: TopHeaderProps) {
   renderDebug.useRenderDebug("Header", {
     authState,
@@ -309,11 +355,22 @@ export function TopHeader({
   const authLabel =
     authLabelRaw.length > 0 ? authLabelRaw[0]!.toUpperCase() + authLabelRaw.slice(1) : authLabelRaw;
 
-  const heroLayout = getHeaderHeroLayout(layout, headerConfig, !!updateAvailable);
-  const selectedLogo = selectHeaderLogo(layout);
+  const heroLayout = getHeaderHeroLayout(
+    layout,
+    headerConfig,
+    !!updateAvailable,
+    availableRows,
+    availableColumns,
+  );
+  const selectedLogo = selectHeaderLogo(
+    layout,
+    availableRows,
+    getMetadataRowCount(headerConfig),
+    availableColumns,
+  );
   const selectedLogoWidth = selectedLogo.length > 0 ? getLogoWidth(selectedLogo) : 0;
 
-  const contentWidth = getHeaderContentWidth(layout.cols);
+  const contentWidth = getHeaderContentWidth(layout.cols, availableColumns);
   const sideBySideMetadataWidth = Math.max(
     1,
     contentWidth - selectedLogoWidth - heroLayout.metadataGapColumns,
@@ -382,9 +439,10 @@ export function TopHeader({
     <Box flexDirection="column" flexShrink={0}>
       {selectedLogo.map((line, i) => {
         let lineColor = theme.logoPrimary;
-        if (selectedLogo.length === 6) {
-          if (i === 2 || i === 3) lineColor = theme.logoSecondary;
-          else if (i === 4 || i === 5) lineColor = theme.logoShadow;
+        if (selectedLogo.length >= 3) {
+          const band = wordmarkBand(i, selectedLogo.length);
+          if (band === 1) lineColor = theme.logoSecondary;
+          else if (band === 2) lineColor = theme.logoShadow;
         }
         return (
           <Text key={i} color={lineColor} wrap="truncate">
@@ -395,6 +453,7 @@ export function TopHeader({
     </Box>
   );
 
+  if (heroLayout.totalRows === 0) return null;
   if (heroLayout.mode !== "compact") {
     const isSideBySide = heroLayout.mode === "wide" || heroLayout.mode === "medium";
     const metadataTopOffset = 0;
@@ -478,21 +537,6 @@ export function TopHeader({
       </Text>,
     );
   }
-  if (headerConfig.showWorkspace) {
-    if (compactParts.length > 0)
-      compactParts.push(
-        <Text key="sep-ws" color={theme.textDim}>
-          {"  ·  "}
-        </Text>,
-      );
-    compactParts.push(
-      <Text
-        key="ws"
-        color={theme.textMuted}
-        wrap="truncate"
-      >{`Workspace: ${compactWorkspaceDisplay}`}</Text>,
-    );
-  }
   if (headerConfig.showProvider && runtimeSummary?.providerLabel) {
     if (compactParts.length > 0)
       compactParts.push(
@@ -508,12 +552,27 @@ export function TopHeader({
       >{`Provider: ${runtimeSummary.providerLabel}`}</Text>,
     );
   }
+  if (headerConfig.showWorkspace) {
+    if (compactParts.length > 0)
+      compactParts.push(
+        <Text key="sep-ws" color={theme.textDim}>
+          {"  ·  "}
+        </Text>,
+      );
+    compactParts.push(
+      <Text
+        key="ws"
+        color={theme.textMuted}
+        wrap="truncate"
+      >{`Workspace: ${compactWorkspaceDisplay}`}</Text>,
+    );
+  }
 
   return (
     <Box flexDirection="column" paddingX={1} width="100%">
       {heroLayout.topMarginRows > 0 && <Box height={heroLayout.topMarginRows} />}
-      <Box flexDirection="row" width="100%">
-        {compactParts}
+      <Box flexDirection="row" width="100%" height={1} overflow="hidden">
+        <Text wrap="truncate">{compactParts}</Text>
       </Box>
       {heroLayout.compactHintRows > 0 && (
         <Text color={theme.textDim} wrap="truncate">
@@ -532,6 +591,8 @@ export const MemoizedTopHeader = memo(TopHeader, (prev, next) => {
   return (
     prev.authState === next.authState &&
     prev.workspaceLabel === next.workspaceLabel &&
+    prev.availableRows === next.availableRows &&
+    prev.availableColumns === next.availableColumns &&
     prev.layout.cols === next.layout.cols &&
     prev.layout.rows === next.layout.rows &&
     prev.layout.mode === next.layout.mode &&

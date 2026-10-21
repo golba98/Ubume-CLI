@@ -3,10 +3,10 @@
  * deterministic: every renderer (solid cells, Kitty placeholders, inline image
  * tiles, rasterization) reads the region chosen here, so they never disagree.
  *
- * A terminal cannot change its font size, so "larger" means more cells: the
- * mark grows with the terminal in whole rows, always STARTUP_LOGO_COLUMNS_PER_ROW
- * columns per row, so solid and graphical output share one footprint and the
- * layout never shifts when an asynchronous raster replaces the solid fallback.
+ * The mark keeps its base 12×3 footprint at every terminal size: three rows
+ * match the metadata column beside it, and larger marks dominated the header.
+ * Solid and graphical output share that footprint, so the layout never shifts
+ * when an asynchronous raster replaces the solid fallback.
  */
 import {
   type LogoCellSize,
@@ -38,9 +38,9 @@ export const COMPACT_STARTUP_MIN_WIDTH = 40;
 /** The metadata column never shrinks below this to make room for the mark. */
 export const MIN_METADATA_COLUMNS = 24;
 export const MIN_LOGO_ROWS = STARTUP_LOGO_BASE_SIZE.rows;
-/** Largest mark: 40×10 cells already dominates a fullscreen 4K terminal. */
+/** Grown marks dwarfed their three metadata rows; the base size is also the largest. */
 export const MAX_LOGO_ROWS = Math.min(
-  10,
+  MIN_LOGO_ROWS,
   Math.floor(KITTY_MAX_PLACEHOLDER_CELLS / STARTUP_LOGO_COLUMNS_PER_ROW),
 );
 /** Share of the terminal height the mark may occupy. */
@@ -118,7 +118,12 @@ export function selectStartupLogoSize(input: StartupLogoLayoutInput): StartupLog
   const budget = startupLogoBudget(innerWidth, terminalRows);
   let target = Math.max(MIN_LOGO_ROWS, Math.min(MAX_LOGO_ROWS, Math.floor(budget)));
   const kept = previous ? SIZES.get(previous.rows) : undefined;
-  if (kept && budget >= kept.rows - HYSTERESIS_ROWS && budget < kept.rows + 1 + HYSTERESIS_ROWS)
+  if (
+    kept &&
+    previous?.columns === kept.columns &&
+    budget >= kept.rows - HYSTERESIS_ROWS &&
+    budget < kept.rows + 1 + HYSTERESIS_ROWS
+  )
     target = kept.rows;
   // Hard constraints shrink the mark; they never grow it past the budget.
   for (let rows = target; rows >= MIN_LOGO_ROWS; rows--) {

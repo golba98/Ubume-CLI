@@ -127,13 +127,36 @@ Main composer bindings (see `composerKeymap.ts`):
 
 ## Terminal size and resizing
 
-`useTerminalViewport` reports dimensions on stdout `resize`. On the first event it marks
-`isResizing` (and pauses animations) without committing intermediate sizes. It commits
-the final size once events stop for `RESTORE_SETTLE_MS`. `computeAppLayoutBudget` splits
-the height between header, transcript or panel stage, and composer. Panels read their
-share through the layout contexts (`usePanelLayout()`, `useActivePanelLayout()`, …), and
-the pickers use `usePickerPanelGeometry`. Below 20 × 10 the shell shows a "cramped"
-placeholder.
+`useTerminalViewport` coalesces stdout resize events in fixed 50 ms windows, committing
+the latest dimensions even during a sustained drag. Invalid measurements retain the
+last valid geometry; small positive measurements describe actual small windows. Cleanup
+removes the subscription, cancels pending work and releases the resize flag.
+
+`computeResponsiveHeader` allocates startup branding after the measured composer,
+viewport gutter, live-window safety row and content reserve. It independently limits
+width and height. The classic wordmark always emits its exact 45 × 6 native glyphs
+verbatim; it does not grow with the terminal, because enlarged lettering dominated large
+windows and stepped its strokes. Minimal and Simple keep their shared vector mark at its
+fixed 12 × 3 base, matching the three metadata rows beside it. Header allocation is part of timeline cache identity: a height change
+at the same width must invalidate old rows. When the six-row lettering cannot fit after
+reserving content, the existing compact identity takes over.
+Responsive classic startup headers still require an authoritative Static reflush; a live compact
+header can commit a repaint without Static output. These two conditions stay distinct.
+
+`composerGeometry` is shared by editor measurement and rendering. Short windows reduce
+visible draft rows and optional suggestions; the underlying draft remains intact.
+`computeAppLayoutBudget` treats explicit composer measurements as the complete bottom
+region, including its footer and padding. Panels read their allocated share through
+the layout contexts and `usePickerPanelGeometry`; requested minimum widths cannot exceed
+the viewport. Below 8 columns or 3 rows the shell displays a bounded resize hint.
+
+All visible regions must fit their allocations, text must be deliberately truncated,
+and branding must yield before input. Native 100 × 22 output and animation frames are
+pinned to fixtures captured from the original revision. Width repaints and visible
+startup height repaints remain owned by the clear-frame boundary; components never
+clear the terminal themselves. Raster and graphics-channel caches are bounded by both
+entry count and encoded bytes (16 MiB each). A failed output write invalidates cached
+frame success and selects the diagnosed solid graphics fallback.
 
 Width handling: use `getTextWidth`, `clampVisualText` and the wrapping helpers in
 `src/core/shared/text.ts` for anything that is measured. They account for wide (CJK,

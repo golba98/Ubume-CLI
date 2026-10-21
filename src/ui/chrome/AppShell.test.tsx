@@ -955,12 +955,12 @@ test("terminal viewport ignores invalid restore sizes and bumps layout epoch on 
   assert.match(frame, /stable:120x40raw:120x40unstable:falseepoch:0/);
 
   output = "";
-  stdout.columns = 1;
-  stdout.rows = 1;
+  stdout.columns = 0;
+  stdout.rows = 0;
   stdout.emit("resize");
   await sleep(30);
   frame = compactText(output);
-  assert.match(frame, /stable:120x40raw:1x1unstable:trueepoch:0/);
+  assert.match(frame, /stable:120x40raw:0x0unstable:trueepoch:0/);
 
   output = "";
   stdout.columns = 120;
@@ -1067,9 +1067,15 @@ function buildShellNode(
 }
 
 function countLogoInOutput(raw: string): number {
-  // Count occurrences of a distinctive second line of the ASCII logo.
-  // This line appears exactly once per physical logo render in real-mode output.
-  return (stripAnsi(raw).match(/██║ ╚═╝ ██║/g) ?? []).length;
+  // A physical banner is one contiguous run of artwork rows, at every scale.
+  let runs = 0;
+  let previous = false;
+  for (const line of stripAnsi(raw).split("\n")) {
+    const artwork = /[█▀▄╔╗╚╝═║]/.test(line);
+    if (artwork && !previous) runs++;
+    previous = artwork;
+  }
+  return runs;
 }
 
 function countUbumeMetadataInOutput(raw: string): number {
@@ -1426,7 +1432,7 @@ test("project instructions render with breathing room below the live header", as
   await sleep(20);
 
   const rows = stripAnsi(raw).split("\n");
-  const lastLogoRow = rows.findIndex((row) => row.includes("╚═════"));
+  const lastLogoRow = rows.findLastIndex((row) => /[█▀▄╔╗╚╝═║]/.test(row));
   const projectRow = rows.findIndex((row) => row.includes("Project instructions"));
 
   assert.ok(lastLogoRow >= 0, "logo should render");

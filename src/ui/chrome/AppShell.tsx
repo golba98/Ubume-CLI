@@ -58,6 +58,7 @@ import {
   PanelLayoutContext,
   type TerminalViewport,
 } from "../layout.js";
+import { HEADER_CONSTRAINTS } from "../render/responsiveHeader.js";
 import { useTheme } from "../theme.js";
 import { Timeline } from "../timeline/Timeline.js";
 import { MemoizedTopHeader, measureTopHeaderRows, type UpdateAvailableInfo } from "./TopHeader.js";
@@ -174,23 +175,10 @@ export function calculateHeaderToContentGapRows(layout: Layout): number {
 function CrampedView({ layout }: { layout: Layout }) {
   const theme = useTheme();
   return (
-    <Box
-      flexDirection="column"
-      width="100%"
-      height={getShellHeight(layout.rows)}
-      alignItems="center"
-      justifyContent="center"
-    >
-      <Box borderStyle="round" borderColor={theme.error} paddingX={2} paddingY={1}>
-        <Text color={theme.error} bold>
-          Terminal too small — resize to at least {MIN_TERMINAL_COLS} x {MIN_TERMINAL_ROWS}
-        </Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>
-          Current: {layout.cols} x {layout.rows}
-        </Text>
-      </Box>
+    <Box width={getShellWidth(layout.cols)} height={1} overflow="hidden">
+      <Text color={theme.error} wrap="truncate">
+        Resize to at least {MIN_TERMINAL_COLS}×{MIN_TERMINAL_ROWS}
+      </Text>
     </Box>
   );
 }
@@ -279,12 +267,9 @@ function AppShellInner({
     mode: layout.mode,
   });
 
-  if (layout.isCramped) {
-    return <CrampedView layout={layout} />;
-  }
-
   const shellWidth = getShellWidth(layout.cols);
   const shellHeight = getShellHeight(layout.rows);
+  const contentWidth = getContentWidth(layout.cols);
 
   const showComposer = true;
   const showMainPanel = screen === "main" && mainPanel !== undefined && mainPanel !== null;
@@ -297,7 +282,20 @@ function AppShellInner({
     showPanelStage && layout.rows <= 24
       ? { ...layout, cols: Math.min(layout.cols, 71), mode: "compact" as const }
       : layout;
-  const headerRows = measureTopHeaderRows(headerLayout, headerConfig, !!updateAvailable);
+  const headerAvailableRows = Math.max(
+    0,
+    shellHeight -
+      (composerRows ?? HEADER_CONSTRAINTS.defaultComposerRows) -
+      HEADER_CONSTRAINTS.overlayContentReserveRows -
+      HEADER_CONSTRAINTS.liveSafetyRows,
+  );
+  const headerRows = measureTopHeaderRows(
+    headerLayout,
+    headerConfig,
+    !!updateAvailable,
+    headerAvailableRows,
+    contentWidth,
+  );
   const previousMeasurements = useRef<{
     timelineRows: number;
     composerRows: number;
@@ -306,7 +304,9 @@ function AppShellInner({
   } | null>(null);
 
   const effectiveShowComposer = showComposer;
-  const panelHintRows = showPanelStage && panelHint ? 2 : 0;
+  const showPanelHint =
+    showPanelStage && panelHint && shellHeight - (composerRows ?? 4) - headerRows >= 3;
+  const panelHintRows = showPanelHint ? 2 : 0;
 
   // ─── App Layout Budget ────────────────────────────────────────────────────
 
@@ -325,10 +325,8 @@ function AppShellInner({
   const finalShellHeight = shellHeight;
   const finalShellWidth = shellWidth;
 
-  // Guard against transient invalid measurements (zero/NaN shell size or a
-  // budget below 2 rows): reuse the last committed row count instead of
-  // collapsing the stage. Without a previous value the budget is used with a
-  // 2-row floor.
+  // Guard invalid measurements, while accepting a legitimate zero-row stage:
+  // in extremely short windows the editor can consume the whole shell.
   const { finalTimelineRows: resolvedTimelineRows } = useMemo(() => {
     const prev = previousMeasurements.current;
     const isValid =
@@ -337,7 +335,7 @@ function AppShellInner({
       Number.isFinite(shellHeight) &&
       Number.isFinite(shellWidth) &&
       Number.isFinite(finalTimelineRows) &&
-      finalTimelineRows >= 2;
+      finalTimelineRows >= 0;
 
     if (!isValid && prev) {
       return {
@@ -361,7 +359,6 @@ function AppShellInner({
     };
   }, [resolvedTimelineRows, bottomChromeRows, finalShellHeight, finalShellWidth]);
 
-  const contentWidth = getContentWidth(layout.cols);
   const panelStagePaddingY = appLayoutBudget.panelStagePaddingY;
 
   const panelAvailableRows = appLayoutBudget.panelRows;
@@ -370,7 +367,7 @@ function AppShellInner({
   // title row) is dropped below 7 rows and the header row below 9, so tiny
   // terminals still get at least one content row.
   const activePanelLayout = useMemo<ActivePanelLayout>(() => {
-    const panelBoxHeight = Math.max(3, resolvedTimelineRows - 2 * panelStagePaddingY);
+    const panelBoxHeight = Math.max(0, resolvedTimelineRows - 2 * panelStagePaddingY);
     const showBorder = panelBoxHeight >= 7;
     const borderRows = showBorder ? 2 : 0;
     const borderCols = showBorder ? 4 : 0;
@@ -379,7 +376,7 @@ function AppShellInner({
     const panelChromeRows = borderRows + panelTitleRows + panelHeaderRows;
 
     const availableRows = Math.max(1, panelBoxHeight - panelChromeRows);
-    const availableCols = Math.max(20, contentWidth - borderCols);
+    const availableCols = Math.max(1, contentWidth - borderCols);
 
     return {
       width: contentWidth,
@@ -397,19 +394,25 @@ function AppShellInner({
     };
   }, [appLayoutBudget.mode, appLayoutBudget.activePanelRows, appLayoutBudget.activePanelCols]);
 
+  if (layout.isCramped) return <CrampedView layout={layout} />;
+
   // Note: the Timeline below stays mounted while hidden (display="none") rather
   // than being conditionally rendered.
   const mainContent = (
     <AppLayoutBudgetContext.Provider value={appLayoutBudget}>
       <Box flexDirection="column" width={contentWidth} height="100%">
-        <MemoizedTopHeader
-          authState={authState}
-          workspaceLabel={workspaceLabel}
-          layout={headerLayout}
-          runtimeSummary={runtimeSummary}
-          headerConfig={headerConfig}
-          updateAvailable={updateAvailable}
-        />
+        {appLayoutBudget.headerRows > 0 && (
+          <MemoizedTopHeader
+            authState={authState}
+            workspaceLabel={workspaceLabel}
+            layout={headerLayout}
+            availableRows={headerAvailableRows}
+            availableColumns={contentWidth}
+            runtimeSummary={runtimeSummary}
+            headerConfig={headerConfig}
+            updateAvailable={updateAvailable}
+          />
+        )}
 
         {headerToContentGapRows > 0 && <Box height={headerToContentGapRows} />}
 
@@ -472,7 +475,7 @@ function AppShellInner({
           </Box>
         )}
 
-        {showPanelStage && panelHint}
+        {showPanelHint && panelHint}
 
         {effectiveShowComposer && (
           <Box flexDirection="column" flexShrink={0}>
@@ -491,6 +494,7 @@ function AppShellInner({
           authState={authState}
           workspaceLabel={workspaceLabel}
           layout={layout}
+          availableColumns={contentWidth}
           runtimeSummary={runtimeSummary}
           headerConfig={headerConfig}
           updateAvailable={updateAvailable}

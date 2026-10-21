@@ -181,7 +181,7 @@ test("ModelPickerScreen width follows layout.contentWidth", async () => {
   const cleanOutput = output.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
   const borderLine = cleanOutput.split("\n").find((line) => line.includes("╭"));
   assert(borderLine, "Should find top border line");
-  assert.equal(borderLine.trim().length, 171);
+  assert.equal(borderLine.trim().length, 173);
 });
 
 test("small ModelPickerScreen renders without availableRows fragment warnings", async () => {

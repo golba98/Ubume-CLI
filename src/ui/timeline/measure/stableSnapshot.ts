@@ -21,7 +21,6 @@
 import * as renderDebug from "../../../core/perf/renderDebug.js";
 import type { RunEvent } from "../../../session/types.js";
 import { getResponseSegmentText } from "../../../session/types.js";
-import { LOGO_LARGE_MIN_COLS } from "../../render/logoVariants.js";
 import { getCachedFrozenRows, getStaticRows, rowCacheKey, textCacheToken } from "./caches.js";
 import { buildUserInputRows } from "./cards.js";
 import { buildActionRequiredRows, buildIntroRows, buildStandaloneEventRows } from "./eventRows.js";
@@ -63,12 +62,12 @@ function buildStableEventRows(
   return getCachedFrozenRows(cacheKey, () => buildStandaloneEventRows(item, innerWidth));
 }
 
-function buildStableIntroRows(
+function introCacheKey(
   item: Extract<RenderTimelineItem, { type: "intro" }>,
   innerWidth: number,
-): TimelineRow[] {
-  const cacheKey = rowCacheKey([
-    "stable-intro",
+): string {
+  return rowCacheKey([
+    "intro",
     item.key,
     innerWidth,
     item.intro.version,
@@ -83,8 +82,18 @@ function buildStableIntroRows(
     item.intro.usageLabel ?? "",
     textCacheToken(item.intro.workspacePath ?? ""),
     item.intro.logoStyle ?? "normal",
+    JSON.stringify(item.intro.headerLayout ?? null),
+    JSON.stringify(item.intro.logoSize ?? null),
   ]);
-  return getCachedFrozenRows(cacheKey, () => buildIntroRows(item, innerWidth));
+}
+
+function buildStableIntroRows(
+  item: Extract<RenderTimelineItem, { type: "intro" }>,
+  innerWidth: number,
+): TimelineRow[] {
+  return getCachedFrozenRows(introCacheKey(item, innerWidth), () =>
+    buildIntroRows(item, innerWidth),
+  );
 }
 
 // Cache-key fragment covering the plan's identity/content and the stream item
@@ -374,7 +383,7 @@ export function buildStableTimelineSnapshot(
   const liveRows: TimelineRow[] = [];
 
   for (const item of items) {
-    const innerWidth = Math.max(10, options.totalWidth - (item.padded ? 2 : 0));
+    const innerWidth = Math.max(1, options.totalWidth - (item.padded ? 2 : 0));
     let itemFrozenRows: TimelineRow[];
     let itemLiveRows: TimelineRow[];
 
@@ -443,12 +452,12 @@ export function buildTimelineSnapshot(
   });
 
   const builtItems = items.map((item) => {
-    const innerWidth = Math.max(10, options.totalWidth - (item.padded ? 2 : 0));
+    const innerWidth = Math.max(1, options.totalWidth - (item.padded ? 2 : 0));
 
     let builtRows: TimelineRow[];
 
     if (item.type === "intro") {
-      const cacheKey = `i:${item.key}:${innerWidth}:${item.intro.version}:${item.intro.layoutMode}:${item.intro.startupHeaderMode ?? ""}:${item.intro.authLabel}:${item.intro.workspaceLabel}:${item.intro.providerLabel ?? ""}:${item.intro.modelLabel ?? ""}:${item.intro.workspacePath ?? ""}:${item.intro.logoStyle ?? "normal"}:v${LOGO_LARGE_MIN_COLS}`;
+      const cacheKey = introCacheKey(item, innerWidth);
       builtRows = getStaticRows(cacheKey, () => buildIntroRows(item, innerWidth), {
         itemKey: item.key,
         itemType: "intro",

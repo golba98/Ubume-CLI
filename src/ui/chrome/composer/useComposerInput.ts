@@ -70,13 +70,13 @@ import {
 } from "./composerKeymap.js";
 import {
   type BottomComposerProps,
+  composerGeometry,
   FALLBACK_MODEL_SPEC,
   getCommandSuggestionState,
   getComposerPersona,
   getPlaceholder,
   getTokenBarDisplay,
   getVisibleComposerStatusLine,
-  MAX_VISIBLE_INPUT_ROWS,
 } from "./composerModel.js";
 import { stepHistorySearch } from "./historySearch.js";
 import { PasteAssembler, type PasteAssemblerSink } from "./pasteAssembler.js";
@@ -133,6 +133,7 @@ export function useComposerInput({
   onQuit,
   activeProviderId = "",
   externalCliStatus,
+  queueCount = 0,
 }: BottomComposerProps) {
   renderDebug.useRenderDebug("Composer", {
     cols: layout.cols,
@@ -268,7 +269,13 @@ export function useComposerInput({
     interruptHint,
   });
   const showStatusLine = rawStatusLine.length > 0;
-  const showTransientStatusRow = showStatusLine;
+  const geometry = composerGeometry(
+    layout.rows,
+    (queueCount > 0 || fileQuery !== undefined ? 1 : 0) +
+      (commandSuggestionState.reserveSuggestionRow ? 1 : 0),
+    showStatusLine ? 1 : 0,
+  );
+  const showTransientStatusRow = showStatusLine && geometry.showStatus;
 
   const promptViewport = useMemo(
     () =>
@@ -276,10 +283,10 @@ export function useComposerInput({
         text: value,
         cursorOffset: normalizeCursorOffset(value, cursor),
         width: promptWidth,
-        maxVisibleRows: MAX_VISIBLE_INPUT_ROWS,
+        maxVisibleRows: geometry.maxInputRows,
         scrollRow,
       }),
-    [cursor, promptWidth, scrollRow, value],
+    [cursor, promptWidth, scrollRow, value, geometry.maxInputRows],
   );
   const placeholderText = clampVisualText(getPlaceholder(persona), Math.max(1, promptWidth - 1));
 
@@ -606,6 +613,7 @@ export function useComposerInput({
   const isAnswerMode = persona === "answer";
 
   return {
+    geometry,
     theme,
     persona,
     fileQuery,

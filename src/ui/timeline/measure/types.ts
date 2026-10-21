@@ -249,6 +249,8 @@ export interface IntroRenderTimelineItem {
      * base size (callers without terminal dimensions).
      */
     logoSize?: StartupLogoSize | null;
+    /** Resolved allocation; absent for historical callers without a viewport budget. */
+    headerLayout?: import("../../render/responsiveHeader.js").ResponsiveHeader;
   };
 }
 

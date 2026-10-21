@@ -23,6 +23,7 @@ export function useStartupLogoGraphic(
   enabled: boolean,
   rasterizer = rasterizeStartupLogo,
   size: LogoCellSize = STARTUP_LOGO_BASE_SIZE,
+  paused = false,
 ) {
   const { channel, capabilities: caps, trueColor } = useStartupGraphicsCapabilities();
   const theme = useTheme();
@@ -64,7 +65,7 @@ export function useStartupLogoGraphic(
     if (enabled && requested !== "solid") channel?.probe();
   }, [channel, enabled, requested]);
   useEffect(() => {
-    if (!graphical || !channel) return;
+    if (!graphical || !channel || paused) return;
     let cancelled = false;
     void rasterizer(svg, options)
       .then((result) => {
@@ -88,12 +89,12 @@ export function useStartupLogoGraphic(
     return () => {
       cancelled = true;
     };
-  }, [channel, graphical, rasterizer, svg, options, backend, geometry]);
+  }, [channel, graphical, rasterizer, svg, options, backend, geometry, paused]);
   // Warm the remaining animation frames only while the animation is running;
   // afterwards a resize needs just the final frame at its new size.
   const animating = frame !== FINAL_STARTUP_LOGO_FRAME;
   useEffect(() => {
-    if (!graphical || !animating || rasterizer !== rasterizeStartupLogo) return;
+    if (!graphical || !animating || paused || rasterizer !== rasterizeStartupLogo) return;
     let cancelled = false;
     // Prepare sequentially to bound CPU/memory pressure. No rendering or terminal
     // transmissions occur here; the current frame always has priority.
@@ -113,14 +114,19 @@ export function useStartupLogoGraphic(
           options,
         );
       }
-    })().catch(() => {
-      /* The current-frame effect owns fallback behavior and diagnostics. */
+    })().catch((error: unknown) => {
+      if (cancelled) return;
+      // Warming is optional; only a failed current frame selects the fallback.
+      renderDebug.traceEvent("terminal", "startupLogoWarmFailed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
     });
     return () => {
       cancelled = true;
     };
   }, [
     graphical,
+    paused,
     animating,
     rasterizer,
     options,

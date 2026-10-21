@@ -421,7 +421,9 @@ Subsystem guide: [src/ui/README.md](../../src/ui/README.md).
 | `src/core/terminal/startupGraphics.ts` | Positive capability negotiation, Kitty cell placeholders and frame-owned inline graphics transport. |
 | `src/core/terminal/terminalQueryInput.ts` | Filters correlated terminal probe replies without discarding concurrent keyboard input. |
 | `src/ui/render/startupAnimation.ts` | Theme-neutral assembly frames, memoized solid developer glyphs per responsive size and frame, and the interactive-startup gate for Minimal and Simple. |
-| `src/ui/render/startupLogoLayout.ts` | Pure responsive sizing for the compact mark: proportional row budget, hard fit constraints, hysteresis, metadata offset and centering. |
+| `src/ui/render/startupLogoLayout.ts` | Pure sizing for the compact mark: fixed 12×3 base region, hard fit constraints, metadata offset and alignment. |
+| `src/ui/render/responsiveHeader.ts` | One pure startup-header allocation (logo kind, size, beside/stacked arrangement, metadata and spacing rows) shared by measurement, row building and graphics. |
+| `src/ui/render/wordmarkArt.ts` | Native-size classic wordmark art and its theme tone bands. |
 | `src/ui/render/useStartupLogoAnimation.ts` | Cancellable, one-shot React playback owned above transcript repaint remounts; no terminal writes. |
 | `src/ui/render/outputPipeline.ts` | Normalizes provider output before it reaches higher-level terminal rendering. |
 | `src/ui/render/runtimeDisplay.ts` | Formats execution-mode labels and descriptions for terminal display. Formats runtime policy and provider/model metadata into compact display values. |

@@ -14,6 +14,7 @@ import {
   LOGO_COMPACT_MIN_COLS,
   selectLogoVariant,
 } from "../../render/logoVariants.js";
+import { wordmarkArt, wordmarkBand } from "../../render/wordmarkArt.js";
 import { selectVisibleRunActivity } from "../runActivityView.js";
 import { buildDashCardRows, getShellFailureExcerpt } from "./cards.js";
 import {
@@ -271,7 +272,7 @@ export function buildIntroRows(
 ): TimelineRow[] {
   const rows: TimelineRow[] = [];
   const { intro } = item;
-  const safeWidth = Math.max(10, width);
+  const safeWidth = Math.max(1, width);
   const startupHeaderMode =
     intro.startupHeaderMode ?? (intro.layoutMode === "expanded" ? "large" : "compact");
 
@@ -284,6 +285,66 @@ export function buildIntroRows(
   }
 
   const workspaceName = getWorkspaceDisplayName(intro.workspaceLabel);
+  if (intro.headerLayout) {
+    const plan = intro.headerLayout;
+    const metadata = [
+      `Ubume v${intro.version}`,
+      workspaceName ? `Workspace: ${workspaceName}` : null,
+      intro.providerLabel ? `Provider: ${intro.providerLabel}` : `Auth: ${intro.authLabel}`,
+    ].filter((line): line is string => Boolean(line));
+    // With two rows, retain identity and provider; the directory yields first.
+    const selected =
+      plan.metadataRows === 2
+        ? [metadata[0]!, metadata.at(-1)!]
+        : metadata.slice(0, plan.metadataRows);
+    const logo =
+      plan.logo === "identity" ? LOGO_COMPACT : plan.size ? wordmarkArt(plan.size.rows) : [];
+    const top =
+      plan.arrangement === "stacked"
+        ? logo.length
+        : Math.max(0, Math.floor((logo.length - selected.length) / 2));
+    const count = plan.totalRows - plan.topRows - plan.bottomRows;
+    for (let i = 0; i < plan.topRows; i++)
+      rows.push(createBlankRow(`${item.key}-top-gap-${i}`, safeWidth));
+    for (let row = 0; row < count; row++) {
+      const line = logo[row];
+      const metadataIndex = row - top;
+      const text = selected[metadataIndex];
+      const spans: TimelineRowSpan[] = [];
+      if (line !== undefined)
+        spans.push(
+          createSpan(
+            line,
+            plan.logo === "identity"
+              ? "accent"
+              : (["logoPrimary", "logoSecondary", "logoShadow"][
+                  wordmarkBand(row, logo.length)
+                ] as TimelineTone),
+          ),
+        );
+      if (plan.arrangement === "beside" && plan.size)
+        spans.push(
+          createSpan(
+            " ".repeat(Math.max(0, plan.size.columns - getTextWidth(line ?? "")) + plan.size.gap),
+          ),
+        );
+      if (text !== undefined)
+        spans.push(
+          createSpan(
+            clampVisualText(
+              sanitizeTerminalOutput(text).replace(/[\r\n\u2028\u2029]/g, " "),
+              plan.metadataWidth,
+            ),
+            metadataIndex === 0 ? "text" : "muted",
+            { bold: metadataIndex === 0 },
+          ),
+        );
+      rows.push(createRow(`${item.key}-intro-row-${row}`, spans, safeWidth));
+    }
+    for (let i = 0; i < plan.bottomRows; i++)
+      rows.push(createBlankRow(`${item.key}-gap-${i}`, safeWidth));
+    return rows;
+  }
   if (startupHeaderMode === "tiny") {
     const messageRows = [
       `Ubume v${intro.version}`,

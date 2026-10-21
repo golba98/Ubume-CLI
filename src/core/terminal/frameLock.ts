@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as benchTrace from "../perf/benchTrace.js";
+import * as renderDebug from "../perf/renderDebug.js";
 import { resolveUbumeDebugLogPath } from "../workspace/appData.js";
 import { getStartupGraphicsChannel } from "./startupGraphics.js";
 import { isTerminalResizing } from "./terminalControl.js";
@@ -144,6 +145,13 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
         (getStartupGraphicsChannel(stdout)?.prepareFrame(chunk) ?? "") +
           (getStartupGraphicsChannel(stdout)?.transformFrame(processed) ?? processed),
       );
+    } catch (error) {
+      lastFrame = "";
+      getStartupGraphicsChannel(stdout)?.reportWriteFailure();
+      renderDebug.traceEvent("terminal", "frameWriteFailed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     } finally {
       isFlushing = false;
     }

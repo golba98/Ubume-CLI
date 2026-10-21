@@ -61,32 +61,39 @@ export function buildCompactStartupRows(
           : mode === "hidden"
             ? []
             : [provider];
-  const metadata = [
+  const allMetadata = [
     [createSpan(safeText(`Ubume CLI v${intro.version}`), "text", { bold: true })],
     ...(mode === "hidden" ? [] : [middle]),
     [createSpan(safeText(intro.workspacePath ?? ""), "text")],
   ];
+  const metadata = allMetadata.slice(
+    0,
+    item.intro.headerLayout?.metadataRows ?? allMetadata.length,
+  );
   // Hidden leaves two adjacent metadata rows, while the logo keeps its full region.
   // Taller marks center their metadata; the base size stays top-aligned.
   const top = startupMetadataTop(size, metadata.length);
   const grid = size ? startupLogoGrid(frame, size) : null;
-  return Array.from({ length: startupHeaderRows(size, metadata.length) }, (_, row) => {
-    const spans: TimelineRowSpan[] = [];
-    if (grid && size) {
-      for (const cell of grid.rows[row] ?? []) {
-        appendSpan(
-          spans,
-          createSpan(cell?.char ?? " ", cell ? (frame.impact ? "text" : cell.tone) : undefined),
-        );
+  return Array.from(
+    { length: item.intro.headerLayout?.totalRows ?? startupHeaderRows(size, metadata.length) },
+    (_, row) => {
+      const spans: TimelineRowSpan[] = [];
+      if (grid && size) {
+        for (const cell of grid.rows[row] ?? []) {
+          appendSpan(
+            spans,
+            createSpan(cell?.char ?? " ", cell ? (frame.impact ? "text" : cell.tone) : undefined),
+          );
+        }
+        appendSpan(spans, createSpan(" ".repeat(size.gap)));
       }
-      appendSpan(spans, createSpan(" ".repeat(size.gap)));
-    }
-    // Clamp spans together so provider/model colors survive truncation without wrapping.
-    const infoWidth = Math.max(1, safeWidth - offset);
-    const fitted = fitSpansToWidth(metadata[row - top] ?? [], infoWidth);
-    spans.push(...fitted);
-    return createRow(`${item.key}-compact-${row}`, spans, safeWidth);
-  });
+      // Clamp spans together so provider/model colors survive truncation without wrapping.
+      const infoWidth = Math.max(1, safeWidth - offset);
+      const fitted = fitSpansToWidth(metadata[row - top] ?? [], infoWidth);
+      spans.push(...fitted);
+      return createRow(`${item.key}-compact-${row}`, spans, safeWidth);
+    },
+  );
 }
 
 export function buildMinimalStartupRows(

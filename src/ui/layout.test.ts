@@ -20,9 +20,9 @@ test("leaves a one-column gutter to avoid edge-triggered scrollbars", () => {
   assert.equal(getShellWidth(80), 79);
 });
 
-test("keeps a sensible minimum shell width on tiny terminals", () => {
-  assert.equal(getShellWidth(20), 20);
-  assert.equal(getShellWidth(10), 20);
+test("bounds shell width by tiny positive viewports", () => {
+  assert.equal(getShellWidth(20), 19);
+  assert.equal(getShellWidth(10), 9);
   assert.equal(getShellWidth(undefined), 119);
 });
 
@@ -36,9 +36,9 @@ test("leaves a one-row gutter to avoid edge-triggered bottom scrolling", () => {
   assert.equal(getShellHeight(24), 23);
 });
 
-test("keeps a sensible minimum shell height on tiny terminals", () => {
-  assert.equal(getShellHeight(10), 10);
-  assert.equal(getShellHeight(5), 10);
+test("bounds shell height by tiny positive viewports", () => {
+  assert.equal(getShellHeight(10), 9);
+  assert.equal(getShellHeight(5), 4);
   assert.equal(getShellHeight(undefined), 23);
 });
 
@@ -179,7 +179,7 @@ test("chooses startup header mode from measured row budget", () => {
 test("measures the header rows for full and compact layouts", () => {
   assert.equal(measureTopHeaderRows(createLayoutSnapshot(100, 21)), 6);
   assert.equal(measureTopHeaderRows(createLayoutSnapshot(120, 30)), 6);
-  assert.equal(measureTopHeaderRows(createLayoutSnapshot(80, 24)), 10);
+  assert.equal(measureTopHeaderRows(createLayoutSnapshot(80, 24)), 6);
   assert.equal(measureTopHeaderRows(createLayoutSnapshot(70, 24)), 1);
   assert.ok(measureTopHeaderRows(createLayoutSnapshot(180, 45)) >= 6);
 });
@@ -198,30 +198,39 @@ test("preserves the previous layout when resize values are invalid", () => {
   assert.deepEqual(next, previous);
 });
 
-test("marks undersized restore samples as unstable without discarding the last stable layout", () => {
+test("only invalid measurements retain previous geometry; tiny positive viewports are real", () => {
   const stable = createTerminalViewport(120, 40);
-  const invalidSamples = [
-    advanceTerminalViewport(stable, 1, 1),
-    advanceTerminalViewport(stable, 2, 1),
-    advanceTerminalViewport(stable, 1, 24),
-    advanceTerminalViewport(stable, 24, 1),
-    // Medium-invalid: pass old <=1 check but fail MIN_VIEWPORT thresholds
-    advanceTerminalViewport(stable, 15, 8),
-    advanceTerminalViewport(stable, 19, 24),
-    advanceTerminalViewport(stable, 120, 9),
-  ];
-
-  for (const sample of invalidSamples) {
+  for (const [cols, rows] of [
+    [0, 0],
+    [-1, 24],
+    [NaN, 24],
+    [120, Infinity],
+    [0.5, 24],
+  ]) {
+    const sample = advanceTerminalViewport(stable, cols, rows);
     assert.equal(sample.unstable, true);
     assert.equal(sample.cols, stable.cols);
     assert.equal(sample.rows, stable.rows);
     assert.equal(sample.layoutEpoch, stable.layoutEpoch);
   }
+  for (const [cols, rows] of [
+    [1, 1],
+    [15, 8],
+    [19, 24],
+    [120, 9],
+  ]) {
+    const sample = advanceTerminalViewport(stable, cols, rows);
+    assert.equal(sample.unstable, false);
+    assert.equal(sample.cols, cols);
+    assert.equal(sample.rows, rows);
+    assert.ok(getShellWidth(cols!) <= cols!);
+    assert.ok(getShellHeight(rows!) <= rows!);
+  }
 });
 
 test("bumps the layout epoch when the terminal recovers from an unstable restore", () => {
   const stable = createTerminalViewport(120, 40);
-  const unstable = advanceTerminalViewport(stable, 1, 1);
+  const unstable = advanceTerminalViewport(stable, 0, 0);
   const recovered = advanceTerminalViewport(unstable, 100, 30);
 
   assert.equal(unstable.unstable, true);
@@ -242,11 +251,22 @@ test("clamps text to a visual width budget", () => {
 });
 
 test("getContentWidth returns responsive content widths", () => {
-  assert.equal(getContentWidth(120), 115);
+  assert.equal(getContentWidth(120), 117);
   assert.equal(getContentWidth(150), 145);
-  assert.equal(getContentWidth(180), 171);
-  assert.equal(getContentWidth(220), 207);
+  assert.equal(getContentWidth(180), 173);
+  assert.equal(getContentWidth(220), 209);
   assert.equal(getContentWidth(300), 287);
+});
+
+test("content width never shrinks or jumps when the terminal grows through gutter thresholds", () => {
+  let previous = getContentWidth(1);
+  assert.equal(getContentWidth(100), 99, "reference gutter remains exact");
+  for (let columns = 2; columns <= 600; columns++) {
+    const width = getContentWidth(columns);
+    assert.ok(width >= previous && width - previous <= 1, `${columns}: ${previous} to ${width}`);
+    assert.ok(width >= 1 && width <= getShellWidth(columns));
+    previous = width;
+  }
 });
 
 test("picker geometry prefers explicit, then context, then derived panel layouts", () => {
@@ -280,17 +300,62 @@ test("picker geometry prefers explicit, then context, then derived panel layouts
   assert.equal(derived.panelWidth, derived.shellWidth - 2);
 });
 
-test("picker geometry enforces minimum widths on narrow terminals and has a default layout", () => {
+test("picker geometry contains minimum-width requests within narrow terminals and has a default layout", () => {
   const narrow = resolvePickerPanelGeometry({
     layout: { cols: 30, rows: 20, mode: "compact" },
     minPanelWidth: 42,
     minAvailableCols: 30,
   });
-  assert.equal(narrow.panelWidth, 42);
-  assert.equal(narrow.panelLayout.availableCols, 30);
-  assert.equal(narrow.innerWidth, 30);
+  assert.equal(narrow.panelWidth, 29);
+  assert.equal(narrow.panelLayout.availableCols, 25);
+  assert.equal(narrow.innerWidth, 25);
 
   const standalone = resolvePickerPanelGeometry({ minPanelWidth: 42, minAvailableCols: 30 });
   assert.equal(standalone.panelLayout.mode, "regular");
   assert.ok(standalone.panelLayout.availableRows > 0);
+});
+
+test("invalid reservation and header measurements cannot produce negative or non-finite allocations", () => {
+  for (const value of [NaN, Infinity, -Infinity, -20, 0, 100000]) {
+    const budget = computeAppLayoutBudget({
+      cols: 30,
+      rows: 8,
+      composerRows: value,
+      headerRows: value,
+      headerGapRows: value,
+      panelHintRows: value,
+    });
+    const numbers = Object.values(budget).filter(
+      (entry): entry is number => typeof entry === "number",
+    );
+    numbers.push(...Object.values(budget.bottomChromeBudget));
+    assert.ok(
+      numbers.every((number) => Number.isFinite(number) && number >= 0 && Number.isInteger(number)),
+    );
+    assert.ok(
+      budget.headerRows +
+        budget.headerGapRows +
+        budget.panelStagePaddingY * 2 +
+        budget.bottomChromeBudget.totalRows +
+        budget.transcriptRows <=
+        getShellHeight(8),
+    );
+    assert.ok(getUsableShellWidth(30, value) <= getShellWidth(30));
+    assert.ok(Number.isFinite(getUsableShellWidth(30, value)));
+    const picker = resolvePickerPanelGeometry({
+      layout: createLayoutSnapshot(30, 8),
+      activePanelLayout: { width: value, height: 4, availableRows: 2, availableCols: value },
+      minPanelWidth: 42,
+      minAvailableCols: 30,
+    });
+    assert.ok(
+      Number.isFinite(picker.panelWidth) && picker.panelWidth >= 1 && picker.panelWidth <= 29,
+    );
+    assert.ok(
+      Number.isFinite(picker.innerWidth) &&
+        picker.innerWidth >= 1 &&
+        picker.innerWidth <= picker.panelWidth,
+    );
+    assert.equal(picker.panelLayout.availableCols, picker.innerWidth);
+  }
 });

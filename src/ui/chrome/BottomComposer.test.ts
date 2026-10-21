@@ -19,12 +19,28 @@ import { createLayoutSnapshot, getContentWidth } from "../layout.js";
 import { areBottomComposerPropsEqual, BottomComposer } from "./BottomComposer.js";
 import {
   type BottomComposerProps,
+  fitFooterRuntimeLabel,
   getCommandSuggestionState,
   getComposerPersona,
   getTokenBarDisplay,
   getVisibleComposerStatusLine,
   measureBottomComposerRows,
 } from "./composer/composerModel.js";
+
+test("narrow footer truncation retains coherent provider/model labels within a cell budget", () => {
+  const label = "OpenAI Codex CLI / gpt-5.4 (High)";
+  assert.match(fitFooterRuntimeLabel(label, 28), /OpenAI.* \/ gpt-5\.4 \(High\)/);
+  assert.equal(fitFooterRuntimeLabel(label, 100), label);
+  for (let width = 1; width < 100; width++) {
+    const fitted = fitFooterRuntimeLabel(
+      "開発👩🏽‍💻 provider".repeat(10) + " / model👩🏽‍💻".repeat(20),
+      width,
+    );
+    assert.ok(getTextWidth(fitted) <= width);
+    assert.ok(!fitted.endsWith("\u200d"));
+  }
+  assert.equal(fitFooterRuntimeLabel(label, NaN), "");
+});
 
 test("maps the idle state to the idle composer persona", () => {
   assert.equal(getComposerPersona({ kind: "IDLE" }), "idle");
