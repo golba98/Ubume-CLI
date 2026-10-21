@@ -298,7 +298,7 @@ export function clampVisualText(text: string, maxWidth: number): string {
   const suffixWidth = getTextWidth(ellipsis);
   let output = "";
 
-  for (const char of Array.from(text)) {
+  for (const { text: char } of getTextUnits(text)) {
     if (getTextWidth(output + char) + suffixWidth > maxWidth) {
       break;
     }

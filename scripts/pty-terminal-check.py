@@ -347,6 +347,45 @@ def compact_checks(check):
             session.close()
 
 
+DIMENSION_MATRIX = ((100,22),(100,30),(140,22),(80,22),(100,15),(60,15),(40,10),
+                    (160,40),(200,22),(80,60),(240,60),(300,80),(120,30),(140,35),
+                    (200,50),(90,20),(80,24),(80,18),(70,16),(50,12),(30,8))
+
+
+def dimension_matrix_checks(check):
+    for style in ("normal", "minimal", "simple"):
+        session = Session(style, {"COLORTERM": "truecolor"})
+        try:
+            check(session.wait_for(bench.MARKER, 0, timeout=15), f"{style}/matrix: input ready")
+            session.send(b"draft kept", 0.15)
+            for cols, rows in DIMENSION_MATRIX + ((100,22),):
+                session.resize(rows, cols)
+                os.killpg(session.child.pid, signal.SIGWINCH)
+                session.pump(0.2)
+                # Replay the actual resize events, rather than concatenating Ink diffs.
+                history = full_replay(session)
+                visible = history[-rows:]
+                text = "\n".join(visible)
+                label = f"{style}/matrix {cols}x{rows}"
+                check(session.child.poll() is None, f"{label}: survives")
+                check("draft kept" in text, f"{label}: draft visible")
+                check("❯" in text, f"{label}: input accessible")
+                check("Ubume" in text, f"{label}: identity visible")
+                check(not re.search(r"_Ga=|1337;File|\x1b", text), f"{label}: no protocol corruption")
+            # Repeated simultaneous changes should settle without accumulating headers.
+            for step in range(40):
+                session.resize(8 + step % 35, 30 + (step * 17) % 240)
+                os.killpg(session.child.pid, signal.SIGWINCH)
+                session.pump(0.005)
+            session.resize(22,100)
+            os.killpg(session.child.pid,signal.SIGWINCH)
+            session.pump(0.4)
+            text="\n".join(full_replay(session)[-22:])
+            check("draft kept" in text and "❯" in text, f"{style}/matrix: rapid resize settles with draft")
+        finally:
+            session.close()
+
+
 def main():
     failures = []
     check = lambda ok, name: print(f"{'PASS' if ok else 'FAIL'} {name}") or (None if ok else failures.append(name))
@@ -409,6 +448,7 @@ def main():
         session.close()
     compact_checks(check)
     responsive_checks(check)
+    dimension_matrix_checks(check)
     if failures:
         print(f"{len(failures)} check(s) failed: {', '.join(failures)}", file=sys.stderr)
         sys.exit(1)

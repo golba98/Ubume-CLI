@@ -17,10 +17,10 @@ Requires `kitty` on PATH and a display. Screenshots (X11 `import` + Pillow) are
 optional; without them the paint check is skipped and reported as such.
 
 Usage: python3 scripts/kitty-responsive-check.py [--style simple|minimal|normal]
-       [--rendering auto|solid] [--out DIR]
+       [--rendering auto|solid] --monitor OUTPUT [--out DIR]
 Exit status 0 when every check passes; failures are listed on stderr.
 """
-import ctypes, importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile, time
+import ctypes, importlib.util, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("bench", REPO / "scripts/bench/interactive-startup.py")
@@ -44,7 +44,7 @@ class X11Capture:
     def __init__(self, cls):
         self.cls = cls.encode()
         self.x = None
-        if not os.environ.get("DISPLAY") or not shutil.which("import"):
+        if not os.environ.get("DISPLAY"):
             return
         try:
             x = ctypes.CDLL("libX11.so.6")
@@ -59,7 +59,6 @@ class X11Capture:
                                  ctypes.POINTER(ctypes.c_uint)]
         x.XGetClassHint.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_ClassHint)]
         x.XFree.argtypes = [ctypes.c_void_p]
-        x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
         x.XFlush.argtypes = [ctypes.c_void_p]
         self.display = x.XOpenDisplay(None)
         if self.display:
@@ -68,7 +67,12 @@ class X11Capture:
     def _search(self, window):
         hint = _ClassHint()
         self.x.XGetClassHint(self.display, window, ctypes.byref(hint))
-        if hint.class_ and self.cls in hint.class_:
+        matched = bool(hint.class_ and self.cls in ctypes.string_at(hint.class_))
+        if hint.name:
+            self.x.XFree(hint.name)
+        if hint.class_:
+            self.x.XFree(hint.class_)
+        if matched:
             return window
         root, parent = ctypes.c_ulong(), ctypes.c_ulong()
         children, count = ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
@@ -82,21 +86,70 @@ class X11Capture:
                     return found
         return None
 
-    def capture(self, path):
+    def show_on_monitor(self, monitor):
+        """Place the still-hidden test window before mapping, without activation."""
         if not self.x:
+            raise RuntimeError("X11 window placement unavailable; refusing to open a test window")
+        window = self._search(self.x.XDefaultRootWindow(self.display))
+        if not window:
+            raise RuntimeError("Test window unavailable")
+        x, y, width, height = monitor
+        self.x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+        self.x.XMapWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        self.x.XSetWMHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_WMHints)]
+        hints = _WMHints()
+        hints.flags = 1  # InputHint: automated tests use remote input, never desktop focus.
+        hints.input = 0
+        self.x.XSetWMHints(self.display, window, ctypes.byref(hints))
+        self.x.XMoveWindow(self.display, window, x + 40, y + 60)
+        self.x.XMapWindow(self.display, window)
+        self.x.XFlush(self.display)
+        time.sleep(0.25)
+        # wmctrl changes geometry only; it does not activate the window.
+        subprocess.run(["wmctrl", "-ir", hex(window), "-e", f"0,{x + 40},{y + 60},-1,-1"], check=True)
+        self.window = window
+        self.monitor = monitor
+
+    def assert_monitor(self):
+        listing = subprocess.run(["wmctrl", "-lG"], capture_output=True, text=True, check=True).stdout
+        for line in listing.splitlines():
+            fields = line.split(None, 7)
+            if int(fields[0], 16) != getattr(self, "window", 0):
+                continue
+            x, y, width, height = map(int, fields[2:6])
+            mx, my, mw, mh = self.monitor
+            if mx <= x and my <= y and x + width <= mx + mw and y + height <= my + mh:
+                return
+            raise RuntimeError(f"Test window outside selected monitor: {x},{y} {width}x{height}")
+        raise RuntimeError("Cannot verify test window placement")
+
+    def close(self):
+        if self.x:
+            self.x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            self.x.XCloseDisplay(self.display)
+            self.x = None
+
+    def capture(self, path):
+        if not self.x or not shutil.which("import"):
             return False
         window = self._search(self.x.XDefaultRootWindow(self.display))
         if not window:
             return False
-        self.x.XRaiseWindow(self.display, window)
         self.x.XFlush(self.display)
         time.sleep(0.25)
         return subprocess.run(["import", "-window", hex(window), str(path)],
                               capture_output=True, timeout=20).returncode == 0
 
 
+class _WMHints(ctypes.Structure):
+    _fields_ = [("flags", ctypes.c_long), ("input", ctypes.c_int), ("initial_state", ctypes.c_int),
+                ("icon_pixmap", ctypes.c_ulong), ("icon_window", ctypes.c_ulong),
+                ("icon_x", ctypes.c_int), ("icon_y", ctypes.c_int),
+                ("icon_mask", ctypes.c_ulong), ("window_group", ctypes.c_ulong)]
+
+
 class _ClassHint(ctypes.Structure):
-    _fields_ = [("name", ctypes.c_char_p), ("class_", ctypes.c_char_p)]
+    _fields_ = [("name", ctypes.c_void_p), ("class_", ctypes.c_void_p)]
 
 
 def logo_pixels(path):
@@ -114,6 +167,19 @@ def logo_pixels(path):
 class KittySession:
     def __init__(self, style, rendering, out):
         self.style, self.rendering, self.out = style, rendering, out
+        name = arg("--monitor", None)
+        if not name or not shutil.which("wmctrl"):
+            raise RuntimeError("Pass --monitor OUTPUT and install wmctrl; test windows must have an explicit destination")
+        monitors = subprocess.run(["xrandr", "--listmonitors"], capture_output=True, text=True, check=True).stdout
+        monitor = None
+        for line in monitors.splitlines()[1:]:
+            if line.split()[-1] == name:
+                match = re.search(r"(\d+)/\d+x(\d+)/\d+([+-]\d+)([+-]\d+)", line)
+                if match:
+                    width, height, x, y = map(int, match.groups())
+                    monitor = (x, y, width, height)
+        if monitor is None:
+            raise RuntimeError(f"Monitor {name!r} unavailable; refusing to open a test window")
         self.proxy, _ = bench.black_hole_proxy()
         self.root = bench.prepare_root("updates-disabled")
         (self.root / ".ubume-settings.json").write_text(json.dumps({
@@ -129,12 +195,22 @@ class KittySession:
         command = ["/usr/bin/env", "-i", *(f"{k}={v}" for k, v in env.items()),
                    "node", str(REPO / "bin/ubume.js")]
         self.kitty = subprocess.Popen(
-            ["kitty", "--listen-on", self.socket, "-o", "allow_remote_control=socket-only",
+            ["kitty", "--start-as=hidden", "--position", f"{monitor[0] + 40}x{monitor[1] + 60}", "--listen-on", self.socket, "-o", "allow_remote_control=socket-only",
              "--class", self.cls, "-o", "linux_display_server=x11", "-o", "remember_window_size=no",
              "-o", "initial_window_width=80c", "-o", "initial_window_height=24c",
              "--directory", str(self.root / "project"), *command],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.capturer = X11Capture(self.cls)
+        try:
+            for _ in range(100):
+                if self.rc("ls").returncode == 0:
+                    break
+                time.sleep(0.05)
+            self.capturer.show_on_monitor(monitor)
+            self.capturer.assert_monitor()
+        except BaseException:
+            self.close()
+            raise
 
     def rc(self, *command):
         return subprocess.run(["kitty", "@", "--to", self.socket, *command],
@@ -161,23 +237,50 @@ class KittySession:
         return False
 
     def resize(self, columns, rows, settle=SETTLE_S):
+        # Keep the current font. Constrain requests to the physical monitor's
+        # available cells; PTY checks cover dimensions larger than this display.
+        listing = subprocess.run(["wmctrl", "-lG"], capture_output=True, text=True, check=True).stdout
+        current_columns, current_rows = self.size()
+        for line in listing.splitlines():
+            fields = line.split(None,7)
+            if int(fields[0],16) == self.capturer.window and current_columns and current_rows:
+                x,y,width,height = map(int,fields[2:6])
+                mx,my,mw,mh = self.capturer.monitor
+                columns = min(columns, int((mx+mw-x-20)/(width/current_columns)))
+                rows = min(rows, int((my+mh-y-20)/(height/current_rows)))
+                break
         self.rc("resize-os-window", "--unit", "cells", "--width", str(columns), "--height", str(rows))
         time.sleep(settle)
+        # Some WMs keep the old top-left after a height growth. Re-anchor before
+        # capture so a large window remains wholly inside the selected monitor.
+        mx, my, _, _ = self.capturer.monitor
+        subprocess.run(["wmctrl", "-ir", hex(self.capturer.window), "-e", f"0,{mx},{my},-1,-1"], check=True)
+        time.sleep(0.08)
+        self.capturer.assert_monitor()
 
     def send(self, text, settle=0.25):
         self.rc("send-text", text)
         time.sleep(settle)
 
     def close(self):
-        if self.kitty.poll() is None:
-            self.rc("close-window")
-            try:
-                self.kitty.wait(3)
-            except subprocess.TimeoutExpired:
-                self.kitty.terminate()
-        self.proxy.close()
-        shutil.rmtree(self.root, ignore_errors=True)
-        shutil.rmtree(self.control_dir, ignore_errors=True)
+        try:
+            if self.kitty.poll() is None:
+                try:
+                    self.rc("close-window")
+                    self.kitty.wait(3)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    print(f"Kitty cleanup required termination: {error}", file=sys.stderr)
+                    self.kitty.terminate()
+                    try:
+                        self.kitty.wait(3)
+                    except subprocess.TimeoutExpired:
+                        self.kitty.kill()
+                        self.kitty.wait()
+        finally:
+            self.capturer.close()
+            self.proxy.close()
+            shutil.rmtree(self.root, ignore_errors=True)
+            shutil.rmtree(self.control_dir, ignore_errors=True)
 
 
 def run(style, rendering, out, check):
@@ -212,7 +315,7 @@ def run(style, rendering, out, check):
     try:
         check(session.wait_ready(), f"{label}: composer visible")
         time.sleep(1.0)
-        # New OS windows take keyboard focus: clear anything typed into it meanwhile.
+        # Reset the isolated draft before testing; this window never requests desktop focus.
         session.send("\x15draft kept across resizes")
         inspect("startup")
         # The reported scenario: repeated small <-> big cycles.

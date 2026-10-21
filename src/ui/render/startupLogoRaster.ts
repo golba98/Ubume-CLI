@@ -21,6 +21,12 @@ export interface LogoRaster {
   tiles?: readonly string[];
 }
 const cache = new Map<string, Promise<LogoRaster>>();
+export const MAX_LOGO_CACHE_BYTES = 16 * 1024 * 1024;
+const cacheBytes = new Map<string, number>();
+function evict(key: string) {
+  cache.delete(key);
+  cacheBytes.delete(key);
+}
 let nextId = randomInt(1, 0xffff00);
 export function rasterizeStartupLogo(svg: string, options: LogoRasterOptions): Promise<LogoRaster> {
   const key = JSON.stringify([svg, options]);
@@ -28,8 +34,22 @@ export function rasterizeStartupLogo(svg: string, options: LogoRasterOptions): P
   if (cached) return cached;
   const pending = prepare(svg, options);
   cache.set(key, pending);
-  if (cache.size > 48) cache.delete(cache.keys().next().value!);
-  void pending.catch(() => cache.delete(key));
+  if (cache.size > 48) evict(cache.keys().next().value!);
+  void pending.then(
+    (asset) => {
+      if (cache.get(key) !== pending) return;
+      cacheBytes.set(
+        key,
+        asset.png.byteLength +
+          (asset.tiles ?? []).reduce((sum, tile) => sum + Buffer.byteLength(tile), 0),
+      );
+      while ([...cacheBytes.values()].reduce((sum, bytes) => sum + bytes, 0) > MAX_LOGO_CACHE_BYTES)
+        evict(cache.keys().next().value!);
+    },
+    () => {
+      if (cache.get(key) === pending) evict(key);
+    },
+  );
   return pending;
 }
 async function prepare(svg: string, options: LogoRasterOptions): Promise<LogoRaster> {

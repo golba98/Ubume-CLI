@@ -9,7 +9,7 @@
  */
 import type { ModelSpec } from "../../../core/providerRuntime/contextMetadata.js";
 import { formatContextCompact } from "../../../core/providerRuntime/contextMetadata.js";
-
+import { clampVisualText, getTextWidth } from "../../../core/shared/text.js";
 import type { ExternalCliStatus, UIState } from "../../../session/types.js";
 
 import {
@@ -29,6 +29,42 @@ import { isAnimatedBusyState } from "../statusIndicators.js";
 export type ComposerPersona = "idle" | "busy" | "answer" | "error";
 
 export const MAX_VISIBLE_INPUT_ROWS = 5;
+
+/** Keep both route labels recognizable when the footer cannot show the full names. */
+export function fitFooterRuntimeLabel(label: string, width: number): string {
+  if (!Number.isFinite(width) || width <= 0) return "";
+  width = Math.floor(width);
+  if (getTextWidth(label) <= width) return label;
+  const slash = label.indexOf("/");
+  if (slash < 0 || width < 5) return clampVisualText(label, width);
+  const provider = label.slice(0, slash).trim();
+  const model = label.slice(slash + 1).trim();
+  const providerWidth = Math.min(getTextWidth(provider), Math.max(1, Math.floor((width - 3) / 3)));
+  return `${clampVisualText(provider, providerWidth)} / ${clampVisualText(model, width - providerWidth - 3)}`;
+}
+
+/** Measurement and renderer share this budget; the draft itself is never truncated. */
+export function composerGeometry(rows: number, auxiliaryRows = 0, statusRows = 0) {
+  const height = Number.isFinite(rows) ? Math.max(1, Math.floor(rows)) : 24;
+  const bordered = height >= 6;
+  const showAuxiliary = height >= 12;
+  const showStatus = height >= 6;
+  const footer = height >= 3;
+  const reserved =
+    1 +
+    1 +
+    (bordered ? 2 : 0) +
+    (footer ? 1 : 0) +
+    (showAuxiliary ? auxiliaryRows : 0) +
+    (showStatus ? statusRows : 0);
+  return {
+    bordered,
+    showAuxiliary,
+    showStatus,
+    footer,
+    maxInputRows: Math.max(1, Math.min(MAX_VISIBLE_INPUT_ROWS, height - reserved)),
+  };
+}
 
 export function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -194,35 +230,36 @@ export function measureBottomComposerRows({
   const { editorWidth: promptWidth } = getComposerRowLayout(width);
   const normalizedValue = normalizeInputText(value);
   const normalizedCursor = normalizeCursorOffset(normalizedValue, cursor);
-  const promptViewport = createInputViewport({
-    text: normalizedValue,
-    cursorOffset: normalizedCursor,
-    width: promptWidth,
-    maxVisibleRows: MAX_VISIBLE_INPUT_ROWS,
-    scrollRow: 0,
-  });
   const commandSuggestionState = getCommandSuggestionState({
     value: normalizedValue,
     allowCommands,
   });
-
-  const bottomPadding = layout.mode === "compact" ? 0 : 1;
-  const visibleStatusLine = getVisibleComposerStatusLine({
-    uiState,
-    interruptHint,
-    value: normalizedValue,
-    allowCommands,
+  const auxiliaryRows =
+    (queueCount > 0 || /(?:^|\s)@[^\s]*$/.test(value.slice(0, cursor)) ? 1 : 0) +
+    (commandSuggestionState.reserveSuggestionRow ? 1 : 0);
+  const statusRows =
+    getVisibleComposerStatusLine({ uiState, interruptHint, value: normalizedValue, allowCommands })
+      .length > 0
+      ? 1
+      : 0;
+  const geometry = composerGeometry(layout.rows, auxiliaryRows, statusRows);
+  const promptViewport = createInputViewport({
+    text: normalizedValue,
+    cursorOffset: normalizedCursor,
+    width: promptWidth,
+    maxVisibleRows: geometry.maxInputRows,
+    scrollRow: 0,
   });
-  const transientStatusRows = visibleStatusLine.length > 0 ? 1 : 0;
+  const bottomPadding = layout.mode === "compact" ? 0 : 1;
+  const transientStatusRows = geometry.showStatus ? statusRows : 0;
   const visiblePromptRows = promptViewport.visibleRows.length;
 
   return (
     visiblePromptRows +
-    2 +
-    (queueCount > 0 || /(?:^|\s)@[^\s]*$/.test(value.slice(0, cursor)) ? 1 : 0) +
-    (commandSuggestionState.reserveSuggestionRow ? 1 : 0) +
+    (geometry.bordered ? 2 : 0) +
+    (geometry.showAuxiliary ? auxiliaryRows : 0) +
     transientStatusRows +
-    1 +
+    (geometry.footer ? 1 : 0) +
     bottomPadding
   );
 }

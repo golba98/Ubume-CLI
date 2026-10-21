@@ -296,6 +296,7 @@ export function buildIntroRenderItem(params: {
   logoStyle?: StartupLogoStyle;
   /** Responsive compact mark size (see `render/startupLogoLayout.ts`). */
   logoSize?: StartupLogoSize | null;
+  headerLayout?: import("../render/responsiveHeader.js").ResponsiveHeader;
 }): IntroRenderTimelineItem {
   return {
     key: "ubume-intro",
@@ -315,6 +316,7 @@ export function buildIntroRenderItem(params: {
       workspacePath: params.workspacePath ?? null,
       logoStyle: params.logoStyle ?? "normal",
       logoSize: params.logoSize,
+      headerLayout: params.headerLayout,
     },
   };
 }

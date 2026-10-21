@@ -232,8 +232,10 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   // the /clear boundary so the next frame is authoritative (see handleClear).
   const inkInstance = useMemo(() => resolveInkRenderInstance(stdout), [stdout]);
   const liveStartupHeaderRef = useRef(false);
-  const reportStartupLive = useCallback((live: boolean) => {
+  const responsiveStartupHeaderRef = useRef(false);
+  const reportStartupLive = useCallback((live: boolean, responsive = live) => {
     liveStartupHeaderRef.current = live;
+    responsiveStartupHeaderRef.current = responsive;
   }, []);
   const clearFrameBoundaryController = useMemo(
     () =>
@@ -250,6 +252,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
         // always reflects the render that produced the frame being written.
         isOverlayActive: () => screenRef.current !== "main",
         hasLiveStartupHeader: () => liveStartupHeaderRef.current,
+        hasResponsiveStartupHeader: () => responsiveStartupHeaderRef.current,
       }),
     [inkInstance, stdout, terminalControl],
   );

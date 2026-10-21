@@ -11,8 +11,7 @@
  * Everything here is pure except `useTerminalViewport` (subscribes to stdout
  * `resize`) and the context hooks. Repainting the screen on resize is owned by
  * `core/terminal/clearFrameBoundary.ts`, not by this module: the viewport hook only
- * reports dimensions, debounced so the layout does not tear while a window is
- * being dragged.
+ * reports dimensions, coalescing bursts without starving updates during a drag.
  */
 
 import { useStdout } from "ink";
@@ -20,11 +19,11 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import * as renderDebug from "../core/perf/renderDebug.js";
 import { setTerminalResizing } from "../core/terminal/terminalControl.js";
 
-export const MIN_TERMINAL_COLS = 20;
-export const MIN_TERMINAL_ROWS = 10;
-export const MIN_VIEWPORT_COLS = 20;
-export const MIN_VIEWPORT_ROWS = 10;
-const RESTORE_SETTLE_MS = process.env.NODE_ENV === "test" ? 0 : 100;
+export const MIN_TERMINAL_COLS = 8;
+export const MIN_TERMINAL_ROWS = 3;
+export const MIN_VIEWPORT_COLS = 1;
+export const MIN_VIEWPORT_ROWS = 1;
+export const RESIZE_INTERVAL_MS = process.env.NODE_ENV === "test" ? 0 : 50;
 const STARTUP_TINY_MIN_COLS = 40;
 const STARTUP_TINY_MIN_ROWS = 14;
 const STARTUP_FULL_MIN_COLS = 100; // matches LOGO_LARGE_MIN_COLS in logoVariants.ts
@@ -33,6 +32,7 @@ const STARTUP_FULL_SAFE_PADDING_ROWS = 1;
 export const transcriptContentIndent = 4; // 2 for DashCard border + 2 for prompt prefix
 const DEFAULT_COLUMNS = 120;
 const DEFAULT_ROWS = 24;
+const CONTENT_GUTTER = Object.freeze({ startsAfter: 99, share: 0.08, maximum: 12 });
 
 export type LayoutMode = "compact" | "regular" | "expanded";
 export type StartupHeaderMode = "large" | "compact" | "tiny";
@@ -123,7 +123,7 @@ export interface TerminalViewport extends Layout {
 // ─── Dimension helpers ────────────────────────────────────────────────────────
 
 function isValidDimension(value: number | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
+  return typeof value === "number" && Number.isFinite(value) && value >= 1;
 }
 
 function normalizeDimension(value: number | undefined, fallback: number): number {
@@ -133,6 +133,11 @@ function normalizeDimension(value: number | undefined, fallback: number): number
   }
 
   return Math.floor(value);
+}
+
+function clampAllocation(value: number | undefined, fallback: number, limit: number): number {
+  const resolved = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.min(limit, Math.max(0, Math.floor(resolved)));
 }
 
 function isRenderableViewport(cols: number | undefined, rows: number | undefined): boolean {
@@ -156,7 +161,7 @@ function isCrampedTerminal(cols: number | undefined, rows: number | undefined): 
  * terminal edge, which can trigger a horizontal scrollbar in some Windows hosts.
  */
 export function getShellWidth(cols: number | undefined): number {
-  return Math.max(20, (cols ?? 120) - 1);
+  return Math.max(1, normalizeDimension(cols, DEFAULT_COLUMNS) - 1);
 }
 
 /**
@@ -165,16 +170,16 @@ export function getShellWidth(cols: number | undefined): number {
  */
 export function getContentWidth(cols: number | undefined): number {
   const shellWidth = getShellWidth(cols);
-
-  if (shellWidth < 100) return shellWidth;
-  if (shellWidth < 150) return shellWidth - 4;
-  if (shellWidth < 200) return shellWidth - 8;
-
-  return shellWidth - 12;
+  const gutter = Math.min(
+    CONTENT_GUTTER.maximum,
+    Math.round(Math.max(0, shellWidth - CONTENT_GUTTER.startsAfter) * CONTENT_GUTTER.share),
+  );
+  return shellWidth - gutter;
 }
 
 export function getUsableShellWidth(cols: number | undefined, reservedColumns = 0): number {
-  return Math.max(1, getShellWidth(cols) - reservedColumns);
+  const shellWidth = getShellWidth(cols);
+  return Math.max(1, shellWidth - clampAllocation(reservedColumns, 0, shellWidth));
 }
 
 /**
@@ -182,7 +187,7 @@ export function getUsableShellWidth(cols: number | undefined, reservedColumns = 
  * edge, which can trigger viewport scroll drift in some hosts.
  */
 export function getShellHeight(rows: number | undefined): number {
-  return Math.max(10, (rows ?? DEFAULT_ROWS) - 1);
+  return Math.max(1, normalizeDimension(rows, DEFAULT_ROWS) - 1);
 }
 
 interface StartupHeaderModeParams {
@@ -242,7 +247,7 @@ interface AppLayoutBudgetParams {
 export function computeAppLayoutBudget({
   cols,
   rows,
-  composerRows = 4,
+  composerRows,
   panelHintRows = 0,
   headerRows,
   headerGapRows,
@@ -262,13 +267,33 @@ export function computeAppLayoutBudget({
 
   const placeMetadataBelowLogo = showNormalLogo && !placeMetadataBesideLogo;
 
-  const resolvedHeaderRows = headerRows ?? (showNormalLogo ? 6 : 1);
-  const resolvedHeaderGapRows = headerGapRows ?? (mode === "compact" ? 0 : 1);
-  const panelStagePaddingY = mode === "compact" ? 0 : 1;
-  const resolvedComposerRows = mode === "compact" ? 3 : Math.max(0, composerRows);
-  const runtimeMetadataRows = 1;
+  // Explicit measurements include the footer and bottom padding (see measureBottomComposerRows).
+  const measuredBottomRows = clampAllocation(composerRows, mode === "compact" ? 4 : 6, shellHeight);
+  const runtimeMetadataRows = measuredBottomRows > 0 ? 1 : 0;
   const transientStatusRows = 0;
-  const bottomPaddingRows = mode === "compact" ? 0 : 1;
+  const bottomPaddingRows = mode === "compact" || measuredBottomRows <= 1 ? 0 : 1;
+  const resolvedComposerRows = Math.max(
+    0,
+    measuredBottomRows - runtimeMetadataRows - bottomPaddingRows,
+  );
+  const afterComposer = Math.max(0, shellHeight - measuredBottomRows);
+  const resolvedHeaderRows = clampAllocation(
+    headerRows,
+    showNormalLogo ? 6 : 1,
+    Math.max(0, afterComposer - 1),
+  );
+  const resolvedHintRows = clampAllocation(
+    panelHintRows,
+    0,
+    Math.max(0, afterComposer - resolvedHeaderRows - 1),
+  );
+  const remaining = Math.max(0, afterComposer - resolvedHeaderRows - resolvedHintRows);
+  const resolvedHeaderGapRows = clampAllocation(
+    headerGapRows,
+    mode === "compact" ? 0 : 1,
+    Math.max(0, remaining - 1),
+  );
+  const panelStagePaddingY = mode === "compact" || remaining - resolvedHeaderGapRows < 4 ? 0 : 1;
   const bottomChromeBudget: BottomChromeBudget = {
     runtimeMetadataRows,
     composerRows: resolvedComposerRows,
@@ -281,9 +306,9 @@ export function computeAppLayoutBudget({
     resolvedHeaderGapRows +
     panelStagePaddingY * 2 +
     bottomChromeBudget.totalRows +
-    Math.max(0, panelHintRows);
+    resolvedHintRows;
 
-  const activePanelRows = Math.max(1, shellHeight - baseReservedRows);
+  const activePanelRows = Math.max(0, shellHeight - baseReservedRows);
   const contentWidth = getContentWidth(safeCols);
 
   const isCompact = mode === "compact";
@@ -294,7 +319,7 @@ export function computeAppLayoutBudget({
   const innerAvailableRows = Math.max(1, activePanelRows - panelChromeRows);
 
   const borderCols = 4;
-  const innerAvailableCols = Math.max(20, contentWidth - borderCols);
+  const innerAvailableCols = Math.max(1, contentWidth - borderCols);
 
   return {
     mode,
@@ -361,7 +386,7 @@ export function createTerminalViewport(
   const stableLayout =
     unstable && fallbackLayout ? fallbackLayout : createLayoutSnapshot(cols, rows, fallbackLayout);
 
-  const isCramped = isCrampedTerminal(cols, rows);
+  const isCramped = isCrampedTerminal(stableLayout.cols, stableLayout.rows);
   const contentWidth = getContentWidth(stableLayout.cols);
 
   return {
@@ -414,11 +439,10 @@ export function advanceTerminalViewport(
 /**
  * Current terminal viewport, updated on stdout `resize`.
  *
- * Leading edge of a resize: flag `isResizing` (and the global terminal-resizing
- * flag that pauses animations) but keep the old dimensions, so frames are not
- * laid out against intermediate sizes. Trailing edge (`RESTORE_SETTLE_MS` after
- * the last event, 0 in tests): commit the final dimensions in one update. Unchanged
- * measurements return the previous object, so consumers do not re-render.
+ * Leading edge: flag `isResizing`, retaining the last committed dimensions until
+ * the fixed coalescing window ends (50ms, 0 in tests). Sustained drags still
+ * commit every window. Graphics preparation pauses without resetting the one-shot
+ * animation clock. Unchanged measurements reuse the previous object.
  */
 export function useTerminalViewport(): TerminalViewport {
   const { stdout } = useStdout();
@@ -484,18 +508,17 @@ export function useTerminalViewport(): TerminalViewport {
       // new dimensions yet. This freezes the layout to prevent tearing while
       // dragging, and signals animations to pause.
       setTerminalResizing(true);
-      setViewport((current) => ({ ...current, isResizing: true }));
+      setViewport((current) => (current.isResizing ? current : { ...current, isResizing: true }));
 
-      if (settleTimerRef.current) {
-        clearTimeout(settleTimerRef.current);
-      }
+      // A fixed window coalesces a burst without starving commits during a drag.
+      if (settleTimerRef.current) return;
 
       settleTimerRef.current = setTimeout(() => {
         settleTimerRef.current = null;
         setTerminalResizing(false);
         // Trailing edge: commit final dimensions and exit isResizing state.
         commit(false);
-      }, RESTORE_SETTLE_MS);
+      }, RESIZE_INTERVAL_MS);
     };
 
     stdout.on("resize", onResize);
@@ -503,7 +526,9 @@ export function useTerminalViewport(): TerminalViewport {
       stdout.off("resize", onResize);
       if (settleTimerRef.current) {
         clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
       }
+      setTerminalResizing(false);
     };
   }, [stdout]);
 
@@ -570,7 +595,7 @@ export function resolvePickerPanelGeometry(input: PickerPanelGeometryInput): Pic
   const active = input.activePanelLayout;
   const shellWidth = getShellWidth(layout.cols);
 
-  const panelLayout = input.panelLayout ??
+  let panelLayout = input.panelLayout ??
     input.contextPanelLayout ?? {
       mode: layout.mode,
       availableRows: active
@@ -581,12 +606,22 @@ export function resolvePickerPanelGeometry(input: PickerPanelGeometryInput): Pic
         : Math.max(input.minAvailableCols, shellWidth - 4),
     };
 
-  const panelWidth = active
+  const desiredPanelWidth = active
     ? active.width
     : Math.max(input.minPanelWidth, Math.min(layout.contentWidth ?? shellWidth, shellWidth - 2));
   // 4 = round border (2) + paddingX={1} on both sides (2). The reservation is kept
   // even when a very short terminal makes the provider picker drop its border.
-  const innerWidth = Math.max(1, Math.min(panelLayout.availableCols, panelWidth - 4));
+  const panelWidth = Math.max(1, clampAllocation(desiredPanelWidth, shellWidth, shellWidth));
+  const innerWidth = Math.max(
+    1,
+    clampAllocation(
+      panelLayout.availableCols,
+      Math.max(1, panelWidth - 4),
+      Math.max(1, panelWidth - 4),
+    ),
+  );
+  if (panelLayout.availableCols !== innerWidth)
+    panelLayout = { ...panelLayout, availableCols: innerWidth };
 
   return { shellWidth, panelLayout, panelWidth, innerWidth };
 }

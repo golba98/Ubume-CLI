@@ -16,6 +16,7 @@ function createHarness(
     onWidthResizeRefresh?: () => void;
     isOverlayActive?: () => boolean;
     hasLiveStartupHeader?: () => boolean;
+    hasResponsiveStartupHeader?: () => boolean;
     getRenderedRepaintGeneration?: () => number;
     getRenderedLayoutCols?: () => number | undefined;
     getRenderedLayoutRows?: () => number | undefined;
@@ -1208,4 +1209,40 @@ test("height-only resizes without a live compact header keep diffing in place", 
     false,
   );
   h.controller.dispose();
+});
+
+test("classic home height changes wait for static branding before committing a repaint", () => {
+  let generation = 0;
+  let layoutRows = 40;
+  const h = createHarness({
+    hasLiveStartupHeader: () => false,
+    hasResponsiveStartupHeader: () => true,
+    getRenderedRepaintGeneration: () => generation,
+    getRenderedLayoutCols: () => 120,
+    getRenderedLayoutRows: () => layoutRows,
+    onWidthResizeRefresh: () => {
+      generation++;
+    },
+  });
+  try {
+    h.instance.renderInteractiveFrame?.("initial composer", 30, "original banner");
+    h.events.length = 0;
+    h.stdout.rows = 20;
+    layoutRows = 20;
+    h.instance.renderInteractiveFrame?.("before remount", 10, "");
+    assert.equal(generation, 1);
+    h.instance.renderInteractiveFrame?.("composer before Static flush", 10, "");
+    assert.equal(h.controller.getState().widthRepaintPending, true);
+    assert.equal(
+      h.events.some((event) => event.startsWith("write:") || event.startsWith("clear:")),
+      false,
+    );
+    h.instance.renderInteractiveFrame?.("settled composer", 10, "rebuilt banner");
+    assert.equal(h.controller.getState().widthRepaintPending, false);
+    assert.ok(h.events.includes("write:settled composer:10:14"));
+    h.instance.renderInteractiveFrame?.("next frame", 10, "");
+    assert.equal(generation, 1, "settled height does not repeatedly re-arm");
+  } finally {
+    h.controller.dispose();
+  }
 });

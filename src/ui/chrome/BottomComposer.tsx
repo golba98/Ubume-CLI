@@ -16,12 +16,14 @@
 import { Box, Text } from "ink";
 import { memo } from "react";
 import type { Theme } from "../../config/settings.js";
+import { getTextWidth } from "../../core/shared/text.js";
 import type { UIState } from "../../session/types.js";
 import { COMPOSER_ROW_CHROME, createInputRowWindow } from "../input/inputBuffer.js";
 import { getModeDisplaySpec } from "../render/runtimeDisplay.js";
 import {
   type BottomComposerProps,
   FALLBACK_MODEL_SPEC,
+  fitFooterRuntimeLabel,
   getExternalCliLabel,
 } from "./composer/composerModel.js";
 import { useComposerInput } from "./composer/useComposerInput.js";
@@ -134,6 +136,7 @@ export function BottomComposer({
     tokenDisplay,
     footerRuntimeDisplay,
     isAnswerMode,
+    geometry,
   } = useComposerInput({
     layout,
     width,
@@ -175,6 +178,28 @@ export function BottomComposer({
     activeProviderId,
     externalCliStatus,
   });
+
+  const contextText =
+    contextDisplay ||
+    (tokenDisplay.hasKnownLimit
+      ? `${tokenDisplay.usedText} / ${tokenDisplay.limitText}${tokenDisplay.percentage !== null ? ` · ${tokenDisplay.isEstimatedLimit ? "~" : ""}${tokenDisplay.percentage}%` : ""}`
+      : "Unknown");
+  const contextWidth = showContext
+    ? Math.min(getTextWidth(`Context: ${contextText}`), Math.floor(width / 2))
+    : 0;
+  const footerWidth = Math.max(1, width - 2 - contextWidth);
+  const modeSuffix = planMode
+    ? "  · PLAN"
+    : mode
+      ? `  · ${getModeDisplaySpec(mode, theme).label}`
+      : "";
+  const showFooterMode = planMode
+    ? footerWidth >= getTextWidth(modeSuffix) + 5
+    : getTextWidth(footerRuntimeDisplay) + getTextWidth(modeSuffix) <= footerWidth;
+  const fittedRuntime = fitFooterRuntimeLabel(
+    footerRuntimeDisplay,
+    footerWidth - (showFooterMode ? getTextWidth(modeSuffix) : 0),
+  );
 
   // The prompt line is shared between bordered and non-bordered layouts.
   const promptLine = (
@@ -239,7 +264,7 @@ export function BottomComposer({
           paddingLeft={COMPOSER_ROW_CHROME.paddingLeft}
           paddingRight={COMPOSER_ROW_CHROME.paddingRight}
           paddingY={0}
-          borderStyle="round"
+          borderStyle={geometry.bordered ? "round" : undefined}
           borderColor={theme.warning}
         >
           {promptLine}
@@ -252,14 +277,14 @@ export function BottomComposer({
           paddingLeft={COMPOSER_ROW_CHROME.paddingLeft}
           paddingRight={COMPOSER_ROW_CHROME.paddingRight}
           paddingY={0}
-          borderStyle="round"
+          borderStyle={geometry.bordered ? "round" : undefined}
           borderColor={theme.border}
         >
           {promptLine}
         </Box>
       )}
 
-      {(fileQuery !== undefined || queueCount > 0) && (
+      {geometry.showAuxiliary && (fileQuery !== undefined || queueCount > 0) && (
         <Box paddingX={1} height={1} overflow="hidden">
           <Text color={theme.textDim} wrap="truncate">
             {searchQuery !== null
@@ -272,7 +297,7 @@ export function BottomComposer({
           </Text>
         </Box>
       )}
-      {commandSuggestionState.reserveSuggestionRow && (
+      {geometry.showAuxiliary && commandSuggestionState.reserveSuggestionRow && (
         <Box paddingLeft={1} marginTop={0} width="100%" overflow="hidden">
           <Text color={theme.textDim} wrap="truncate">
             {suggestionText || " "}
@@ -313,58 +338,66 @@ export function BottomComposer({
         </Box>
       )}
 
-      <Box
-        paddingLeft={1}
-        paddingRight={1}
-        marginTop={0}
-        width="100%"
-        justifyContent="space-between"
-      >
-        <Box flexGrow={1} flexShrink={1} overflow="hidden" flexDirection="row">
-          {searchQuery !== null && fileQuery === undefined && queueCount === 0 ? (
-            <Text
-              color={theme.textDim}
-              wrap="truncate"
-            >{`History search: ${searchQuery} · Ctrl+R next · Enter accept · Esc cancel`}</Text>
-          ) : (
-            renderFooterRuntime(footerRuntimeDisplay, theme)
-          )}
-          {searchQuery !== null ? null : planMode ? (
-            <Text color={theme.accent}>{"  · PLAN"}</Text>
-          ) : mode ? (
-            <Text color={getModeDisplaySpec(mode, theme).ringColor}>
-              {`  · ${getModeDisplaySpec(mode, theme).label}`}
-            </Text>
-          ) : null}
-        </Box>
-        {showContext && (
-          <Box flexShrink={0}>
-            {contextDisplay ? (
-              <Box flexDirection="row">
-                <Text color={theme.textMuted}>Context: </Text>
-                <Text color={theme.context}>{contextDisplay}</Text>
-              </Box>
-            ) : tokenDisplay.hasKnownLimit ? (
-              <Box flexDirection="row">
-                <Text color={theme.textMuted}>Context: </Text>
-                <Text color={theme.context}>{tokenDisplay.usedText}</Text>
-                <Text color={theme.textDim}>
-                  {" / "}
-                  {tokenDisplay.limitText}
-                  {tokenDisplay.percentage !== null
-                    ? ` · ${tokenDisplay.isEstimatedLimit ? "~" : ""}${tokenDisplay.percentage}%`
-                    : ""}
-                </Text>
-              </Box>
+      {geometry.footer && (
+        <Box
+          height={1}
+          overflow="hidden"
+          paddingLeft={1}
+          paddingRight={1}
+          marginTop={0}
+          width="100%"
+          justifyContent="space-between"
+        >
+          <Box flexGrow={1} flexShrink={1} overflow="hidden" flexDirection="row">
+            {searchQuery !== null && fileQuery === undefined && queueCount === 0 ? (
+              <Text
+                color={theme.textDim}
+                wrap="truncate"
+              >{`History search: ${searchQuery} · Ctrl+R next · Enter accept · Esc cancel`}</Text>
+            ) : fittedRuntime === footerRuntimeDisplay ? (
+              renderFooterRuntime(footerRuntimeDisplay, theme)
             ) : (
-              <Box flexDirection="row">
-                <Text color={theme.textMuted}>Context: </Text>
-                <Text color={theme.textDim}>Unknown</Text>
-              </Box>
+              <Text color={theme.model} wrap="truncate">
+                {fittedRuntime}
+              </Text>
             )}
+            {searchQuery !== null || !showFooterMode ? null : planMode ? (
+              <Text color={theme.accent}>{"  · PLAN"}</Text>
+            ) : mode ? (
+              <Text color={getModeDisplaySpec(mode, theme).ringColor}>
+                {`  · ${getModeDisplaySpec(mode, theme).label}`}
+              </Text>
+            ) : null}
           </Box>
-        )}
-      </Box>
+          {showContext && (
+            <Box flexShrink={0} width={contextWidth} height={1} overflow="hidden">
+              {contextDisplay ? (
+                <Box flexDirection="row">
+                  <Text color={theme.textMuted}>Context: </Text>
+                  <Text color={theme.context}>{contextDisplay}</Text>
+                </Box>
+              ) : tokenDisplay.hasKnownLimit ? (
+                <Box flexDirection="row">
+                  <Text color={theme.textMuted}>Context: </Text>
+                  <Text color={theme.context}>{tokenDisplay.usedText}</Text>
+                  <Text color={theme.textDim}>
+                    {" / "}
+                    {tokenDisplay.limitText}
+                    {tokenDisplay.percentage !== null
+                      ? ` · ${tokenDisplay.isEstimatedLimit ? "~" : ""}${tokenDisplay.percentage}%`
+                      : ""}
+                  </Text>
+                </Box>
+              ) : (
+                <Box flexDirection="row">
+                  <Text color={theme.textMuted}>Context: </Text>
+                  <Text color={theme.textDim}>Unknown</Text>
+                </Box>
+              )}
+            </Box>
+          )}
+        </Box>
+      )}
     </Box>
   );
 }

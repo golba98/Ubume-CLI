@@ -47,6 +47,7 @@ interface SavedNormalBufferFrame {
   lastOutputHeight: number;
   fullStaticOutput: string;
   cols: number | undefined;
+  rows: number | undefined;
 }
 
 interface ClearFrameBoundaryRenderState {
@@ -108,6 +109,8 @@ interface CreateClearFrameBoundaryOptions {
   isOverlayActive?: () => boolean;
   /** The compact startup and its complete short transcript still live in Ink. */
   hasLiveStartupHeader?: () => boolean;
+  /** Includes the classic static startup banner while it is still the home screen. */
+  hasResponsiveStartupHeader?: () => boolean;
   /**
    * Called synchronously whenever a width change requires the home/transcript
    * content to be rebuilt. The physical clear is DEFERRED until the caller has
@@ -130,7 +133,7 @@ interface CreateClearFrameBoundaryOptions {
   /**
    * Reports the raw terminal column count the committing render tree was laid
    * out against, read at frame-write time. The viewport hook commits new
-   * dimensions on a trailing settle (~100ms after the resize event), so the
+   * dimensions in a coalesced update (within 50ms of the resize event), so the
    * <Static> re-flush must not be requested until a commit whose layout
    * already matches stdout.columns — remounting earlier would re-flush the
    * transcript at the pre-resize width.
@@ -369,6 +372,7 @@ export function createClearFrameBoundaryController({
   source = "src/core/terminal/clearFrameBoundary.ts",
   isOverlayActive,
   hasLiveStartupHeader,
+  hasResponsiveStartupHeader,
   onWidthResizeRefresh,
   getRenderedRepaintGeneration,
   getRenderedLayoutCols,
@@ -534,6 +538,7 @@ export function createClearFrameBoundaryController({
         lastOutputHeight: instance.lastOutputHeight ?? 0,
         fullStaticOutput: instance.fullStaticOutput ?? "",
         cols: currentCols,
+        rows: currentRows,
       };
       // Static content that arrives from this frame on belongs to the normal
       // buffer's transcript — hold it until the overlay exits.
@@ -591,7 +596,12 @@ export function createClearFrameBoundaryController({
           pendingStaticLength: pendingStatic.length,
         });
 
-        if (saved && saved.cols !== currentCols) {
+        if (
+          saved &&
+          (saved.cols !== currentCols ||
+            (saved.rows !== currentRows &&
+              (hasResponsiveStartupHeader?.() ?? hasLiveStartupHeader?.())))
+        ) {
           // The terminal was resized while the overlay was open; the restored
           // normal buffer reflowed and is stale. Repaint it from scratch. The
           // remounted <Static> re-emits everything held in React state, so the
@@ -614,7 +624,7 @@ export function createClearFrameBoundaryController({
         detachStaticChunkFromFullStatic(staticOutput);
         overlayCapturedStaticOutput += staticOutput;
       }
-      if (widthChanged) {
+      if (widthChanged || heightChanged) {
         // The alternate buffer has no scrollback; a viewport clear plus a full
         // rewrite is a complete repaint.
         terminalControl.clearViewport(`${source}:overlayResize`);
@@ -646,7 +656,12 @@ export function createClearFrameBoundaryController({
     // The live compact header sits at the top of the live frame, so a height
     // shrink pushes a copy of it into scrollback (Static content, as in Normal
     // mode, is legitimately there once). Repaint with a scrollback clear.
-    if (heightChanged && hasLiveStartupHeader?.() && !clearPending && !widthRepaintPending) {
+    if (
+      heightChanged &&
+      (hasResponsiveStartupHeader?.() ?? hasLiveStartupHeader?.()) &&
+      !clearPending &&
+      !widthRepaintPending
+    ) {
       armWidthRepaint("heightChangedLiveHeader");
     }
 

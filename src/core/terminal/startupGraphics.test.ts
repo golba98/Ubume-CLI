@@ -62,6 +62,61 @@ test("Kitty placeholders occupy exactly 12 cells in all three rows", () => {
   }
 });
 
+test("invalid geometry, excessive assets and disposal cannot stage graphical work", () => {
+  const channel = createStartupGraphicsChannel({ query: () => {} });
+  for (const value of [NaN, Infinity, -1, 0.5, 49]) {
+    assert.throws(
+      () => channel.stage(1, new Uint8Array(), undefined, { columns: value, rows: 3 }),
+      RangeError,
+    );
+    assert.throws(() => kittyPlaceholderRow(1, value), RangeError);
+  }
+  assert.throws(() => channel.stage(1, new Uint8Array(16 * 1024 * 1024 + 1)), RangeError);
+  assert.throws(() => channel.stage(1, new Uint8Array(), ["one tile"]), RangeError);
+  channel.dispose();
+  channel.stage(2, new Uint8Array([1]));
+  assert.equal(channel.prepareFrame(`\x1b[38;2;0;0;2m${kittyPlaceholderRow(2, 0)}`), "");
+});
+
+test("a thrown terminal write invalidates the frame cache and selects a diagnosed fallback", () => {
+  let throws = true;
+  let writes = 0;
+  const stdout = {
+    write: (_chunk: string | Uint8Array) => {
+      writes++;
+      if (throws) throw new Error("fixture write failure");
+      return false;
+    },
+  };
+  const channel = createStartupGraphicsChannel({ query: () => {} });
+  const unregister = registerStartupGraphicsChannel(stdout, channel);
+  wrapStdoutWithFrameLock({ stdout, env: {} });
+  try {
+    const frame = `\x1b[38;2;0;0;1m${kittyPlaceholderRow(1, 0)}`;
+    channel.stage(1, new Uint8Array([1]));
+    assert.throws(() => stdout.write(frame), /fixture write failure/);
+    assert.equal(channel.capabilities.rasterFailed, true);
+    assert.match(logoRendererStatus("auto", channel.capabilities, true), /Image rendering failed/);
+    throws = false;
+    assert.equal(stdout.write(frame), false, "backpressure passes through");
+    assert.equal(writes, 2, "failed frames are not deduplicated as successful writes");
+    assert.equal(channel.refreshPlacements().includes("a=p"), true);
+  } finally {
+    unregister();
+    releaseFrameLock(stdout);
+    channel.dispose();
+  }
+});
+
+test("encoded cache budget evicts obsolete staged assets before transmission", () => {
+  const channel = createStartupGraphicsChannel({ query: () => {} });
+  const bytes = new Uint8Array(6 * 1024 * 1024);
+  for (const id of [1, 2, 3]) channel.stage(id, bytes);
+  assert.equal(channel.prepareFrame(`\x1b[38;2;0;0;1m${kittyPlaceholderRow(1, 0)}`), "");
+  assert.match(channel.prepareFrame(`\x1b[38;2;0;0;3m${kittyPlaceholderRow(3, 0)}`), /a=t/);
+  channel.dispose();
+});
+
 test("inline Kitty data is bounded, SSH-safe and has no filesystem transfer", () => {
   const commands = kittyImageCommands(321, new Uint8Array(10000));
   assert.match(commands, /a=t,t=d,f=100,i=321,q=2/);

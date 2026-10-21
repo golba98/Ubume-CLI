@@ -1,0 +1,1276 @@
+[
+  {
+    "atMs": 0,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 40,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 80,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 120,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 160,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 200,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 240,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 280,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 320,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 360,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 400,
+    "impact": true,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 440,
+    "impact": true,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 480,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "atMs": 520,
+    "impact": false,
+    "grid": {
+      "width": 12,
+      "height": 3,
+      "rows": [
+        [
+          null,
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          null
+        ],
+        [
+          {
+            "char": "█",
+            "tone": "logoPrimary"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          null,
+          {
+            "char": "█",
+            "tone": "logoSecondary"
+          }
+        ],
+        [
+          null,
+          {
+            "char": "▀",
+            "tone": "logoPrimary"
+          },
+          {
+            "char": "▄",
+            "tone": "logoPrimary"
+          },
+          null,
+          {
+            "char": "▄",
+            "tone": "text"
+          },
+          {
+            "char": "▀",
+            "tone": "text"
+          },
+          null,
+          null,
+          null,
+          {
+            "char": "▄",
+            "tone": "logoSecondary"
+          },
+          {
+            "char": "▀",
+            "tone": "logoSecondary"
+          },
+          null
+        ]
+      ]
+    }
+  }
+]

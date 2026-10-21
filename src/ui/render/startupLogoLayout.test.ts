@@ -47,25 +47,22 @@ const BRIEF_SIZES = [
   [40, 12, null],
   [60, 20, 3],
   [80, 24, 3],
-  [100, 30, 4],
-  [120, 40, 5],
-  [160, 45, 6],
-  [200, 60, 8],
-  [240, 70, 10],
-  [300, 90, 10],
+  [100, 30, 3],
+  [120, 40, 3],
+  [160, 45, 3],
+  [200, 60, 3],
+  [240, 70, 3],
+  [300, 90, 3],
 ] as const;
 
-test("the mark grows from compact to fullscreen across representative terminals", () => {
+test("the mark keeps its base size from compact to fullscreen terminals", () => {
   for (const [cols, rows, expected] of BRIEF_SIZES) {
     const input = terminal(cols, rows);
     const size = selectStartupLogoSize(input);
     assert.equal(size?.rows ?? null, expected, `${cols}x${rows}`);
     assertValid(size, input, `${cols}x${rows}`);
+    if (size) assert.deepEqual(size, BASE_STARTUP_LOGO_SIZE, `${cols}x${rows}`);
   }
-  // Maximized is noticeably larger than a standard 80×24 window.
-  const standard = selectStartupLogoSize(terminal(80, 24))!;
-  const maximized = selectStartupLogoSize(terminal(200, 60))!;
-  assert.ok(maximized.columns >= standard.columns * 2);
 });
 
 test("every size in a dense sweep is valid and monotonic in each dimension", () => {
@@ -112,34 +109,20 @@ test("breakpoints are exact on both sides and width-only or height-only changes 
   assert.equal(selectStartupLogoSize(terminal(45, 200))!.rows, MIN_LOGO_ROWS);
 });
 
-test("hysteresis keeps the current size near a boundary but follows real changes", () => {
-  const near = (cols: number, rows: number, previous: StartupLogoSize | null) =>
-    selectStartupLogoSize({ ...terminal(cols, rows), previous });
-  // 35 rows → budget 5.0 (5 rows); 34 rows → 4.86 (4 rows without hysteresis).
-  const five = near(400, 35, null)!;
-  assert.equal(five.rows, 5);
-  assert.equal(near(400, 34, null)!.rows, 4);
-  assert.equal(near(400, 34, five)!.rows, 5, "a one-row drag back does not flip the size");
-  // Oscillating across the boundary stays stable in both directions.
-  let size: StartupLogoSize | null = five;
-  for (const rows of [34, 35, 34, 35, 34]) size = near(400, rows, size);
-  assert.equal(size!.rows, 5);
-  const four = near(400, 34, null)!;
-  for (const rows of [35, 36, 35, 36]) size = near(400, rows, four);
-  assert.equal(size!.rows, 4, "growth needs a clear margin before upgrading");
-  // Large changes always apply, both ways.
-  assert.equal(near(400, 70, four)!.rows, 10);
-  assert.equal(near(400, 21, near(400, 70, null))!.rows, 3);
-  // A kept size must still satisfy the hard constraints.
-  const tight = { ...terminal(400, 35), availableRows: 4, previous: five };
-  assert.equal(selectStartupLogoSize(tight)!.rows, 4);
+test("a previous size never grows or keeps the mark past its constraints", () => {
+  const previous = { columns: 32, rows: 8, gap: 4 };
+  assert.deepEqual(
+    selectStartupLogoSize({ ...terminal(400, 70), previous }),
+    BASE_STARTUP_LOGO_SIZE,
+  );
+  assert.equal(selectStartupLogoSize({ ...terminal(400, 70), availableRows: 2, previous }), null);
 });
 
-test("hard constraints shrink the mark and invalid dimensions hide it safely", () => {
+test("hard constraints hide the mark and invalid dimensions hide it safely", () => {
   // A tall multi-line draft shrinks the live region; the mark gives way.
   const roomy = terminal(200, 60);
-  assert.equal(selectStartupLogoSize(roomy)!.rows, 8);
-  assert.equal(selectStartupLogoSize({ ...roomy, availableRows: 6 })!.rows, 6);
+  assert.deepEqual(selectStartupLogoSize(roomy), BASE_STARTUP_LOGO_SIZE);
+  assert.deepEqual(selectStartupLogoSize({ ...roomy, availableRows: 3 }), BASE_STARTUP_LOGO_SIZE);
   assert.equal(selectStartupLogoSize({ ...roomy, availableRows: 2 }), null);
   for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0]) {
     assert.equal(selectStartupLogoSize({ ...roomy, innerWidth: bad }), null);

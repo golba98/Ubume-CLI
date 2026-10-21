@@ -13,6 +13,7 @@ import type { RunEvent, TimelineEvent, UIState, UserPromptEvent } from "../../se
 import { TEST_RUNTIME } from "../../test/runtimeTestUtils.js";
 import { createLayoutSnapshot } from "../layout.js";
 import { LOGO_COMPACT, LOGO_LARGE } from "../render/logoVariants.js";
+import { MAX_WORDMARK_ROWS, WORDMARK_ROWS, wordmarkArt } from "../render/wordmarkArt.js";
 import { ThemeProvider } from "../theme.js";
 import { TranscriptShell } from "./TranscriptShell.js";
 import {
@@ -268,6 +269,10 @@ function renderTranscript(
 
 function detectBrandTier(value: string): "large" | "compact" | "wordmark" | "none" {
   const text = stripAnsi(value);
+  for (let rows = WORDMARK_ROWS; rows <= MAX_WORDMARK_ROWS; rows++) {
+    if (wordmarkArt(rows).every((line) => text.includes(line.trim())))
+      return rows >= 6 ? "large" : "compact";
+  }
   if (text.includes(LOGO_LARGE[0]!.trim())) return "large";
   if (text.includes(LOGO_COMPACT[0]!)) return "compact";
   if (text.includes("UBUME") || text.includes("Ubume v")) return "wordmark";
@@ -784,10 +789,10 @@ const CLEAR_HOME_SCREEN_CASES: Array<{
   { cols: 140, rows: 40, expectedTier: "large" },
   { cols: 120, rows: 32, expectedTier: "large" },
   { cols: 100, rows: 28, expectedTier: "large" },
-  { cols: 80, rows: 24, expectedTier: "compact" },
+  { cols: 80, rows: 24, expectedTier: "large" },
   { cols: 70, rows: 20, expectedTier: "compact" },
   { cols: 60, rows: 18, expectedTier: "compact" },
-  { cols: 39, rows: 24, expectedTier: "wordmark" },
+  { cols: 39, rows: 24, expectedTier: "compact" },
 ];
 
 for (const testCase of CLEAR_HOME_SCREEN_CASES) {
@@ -1132,22 +1137,22 @@ function logoRowCount(frame: string): number {
   return end === -1 ? lines.length : end;
 }
 
-test("compact home scales the mark through live resize sequences without corruption", async () => {
+test("compact home keeps the base mark through live resize sequences without corruption", async () => {
   const events = [launchEvent(1400)];
   const sizes: [number, number, number][] = [
     // cols, rows, expected logo rows (0 = metadata only)
     [60, 20, 3],
-    [100, 30, 4],
-    [120, 40, 5],
-    [200, 60, 8],
+    [100, 30, 3],
+    [120, 40, 3],
+    [200, 60, 3],
     [60, 20, 3],
     [80, 24, 3],
-    [240, 70, 10],
+    [240, 70, 3],
     [40, 12, 0],
-    [300, 90, 10],
+    [300, 90, 3],
     [300, 24, 3],
     [60, 90, 3],
-    [160, 45, 6],
+    [160, 45, 3],
     [20, 10, 0],
   ];
   const h = renderTranscript(events, { logoStyle: "simple", cols: 60, rows: 20 });
@@ -1178,10 +1183,8 @@ test("compact home scales the mark through live resize sequences without corrupt
       // Very short viewports window the notice to its tail (pre-existing behavior).
       if (rows >= 20) assert.equal(countOccurrences(frame, "Launch mode"), 1, `${label}: notice`);
       assert.equal(logoRowCount(frame), expected, `${label}: logo rows`);
-      if (expected >= 5) {
-        const header = lines.slice(0, expected).join("\n");
-        assert.ok(firstLineIndex(header, "Ubume CLI v") > 0, `${label}: metadata is centered`);
-      }
+      if (expected > 0)
+        assert.equal(firstLineIndex(frame, "Ubume CLI v"), 0, `${label}: metadata is top-aligned`);
     }
   } finally {
     h.instance.unmount();
@@ -1230,10 +1233,10 @@ test("rapid resizes during the startup animation settle on one complete header",
     await h.instance.waitUntilRenderFlush();
     const frame = stripAnsi(h.getFrame());
     assert.equal(countOccurrences(frame, "Ubume CLI v"), 1);
-    assert.equal(logoRowCount(frame), 8);
+    assert.equal(logoRowCount(frame), 3);
     const lines = frame.split("\n");
-    // The animation finished: the final 32×8 mark, both brackets in place.
-    assert.match(lines[0]!, /▄█.*▄█.*█▄/);
+    // The animation finished: the final 12×3 mark, both brackets in place.
+    assert.match(lines[0]!, /▄▀.*▄▀.*▀▄/);
     assert.ok(lines.every((line) => getTextWidth(line) <= 200));
   } finally {
     h.instance.unmount();
@@ -1262,7 +1265,7 @@ test("a stale wider frame during a shrink truncates rows instead of wrapping the
     const lines = stripAnsi(h.getFrame()).split("\n");
     assert.equal(lines.length, before, "no wrapped continuation lines");
     assert.ok(lines.every((line) => getTextWidth(line) <= 240));
-    assert.equal(logoRowCount(lines.join("\n")), 10);
+    assert.equal(logoRowCount(lines.join("\n")), 3);
   } finally {
     h.instance.unmount();
     h.instance.cleanup();

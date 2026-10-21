@@ -219,9 +219,10 @@ export function startApp({
 
   // Kitty may leave an image placed while it is still settling an OS-window
   // resize unpainted until some unrelated redraw. Once the resize repaint has
-  // landed (the viewport settles ~100ms after the last event), re-issue the
+  // landed (the viewport commits within 50ms), re-issue the
   // data-free placements so the logo appears without waiting for input.
   let placementRefreshTimers: ReturnType<typeof setTimeout>[] = [];
+  let capabilityRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   const schedulePlacementRefresh = () => {
     for (const timer of placementRefreshTimers) clearTimeout(timer);
     placementRefreshTimers = graphics
@@ -236,7 +237,11 @@ export function startApp({
   };
 
   const onResize = () => {
-    graphics?.probe(true);
+    if (graphics && !capabilityRefreshTimer)
+      capabilityRefreshTimer = setTimeout(() => {
+        capabilityRefreshTimer = undefined;
+        if (!cleanupDone) graphics.probe(true);
+      }, 50).unref();
     schedulePlacementRefresh();
     resetFrameLockForResize(wrappedStdout);
     renderDebug.traceEvent("terminal", "resize", {
@@ -269,6 +274,7 @@ export function startApp({
   const cleanup = () => {
     if (cleanupDone) return;
     cleanupDone = true;
+    clearTimeout(capabilityRefreshTimer);
     stdout.off("resize", onResize);
     process.off("SIGINT", handleSignal);
     process.off("SIGTERM", handleSignal);

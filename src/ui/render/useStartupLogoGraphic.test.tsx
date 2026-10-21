@@ -76,6 +76,60 @@ function kittyChannel() {
   });
 }
 
+test("resize suspension prepares only the settled region without restarting animation", async () => {
+  const sizes: number[] = [];
+  const rasterize = async (_svg: string, options: { size?: { rows: number } }) => {
+    sizes.push(options.size!.rows);
+    return { id: 200 + sizes.length, png: new Uint8Array([1]) };
+  };
+  const channel = kittyChannel();
+  let image: number | null = null;
+  let atMs = 0;
+  function Probe({ rows, paused }: { rows: number; paused: boolean }) {
+    const frame = useStartupLogoAnimation(false);
+    atMs = frame.atMs;
+    image = useStartupLogoGraphic(
+      frame,
+      "auto",
+      true,
+      rasterize,
+      { columns: rows * 4, rows },
+      paused,
+    );
+    return <Text>{image ?? "solid"}</Text>;
+  }
+  const node = (rows: number, paused: boolean) => (
+    <ThemeProvider theme="dark">
+      <Probe rows={rows} paused={paused} />
+    </ThemeProvider>
+  );
+  const terminal = createTestTerminal(node(3, true));
+  Object.assign(terminal.stdout, { getColorDepth: () => 24 });
+  const unregister = registerStartupGraphicsChannel(terminal.stdout, channel);
+  try {
+    terminal.instance.rerender(node(3, true));
+    await settle();
+    assert.equal(sizes.length, 0);
+    terminal.instance.rerender(node(3, false));
+    await settle();
+    assert.equal(image, 201);
+    for (const rows of [4, 5, 6, 7, 8]) {
+      terminal.instance.rerender(node(rows, true));
+      await settle();
+    }
+    assert.deepEqual(sizes, [3]);
+    terminal.instance.rerender(node(8, false));
+    await settle();
+    assert.deepEqual(sizes, [3, 8]);
+    assert.equal(image, 202);
+    assert.equal(atMs, 520);
+  } finally {
+    unregister();
+    channel.dispose();
+    await terminal.dispose();
+  }
+});
+
 test("a failing rasterizer degrades to solid once and is not retried on every resize", async () => {
   let calls = 0;
   const rasterize = async () => {

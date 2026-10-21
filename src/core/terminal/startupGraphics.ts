@@ -29,7 +29,14 @@ export function kittyPlaceholderRow(
   columns = STARTUP_LOGO_BASE_SIZE.columns,
 ): string {
   // Layout caps logo sizes to the table; exceeding it is a programming error.
-  if (row < 0 || row >= DIACRITICS.length || columns < 0 || columns > DIACRITICS.length)
+  if (
+    !Number.isInteger(row) ||
+    !Number.isInteger(columns) ||
+    row < 0 ||
+    row >= DIACRITICS.length ||
+    columns < 0 ||
+    columns > DIACRITICS.length
+  )
     throw new RangeError(`Kitty placeholder ${columns}x${row} exceeds the diacritic table`);
   return Array.from(
     { length: columns },
@@ -80,6 +87,8 @@ export interface StartupGraphicsChannel {
   refreshPlacements(): string;
   /** Latch the solid fallback after an image could not be prepared. */
   reportRasterFailure(): void;
+  /** A thrown write did not commit the transport state prepared for that frame. */
+  reportWriteFailure(): void;
   dispose(): string;
 }
 const channels = new WeakMap<object, StartupGraphicsChannel>();
@@ -108,6 +117,8 @@ export function createStartupGraphicsChannel(options: {
   const retained = new Map<number, Uint8Array>();
   const inline = new Map<number, readonly string[]>();
   const sizes = new Map<number, LogoCellSize>();
+  const assetBytes = new Map<number, number>();
+  const MAX_CHANNEL_BYTES = 16 * 1024 * 1024;
   const sizeOf = (id: number) => sizes.get(id) ?? STARTUP_LOGO_BASE_SIZE;
   // Images whose placeholders the latest full logo frame drew.
   let onScreen = new Set<number>();
@@ -198,6 +209,31 @@ export function createStartupGraphicsChannel(options: {
       return frame;
     },
     stage(id, png, tiles, size = STARTUP_LOGO_BASE_SIZE) {
+      if (disposed) return;
+      if (
+        ![size.columns, size.rows].every(
+          (value) => Number.isInteger(value) && value > 0 && value <= KITTY_MAX_PLACEHOLDER_CELLS,
+        ) ||
+        (tiles && tiles.length !== size.rows)
+      )
+        throw new RangeError("Invalid startup graphics region");
+      const bytes =
+        png.byteLength + (tiles ?? []).reduce((sum, tile) => sum + Buffer.byteLength(tile), 0);
+      if (bytes > MAX_CHANNEL_BYTES)
+        throw new RangeError("Startup graphics asset exceeds cache budget");
+      assetBytes.delete(id);
+      assetBytes.set(id, bytes);
+      while (
+        assetBytes.size > 48 ||
+        [...assetBytes.values()].reduce((sum, count) => sum + count, 0) > MAX_CHANNEL_BYTES
+      ) {
+        const oldest = assetBytes.keys().next().value!;
+        assetBytes.delete(oldest);
+        pending.delete(oldest);
+        retained.delete(oldest);
+        inline.delete(oldest);
+        sizes.delete(oldest);
+      }
       if (!disposed) {
         // Refresh recency: every retained (48) or inline (24) image is among
         // the latest 96 distinct stages, so its size is never evicted first.
@@ -260,6 +296,12 @@ export function createStartupGraphicsChannel(options: {
       capabilities = { ...capabilities, rasterFailed: true };
       for (const listener of listeners) listener();
     },
+    reportWriteFailure() {
+      // Retain ownership for shutdown deletion, but never trust residency after a partial write.
+      for (const [id, png] of retained) pending.set(id, png);
+      onScreen = new Set();
+      channel.reportRasterFailure();
+    },
     dispose() {
       disposed = true;
       listeners.clear();
@@ -267,6 +309,7 @@ export function createStartupGraphicsChannel(options: {
       inline.clear();
       retained.clear();
       sizes.clear();
+      assetBytes.clear();
       onScreen = new Set();
       const commands = Array.from(transmitted, (id) => `\x1b_Ga=d,d=I,i=${id},q=2\x1b\\`).join("");
       transmitted = new Set();

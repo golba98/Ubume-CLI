@@ -43,12 +43,13 @@ import {
   LOGO_MEDIUM,
   selectLogoVariant,
 } from "../render/logoVariants.js";
+import { computeResponsiveHeader, type ResponsiveHeader } from "../render/responsiveHeader.js";
 import { StartupGraphicRow } from "../render/StartupGraphicRow.js";
 import {
   type StartupLogoAnimationFrame,
   shouldPlayStartupAnimation,
 } from "../render/startupAnimation.js";
-import { type StartupLogoSize, selectStartupLogoSize } from "../render/startupLogoLayout.js";
+import type { StartupLogoSize } from "../render/startupLogoLayout.js";
 import { useStartupLogoAnimation } from "../render/useStartupLogoAnimation.js";
 import { useStartupLogoGraphic } from "../render/useStartupLogoGraphic.js";
 import { useTheme } from "../theme.js";
@@ -82,7 +83,8 @@ interface TranscriptShellProps {
   /** Startup branding presentation (`normal` banner by default). */
   logoStyle?: StartupLogoStyle;
   startupAnimation?: boolean;
-  onStartupLiveChange?: (live: boolean) => void;
+  /** Live headers need no Static reflush; responsive static headers still do. */
+  onStartupLiveChange?: (live: boolean, responsive?: boolean) => void;
   startupHeaderMiddleLine?: StartupHeaderMiddleLine;
   startupLogoRendering?: StartupLogoRendering;
   startupModelLabel?: string | null;
@@ -175,11 +177,13 @@ function TranscriptShellInner({
   logoSize,
   onStartupLiveChange,
   presentation,
+  headerLayout,
 }: TranscriptShellProps & {
   logoFrame: StartupLogoAnimationFrame;
   logoImageId: number | null;
   logoSize: StartupLogoSize | null;
   presentation: { committed: boolean };
+  headerLayout: ResponsiveHeader;
 }) {
   const theme = useTheme();
   const startupHeaderMode = useMemo(
@@ -195,7 +199,7 @@ function TranscriptShellInner({
   const homeScreenActive = visible && isHomeScreenState({ staticEvents, activeEvents, uiState });
   const compactStyle = isCompactLogoStyle(logoStyle);
   const shellWidth = compactStyle ? getCompactShellWidth(layout.cols) : getShellWidth(layout.cols);
-  const introInnerWidth = Math.max(compactStyle ? 1 : 10, shellWidth - 2);
+  const introInnerWidth = Math.max(1, shellWidth - 2);
   const selectedLogoRows =
     startupHeaderMode === "tiny"
       ? []
@@ -270,11 +274,18 @@ function TranscriptShellInner({
         usageLabel: startupUsageLabel,
         startupHeaderMode,
         logoSize,
+        headerLayout:
+          (logoStyle === "normal" && process.env.UBUME_COMPACT_LOGO === "1") ||
+          (compactStyle && presentation.committed)
+            ? undefined
+            : headerLayout,
       }),
     [
       authState,
       layout,
       logoSize,
+      headerLayout,
+      presentation.committed,
       logoStyle,
       startupHeaderMiddleLine,
       startupModelLabel,
@@ -335,7 +346,7 @@ function TranscriptShellInner({
     }),
     [activeTranscript, staticTranscript],
   );
-  const liveWindowRows = Math.max(1, conversationViewportRows - LIVE_WINDOW_SAFETY_ROWS);
+  const liveWindowRows = Math.max(0, conversationViewportRows - LIVE_WINDOW_SAFETY_ROWS);
   const bodyRows =
     nativeTranscript.staticItems.reduce((sum, item) => sum + item.rows.length, 0) +
     nativeTranscript.liveRows.length;
@@ -347,7 +358,7 @@ function TranscriptShellInner({
   )
     presentation.committed = true;
   const compactHome = compactStyle && !presentation.committed;
-  onStartupLiveChange?.(compactHome && visible);
+  onStartupLiveChange?.(compactHome && visible, (compactHome || homeScreenActive) && visible);
   const committedRows = useMemo(
     () =>
       compactHome
@@ -442,6 +453,12 @@ function TranscriptShellInner({
     visible,
   ]);
 
+  if (layout.isCramped)
+    return (
+      <Box width={getShellWidth(layout.cols)} height={1} overflow="hidden">
+        <Text wrap="truncate">Resize to at least 8×3</Text>
+      </Box>
+    );
   return (
     <Box flexDirection="column" width="100%" display={visible ? "flex" : "none"}>
       <Static
@@ -480,7 +497,7 @@ function getConversationViewportRows(
   composerRows: number | undefined,
   notice: string | null | undefined,
 ): number {
-  return Math.max(2, getShellHeight(rows) - (composerRows ?? 0) - (notice ? 1 : 0));
+  return Math.max(0, getShellHeight(rows) - (composerRows ?? 0) - (notice ? 1 : 0));
 }
 /** Rows the live header leaves for startup notices so they are never windowed out entirely. */
 const STARTUP_BODY_RESERVE_ROWS = 1;
@@ -495,18 +512,25 @@ export const TranscriptShell = memo(function TranscriptShell(props: TranscriptSh
   // baseline for the next resize, and freezes once the header enters scrollback
   // (Static never re-renders, so a later size could not apply to it anyway).
   const logoSizeRef = useRef<StartupLogoSize | null>(null);
-  if (isCompactLogoStyle(props.logoStyle) && !presentation.current.committed) {
-    const { cols, rows } = props.layout;
-    const liveWindowRows =
-      getConversationViewportRows(rows, props.composerRows, props.notice) - LIVE_WINDOW_SAFETY_ROWS;
-    logoSizeRef.current = selectStartupLogoSize({
-      innerWidth: getCompactShellWidth(cols) - 2,
-      terminalRows: rows,
-      availableRows: liveWindowRows - STARTUP_BODY_RESERVE_ROWS,
-      metadataRows: props.startupHeaderMiddleLine === "hidden" ? 2 : 3,
-      previous: logoSizeRef.current,
-    });
-  }
+  const { cols, rows } = props.layout;
+  const headerLayout = useMemo(
+    () =>
+      computeResponsiveHeader({
+        innerWidth: getCompactShellWidth(cols) - 2,
+        terminalRows: rows,
+        availableRows:
+          getConversationViewportRows(rows, props.composerRows, props.notice) -
+          LIVE_WINDOW_SAFETY_ROWS -
+          STARTUP_BODY_RESERVE_ROWS,
+        metadataRows:
+          props.startupHeaderMiddleLine === "hidden" && isCompactLogoStyle(props.logoStyle) ? 2 : 3,
+        style: props.logoStyle ?? "normal",
+        previous: logoSizeRef.current,
+        hideLogo: !isCompactLogoStyle(props.logoStyle) && process.env.UBUME_NO_ASCII_LOGO === "1",
+      }),
+    [cols, rows, props.composerRows, props.notice, props.startupHeaderMiddleLine, props.logoStyle],
+  );
+  if (!presentation.current.committed) logoSizeRef.current = headerLayout.size;
   const logoSize = isCompactLogoStyle(props.logoStyle) ? logoSizeRef.current : null;
   const canAnimate =
     props.visible !== false &&
@@ -528,6 +552,7 @@ export const TranscriptShell = memo(function TranscriptShell(props: TranscriptSh
     logoSize !== null && props.visible !== false && !presentation.current.committed,
     undefined,
     logoSize ?? undefined,
+    props.layout.isResizing,
   );
   // repaintGeneration must fold into the outer remount key (not just <Static>'s
   // own key) — Ink only reliably re-flushes already-printed <Static> content on
@@ -542,6 +567,7 @@ export const TranscriptShell = memo(function TranscriptShell(props: TranscriptSh
       logoImageId={logoImageId}
       logoSize={logoSize}
       presentation={presentation.current}
+      headerLayout={headerLayout}
     />
   );
 });
