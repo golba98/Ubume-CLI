@@ -22,7 +22,7 @@ let flushTimer: ReturnType<typeof setInterval> | null = null;
 let streamRun = 0;
 const now = () => performance.timeOrigin + performance.now();
 
-function flush(): void {
+export function flushBenchTrace(): void {
   for (const [file, lines] of pending) {
     if (lines.length === 0) continue;
     try {
@@ -45,9 +45,9 @@ function pendingFor(file: string): string[] {
 
 function ensureFlushTimer(): void {
   if (flushTimer) return;
-  flushTimer = setInterval(flush, 250);
+  flushTimer = setInterval(flushBenchTrace, 250);
   flushTimer.unref?.();
-  process.once("exit", flush);
+  process.once("exit", flushBenchTrace);
 }
 
 function record(file: string, entry: Record<string, unknown>): void {

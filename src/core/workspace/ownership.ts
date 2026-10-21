@@ -15,6 +15,8 @@ export interface OwnershipInfo {
   host: string;
   token: string;
   createdAt: string;
+  /** Kernel start time of `pid` (Linux), so a reused PID is not mistaken for the owner. */
+  startTime?: string;
 }
 export interface OwnershipLease {
   owner: OwnershipInfo;
@@ -25,10 +27,27 @@ class OwnershipError extends Error {
   constructor(
     readonly resource: string,
     readonly owner: OwnershipInfo | null,
+    readonly workspace?: string,
   ) {
+    const holder = owner
+      ? `process ${owner.pid} on ${owner.host}`
+      : "owner information unavailable";
     super(
-      `${resource} is busy${owner ? ` (process ${owner.pid} on ${owner.host})` : " (owner information unavailable)"}. Close the owning Ubume process and retry.`,
+      resource === "execution"
+        ? `Another Ubume instance (${holder}) is running a task in ${workspace ?? "this workspace"}. Wait for it to finish or stop it there, then retry.`
+        : `${resource} is busy (${holder}). Close the owning Ubume process and retry.`,
     );
+  }
+}
+/** Linux process start time in clock ticks since boot (field 22 of /proc/<pid>/stat). */
+function processStartTime(pid: number): string | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // Fields after the parenthesized command name start at field 3.
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch {
+    return null;
   }
 }
 function lockPath(workspace: string, resource: string): string {
@@ -47,7 +66,8 @@ function readOwner(path: string): OwnershipInfo | null {
       owner.pid > 0 &&
       typeof owner.host === "string" &&
       typeof owner.token === "string" &&
-      typeof owner.createdAt === "string"
+      typeof owner.createdAt === "string" &&
+      (owner.startTime === undefined || typeof owner.startTime === "string")
       ? owner
       : null;
   } catch {
@@ -66,10 +86,13 @@ function dead(owner: OwnershipInfo | null): boolean {
   if (!owner || owner.host !== hostname()) return false;
   try {
     process.kill(owner.pid, 0);
-    return false;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ESRCH";
   }
+  // The PID is alive; it is the owner only if it is the same process that took the lease.
+  if (!owner.startTime) return false;
+  const current = processStartTime(owner.pid);
+  return current !== null && current !== owner.startTime;
 }
 /**
  * Acquires an exclusive resource lease or throws a busy error. Only dead same-host owners are
@@ -83,11 +106,13 @@ function dead(owner: OwnershipInfo | null): boolean {
 export function acquireOwnership(workspace: string, resource: string): OwnershipLease {
   const path = lockPath(workspace, resource);
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
+  const startTime = processStartTime(process.pid);
   const owner: OwnershipInfo = {
     pid: process.pid,
     host: hostname(),
     token: randomUUID(),
     createdAt: new Date().toISOString(),
+    ...(startTime ? { startTime } : {}),
   };
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -95,19 +120,19 @@ export function acquireOwnership(workspace: string, resource: string): Ownership
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const previous = readOwner(path);
-      if (!dead(previous)) throw new OwnershipError(resource, previous);
+      if (!dead(previous)) throw new OwnershipError(resource, previous, workspace);
       // Claim reclamation inside this exact lock generation before replacing it.
       const guard = join(path, "reclaim");
       try {
         mkdirSync(guard);
       } catch {
-        throw new OwnershipError(resource, readOwner(path));
+        throw new OwnershipError(resource, readOwner(path), workspace);
       }
       let moved = false;
       try {
         const current = readOwner(path);
         if (current?.token !== previous?.token || !dead(current))
-          throw new OwnershipError(resource, current);
+          throw new OwnershipError(resource, current, workspace);
         const stale = `${path}.stale-${owner.token}`;
         renameSync(path, stale);
         moved = true;
@@ -140,5 +165,5 @@ export function acquireOwnership(workspace: string, resource: string): Ownership
       },
     };
   }
-  throw new OwnershipError(resource, readOwner(path));
+  throw new OwnershipError(resource, readOwner(path), workspace);
 }

@@ -200,15 +200,23 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | `src/core/providerRuntime/codexaNativeConfig.ts` | Validates development-only native generation options and resolves registry/checkpoint/tokenizer paths with explicit configuration errors. |
 | `src/core/providerRuntime/anthropicDiscovery.ts` | Reads paginated direct Anthropic API inventory, keeping API authentication/discovery separate from Claude Code. |
 | `src/core/providerRuntime/registry.ts` | Registers provider runtimes and resolves discovery, activation validation, migrations, defaults, and active routes. Formats provider labels and chooses provider setup commands. |
+| `src/core/providerRuntime/execution.ts` | Supervises native CLI tasks with optional logical deadlines, inactivity diagnostics, lifecycle tracing and bounded raw capture. |
+| `src/core/providerRuntime/jsonLines.ts` | Frames bounded newline-delimited records independently of provider schemas and flushes trailing records. |
+| `src/core/providerRuntime/claudeStream.ts` | Parses Claude partial messages, snapshots, tools, permission notices and terminal results; forwards control-protocol records. |
+| `src/core/providerRuntime/claudePermissions.ts` | Maps Ubume modes to Claude permission modes and bridges stream-json `can_use_tool` requests to the shared approval UI on top of `providerApprovalQueue.ts`. |
+| `src/core/providerRuntime/providerApprovalQueue.ts` | Provider-neutral approval plumbing: workspace-boundary checks, exact-signature keys, and a serialized queue with duplicate suppression, withdrawal and disposal. |
+| `src/core/providerRuntime/antigravityStream.ts` | Parses AGY initialization, step transitions, text deltas and terminal results. |
+| `src/core/providerRuntime/nativeContinuation.ts` | Validates completed native continuation watermarks and builds conversation-owned session references. |
 | `src/core/providerRuntime/anthropic.ts` | Implements Claude Code route validation, model discovery, process execution, and streamed event adaptation. |
 | `src/core/providerRuntime/capabilityProfile.ts` | Resolves cached provider model feature profiles such as tools, vision, and reasoning support. |
 | `src/core/providerRuntime/claudeCodeDiscovery.ts` | Discovers Claude models/efforts from native commands, installed package metadata, settings and fallbacks. |
 | `src/core/providerRuntime/codexaNative.ts` | Implements the Codexa Native route and its CuPy accelerated execution support. |
 | `src/core/providerRuntime/contextMetadata.ts` | Resolves, caches, and formats model context-window metadata from provider config, discovery, and known registries. |
-| `src/core/providerRuntime/antigravity.ts` | Implements Google provider runtime backed by Antigravity CLI (`agy`), route validation, model discovery, process execution, buffered response adaptation, and cancellation. |
+| `src/core/providerRuntime/antigravity.ts` | Implements Google provider runtime backed by Antigravity CLI (`agy`), route validation, model discovery, process execution, AGY structured response adaptation, and cancellation. |
 | `src/core/providerRuntime/local.ts` | Checks local-server readiness, discovers models, resolves configuration, delegates active Local requests to the Harness adapter, and reports diagnostics. |
 | `src/core/providerRuntime/localBackends.ts` | Defines LM Studio/OpenAI-compatible request and response helpers used by the local runtime. Verifies a local Unsloth Studio instance, resolves secure API authentication, and parses loaded models. |
-| `src/core/providerRuntime/mistralVibe.ts` | Discovers Vibe configuration/models, resolves and launches the CLI, manages sessions, and adapts routed output. |
+| `src/core/providerRuntime/mistralVibe.ts` | Discovers Vibe configuration/models, resolves and launches the CLI, manages sessions, and adapts legacy and typed public-history streams with native session identity; routes interactive runs through `vibeAcp.ts`. |
+| `src/core/providerRuntime/vibeAcp.ts` | Drives one Vibe turn over `vibe-acp` (JSON-RPC Agent Client Protocol) and routes `session/request_permission` to the shared approval UI. |
 | `src/core/providerRuntime/models.ts` | Defines shared provider model fallbacks, aliases, normalization, and conversion to Codex-style capabilities. Normalizes provider reasoning levels and selects valid defaults for discovered models. |
 | `src/core/providerRuntime/types.ts` | Defines the multi-provider runtime, route, discovery, model, validation, and chat request contracts, including restored conversation history. |
 
@@ -294,7 +302,7 @@ Start with [`docs/architecture/app.md`](app.md) for lifecycles and invariants.
 | `src/core/workspace/checkpoints.ts` | Captures file checkpoints (reads/hashes in bounded parallel batches, limits applied in listing order) and journals guarded file restore operations. |
 | `src/core/workspace/conversationStore.ts` | Persists workspace-scoped conversation metadata and canonical messages (with optional per-reply activity summaries) with atomic JSON writes. |
 | `src/core/workspace/launchContext.ts` | Describes installed/dev launch context and builds guarded workspace relaunch commands. |
-| `src/core/workspace/ownership.ts` | Acquires and releases workspace execution and conversation ownership leases. |
+| `src/core/workspace/ownership.ts` | Acquires and releases workspace execution and conversation ownership leases; reclaims only dead owners (exited, or a reused PID by start time). |
 | `src/core/workspace/planStorage.ts` | Normalizes, saves, and reads reviewed plans from Ubume workspace data. |
 | `src/core/workspace/projectInstructions.ts` | Finds and loads AGENTS.md/project instructions with explicit missing, loaded, and error states. |
 | `src/core/workspace/scratchDir.ts` | Describes, lazily creates, removes when unused, and prunes per-session `.ubume/scratch/<session>` folders where the Local agent keeps throwaway test/debug files. |
@@ -401,7 +409,7 @@ Subsystem guide: [src/ui/README.md](../../src/ui/README.md).
 | `src/ui/panels/SettingsPanel.tsx` | Displays and edits persistent user interface settings. |
 | `src/ui/panels/SimplePickers.tsx` | Selects execution mode and explains its behavior. Selects Codex reasoning effort for the active model. Previews and selects a persisted color theme. |
 | `src/ui/panels/TextEntryPanel.tsx` | Provides a reusable focused text-entry overlay. |
-| `src/ui/panels/ToolApprovalPanel.tsx` | Displays a tool request and collects allow/deny/cancel decisions. |
+| `src/ui/panels/ToolApprovalPanel.tsx` | Displays a provider tool request (command, file, workspace, reason) and collects allow/deny/cancel decisions. |
 | `src/ui/panels/UpdatePromptPanel.tsx` | Presents detected update information and the install command. |
 | `src/ui/panels/UsagePanel.tsx` | `/usage` overlay: provider usage rows with R refresh (respecting cooldown/in-flight), Esc/q close, and arrow-key scrolling on short terminals. |
 | `src/ui/panels/WorkbenchPanel.tsx` | Displays transcript, queue, diff, and checkpoint recovery views. |

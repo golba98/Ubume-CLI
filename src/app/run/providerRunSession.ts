@@ -174,6 +174,43 @@ export interface ProviderRunDeps {
 }
 
 /** Everything decided about this run before it starts. */
+/**
+ * Pauses the queue and shows the approval overlay; a newer request denies the older one, and
+ * a stale run is denied without showing anything. A withdrawn request (provider cancel or
+ * exit) closes the overlay it opened.
+ */
+export function presentToolApproval(
+  deps: Pick<
+    ProviderRunDeps,
+    "toolApprovalResolverRef" | "promptQueue" | "bumpWorkbench" | "setToolApproval" | "setScreen"
+  >,
+  isCurrent: () => boolean,
+  request: ToolApprovalRequest,
+  signal?: AbortSignal,
+): Promise<ToolApprovalDecision> {
+  return new Promise<ToolApprovalDecision>((resolve) => {
+    if (!isCurrent() || signal?.aborted) return resolve("deny");
+    const settle = (decision: ToolApprovalDecision) => {
+      signal?.removeEventListener("abort", withdraw);
+      resolve(decision);
+    };
+    const withdraw = () => {
+      if (deps.toolApprovalResolverRef.current !== settle) return;
+      deps.toolApprovalResolverRef.current = null;
+      deps.setToolApproval(null);
+      deps.setScreen("main");
+      settle("deny");
+    };
+    deps.toolApprovalResolverRef.current?.("deny");
+    deps.toolApprovalResolverRef.current = settle;
+    signal?.addEventListener("abort", withdraw, { once: true });
+    deps.promptQueue.paused = true;
+    deps.bumpWorkbench((value) => value + 1);
+    deps.setToolApproval(request);
+    deps.setScreen("tool-approval");
+  });
+}
+
 export interface ProviderRunPlan {
   // Identity
   runId: number;
@@ -575,16 +612,8 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
     }
   };
 
-  /** Pauses the queue and shows the approval overlay; a newer request denies the older one. */
-  const onToolApproval: BackendRunHandlers["onToolApproval"] = (request) =>
-    new Promise<ToolApprovalDecision>((resolve) => {
-      deps.toolApprovalResolverRef.current?.("deny");
-      deps.toolApprovalResolverRef.current = resolve;
-      deps.promptQueue.paused = true;
-      deps.bumpWorkbench((value) => value + 1);
-      deps.setToolApproval(request);
-      deps.setScreen("tool-approval");
-    });
+  const onToolApproval: BackendRunHandlers["onToolApproval"] = (request, signal) =>
+    presentToolApproval(deps, isCurrent, request, signal);
 
   /**
    * Forces one final synchronous workspace poll so file changes made just
@@ -814,6 +843,7 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
         workspaceRoot: deps.workspaceRoot,
         projectInstructions: deps.projectInstructions,
         runIntent: lifecycle.runIntent ?? "normal",
+        approvalSurface: "interactive",
         conversationHistory: plan.conversationHistory,
         localContextCheckpoint: ownsContext
           ? deps.activeConversationRef.current?.metadata.localContextCheckpoint

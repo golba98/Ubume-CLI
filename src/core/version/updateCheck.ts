@@ -3,8 +3,9 @@
  * `dist-tags` for newer versions with an abortable timeout and SemVer-precedence comparison.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { writeTextFileAtomic } from "../../config/atomicFile.js";
 import { APP_VERSION, getHomeDir } from "../../config/settings.js";
 import { errorMessage } from "../shared/values.js";
 import { isLocalDevChannel } from "./channel.js";
@@ -348,10 +349,8 @@ export function saveUpdateCheckCache(
   filePath = getUpdateCheckCacheFilePath(),
 ): void {
   try {
-    mkdirSync(dirname(filePath), { recursive: true });
-    const tmp = `${filePath}.tmp`;
-    writeFileSync(tmp, JSON.stringify(cache, null, 2), "utf-8");
-    renameSync(tmp, filePath);
+    // Several Ubume instances may start at once; each writes through its own temporary file.
+    writeTextFileAtomic(filePath, JSON.stringify(cache, null, 2));
   } catch {
     // Best-effort — never crash on cache write failure.
   }

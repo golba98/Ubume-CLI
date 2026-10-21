@@ -159,7 +159,22 @@ validate ok ──► persistActiveRoute ──┤ save fails ─► recover
 - `useResumeFlows` owns every switch: the resume picker, saved chats, imported
   native sessions, native CLI resume and workspace relaunch. Each switch
   refuses to start while an operation is active, holds `recoveryRef`, and
-  aborts if the current chat could not be saved.
+  aborts if the current chat could not be saved. `ResumeTransition` owns cancellable
+  preparation and the commit boundary. A target lease is prepared without giving
+  up the active lease; loading, route assessment and checkpoint recovery precede
+  the atomic conversation swap. A canceled or failed preparation cannot commit.
+- Workspace changes exit with a typed handoff request. `src/index.tsx` finishes
+  renderer/terminal cleanup before `workspaceHandoff` starts the replacement. The
+  previous process supervises it without consuming terminal input. A spawn failure
+  reopens the saved source conversation. Native CLI launches use Ink's terminal
+  suspension and completion barriers instead of fixed sleeps.
+- Explicit relocation copies history into a new conversation under the destination
+  configuration. It retains provenance and original workspace metadata while
+  dropping execution sessions, pending work and source file recovery boundaries.
+- The selector freezes hidden transcript reflow while resizing. Its frame boundary
+  suppresses stale overlay dimensions until React has committed the new layout.
+  The stdout wrapper preserves ordered write callbacks, including empty flush
+  barriers used by Ink's terminal handoff.
 - `/clear` (`useClearConversation`) and resume both replace the transcript
   through `armTranscriptReplacement`. The clear-frame boundary clears the
   terminal in the same write as the new frame.

@@ -130,7 +130,7 @@ test("command runner reports lifecycle boundaries for terminal title reassertion
   const lifecycleErrorIndex = source.indexOf('handlers.onProcessLifecycle?.("error")', errorIndex);
   const closeIndex = source.indexOf('child.once("close"', spawnIndex);
   const exitIndex = source.indexOf('handlers.onProcessLifecycle?.("exit")', closeIndex);
-  const cancelIndex = source.indexOf("cancel: () =>");
+  const cancelIndex = source.indexOf("const cancel = () =>");
   const lifecycleCancelIndex = source.indexOf(
     'handlers.onProcessLifecycle?.("cancel")',
     cancelIndex,

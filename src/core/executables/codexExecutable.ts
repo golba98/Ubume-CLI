@@ -16,6 +16,7 @@ interface ResolutionCache {
 let resolutionCache: ResolutionCache | null = null;
 
 interface SpawnOptions {
+  cwd?: string;
   detached?: boolean;
   stdio: ["ignore" | "pipe", "pipe", "pipe"];
 }

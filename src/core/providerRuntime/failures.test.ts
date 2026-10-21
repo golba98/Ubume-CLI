@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { apiRequestError, classifyProviderFailure, isModelFailure } from "./failures.js";
+import {
+  apiRequestError,
+  classifyProviderFailure,
+  isModelFailure,
+  isUnknownCliOption,
+} from "./failures.js";
 
 for (const [message, kind] of [
   ["MODEL_NOT_FOUND: gemini-nonexistent", "model-unavailable"],
@@ -44,4 +49,16 @@ test("structured model access denial differs from a generic forbidden response",
   expect(
     apiRequestError(429, JSON.stringify({ error: { code: "insufficient_quota" } })).failure.kind,
   ).toBe("quota");
+});
+
+test("unknown-option detection recognizes common CLI parsers and only the named flag", () => {
+  expect(isUnknownCliOption("Error: unknown flag: --mode", "--mode")).toBe(true);
+  expect(isUnknownCliOption("flag provided but not defined: -mode", "--mode")).toBe(true);
+  expect(isUnknownCliOption("error: unknown option '--agent'", "--agent")).toBe(true);
+  expect(isUnknownCliOption("vibe: error: unrecognized arguments: --agent plan", "--agent")).toBe(
+    true,
+  );
+  expect(isUnknownCliOption("error: unexpected argument '--agent' found", "--agent")).toBe(true);
+  expect(isUnknownCliOption("Error: unknown flag: --model", "--mode")).toBe(false);
+  expect(isUnknownCliOption("tool output mentioned --mode", "--mode")).toBe(false);
 });

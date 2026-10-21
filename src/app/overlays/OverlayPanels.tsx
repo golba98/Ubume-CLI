@@ -141,6 +141,11 @@ interface OverlayPanelsProps {
 
   // Resume picker and session viewers
   resumeConversations: ConversationListEntry[];
+  resumeLoading: boolean;
+  cancelResume: () => void;
+  relocationTarget: string | null;
+  relocationError: string | null;
+  cancelRelocation: () => void;
   resumeConversation: (id: string) => Promise<void>;
   loadResumeSessions: (scope: ExternalListScope) => Promise<SessionCatalogResult>;
   selectResumeSession: (session: SessionSummary) => Promise<void>;
@@ -301,6 +306,11 @@ export function OverlayPanels(props: OverlayPanelsProps) {
 
     // Resume picker and session viewers
     resumeConversations,
+    resumeLoading,
+    cancelResume,
+    relocationTarget,
+    relocationError,
+    cancelRelocation,
     resumeConversation,
     loadResumeSessions,
     selectResumeSession,
@@ -627,7 +637,8 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         <ResumePicker
           conversations={resumeConversations}
           onSelect={resumeConversation}
-          onCancel={() => setScreen("main")}
+          onCancel={cancelResume}
+          loading={resumeLoading}
           loadSessions={loadResumeSessions}
           onSelectSession={selectResumeSession}
           onOpenExternal={openExternalSession}
@@ -646,17 +657,21 @@ export function OverlayPanels(props: OverlayPanelsProps) {
       )}
       {screen === "resume-workspace" && savedViewerSession && (
         <TextEntryPanel
+          key={relocationTarget ? "relocation-confirm" : "relocation-path"}
           focusId="resume-workspace"
-          title="Locate Original Workspace"
+          title={relocationTarget ? "Confirm Workspace Relocation" : "Locate Workspace"}
           subtitle={
-            savedViewerSession.workspaceRoot ??
-            "Enter the original project folder for this saved chat."
+            relocationError ??
+            (relocationTarget
+              ? `Create a separate conversation in ${relocationTarget}. The original is retained. Type RELOCATE to confirm.`
+              : (savedViewerSession.workspaceRoot ??
+                "Enter the original project folder for this saved chat."))
           }
-          placeholder="/path/to/original/project"
-          inputLabel="Folder"
+          placeholder={relocationTarget ? "RELOCATE" : "/path/to/project"}
+          inputLabel={relocationTarget ? "Confirm" : "Folder"}
           footerHint="Esc back · Enter locate"
           onSubmit={locateSavedWorkspace}
-          onCancel={() => setScreen("saved-session-viewer")}
+          onCancel={cancelRelocation}
         />
       )}
       {screen === "external-session-viewer" && externalViewerSession && (

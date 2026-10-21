@@ -105,6 +105,8 @@ export interface ProviderWorkspaceOverride {
   antigravityCommandPath?: string;
   /** Anthropic direct-API request deadline in milliseconds (connection through body). */
   apiTimeoutMs?: number;
+  /** Optional whole agent task deadline. Zero/absent allows long-running tasks. */
+  executionTimeoutMs?: number;
 }
 
 export interface ProviderModelWorkspaceOverride {

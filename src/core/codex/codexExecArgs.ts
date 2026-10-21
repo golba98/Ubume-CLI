@@ -4,6 +4,7 @@
  */
 
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
+import { isSafeNativeSessionId } from "../externalSessions/types.js";
 import type { ProviderImageAttachment } from "../providerRuntime/types.js";
 import type { CodexCliCapabilities } from "./codexCapabilities.js";
 
@@ -12,6 +13,7 @@ export interface BuildCodexExecArgsOptions {
   cwd: string;
   structuredOutput?: boolean;
   imageAttachments?: readonly ProviderImageAttachment[];
+  nativeSessionId?: string;
 }
 
 export type CodexLaunchStrategy = "direct-flags" | "config-overrides" | "full-auto" | "fail";
@@ -111,6 +113,31 @@ export function buildCodexExecArgs(
   capabilities: CodexCliCapabilities,
 ): BuildCodexExecArgsResult {
   const { runtime } = options;
+  if (options.nativeSessionId && !isSafeNativeSessionId(options.nativeSessionId))
+    return { ok: false, error: "Invalid native session identifier.", strategy: "fail" };
+  if (
+    options.nativeSessionId &&
+    capabilities.resume &&
+    (!options.imageAttachments?.length || capabilities.resume.image)
+  ) {
+    const args = ["exec", "resume"];
+    if (options.structuredOutput ?? true) args.push(capabilities.resume.jsonFlag);
+    if (capabilities.resume.skipGit) args.push("--skip-git-repo-check");
+    args.push("--model", runtime.model);
+    const config = (key: string, value: unknown) =>
+      args.push("--config", `${key}=${JSON.stringify(value)}`);
+    config("approval_policy", runtime.policy.approvalPolicy);
+    config("sandbox_mode", runtime.policy.sandboxMode);
+    config("model_reasoning_effort", runtime.reasoningLevel);
+    config("sandbox_workspace_write.writable_roots", runtime.policy.writableRoots);
+    if (runtime.policy.networkAccess)
+      config("sandbox_workspace_write.network_access", runtime.policy.networkAccess);
+    if (runtime.policy.serviceTier !== "flex") config("service_tier", runtime.policy.serviceTier);
+    if (runtime.policy.personality !== "none") config("personality", runtime.policy.personality);
+    for (const image of options.imageAttachments ?? []) args.push("--image", image.path);
+    args.push(options.nativeSessionId, "-");
+    return { ok: true, args, strategy: "config-overrides" };
+  }
   const args: string[] = ["exec"];
 
   if ((options.imageAttachments?.length ?? 0) > 0 && capabilities.image === false) {

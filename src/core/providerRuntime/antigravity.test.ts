@@ -10,6 +10,7 @@ import type { CommandResult, CommandSpec, runCommand } from "../process/commandR
 import {
   ANTIGRAVITY_DEFAULT_MODEL_ID,
   ANTIGRAVITY_DEFAULT_REASONING,
+  agyPermissionMode,
   antigravityRuntime,
   discoverAgyModels,
   getAgyModelSelector,
@@ -356,6 +357,12 @@ test("runAntigravityWithRunner: passes the exact discovered selector with --mode
   assert.deepEqual((capturedSpec as CommandSpec).args, [
     "--model",
     "Gemini 3.5 Flash (High)",
+    "--mode",
+    "auto",
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "0",
     "-p",
     "say hello back",
   ]);
@@ -393,6 +400,12 @@ test("runAntigravityWithRunner: wraps a .cmd executable in cmd.exe on Windows, k
     "agy.cmd",
     "--model",
     "Gemini 3.5 Flash (High)",
+    "--mode",
+    "auto",
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "0",
     "-p",
     "say hello back",
   ]);
@@ -425,6 +438,12 @@ test("runAntigravityWithRunner: passes a .cmd executable through unchanged on no
   assert.deepEqual((capturedSpec as CommandSpec).args, [
     "--model",
     "Gemini 3.5 Flash (High)",
+    "--mode",
+    "auto",
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "0",
     "-p",
     "say hello back",
   ]);
@@ -640,4 +659,59 @@ test("antigravityRuntime.discoverModels returns the live discovered catalog", ()
   assert.equal(result.status, "ready");
   assert.equal(result.models.length, 5);
   assert.equal(result.providerId, "google");
+});
+
+test("agyPermissionMode maps Ubume modes to AGY --mode without skipping permissions", () => {
+  const runtime = (mode: "suggest" | "auto-edit" | "full-auto") => ({
+    ...buildRequest().runtime,
+    mode,
+  });
+  assert.equal(agyPermissionMode(buildRequest({ runtime: runtime("suggest") })), "plan");
+  assert.equal(agyPermissionMode(buildRequest({ runtime: runtime("auto-edit") })), "accept-edits");
+  assert.equal(agyPermissionMode(buildRequest({ runtime: runtime("full-auto") })), "auto");
+  assert.equal(
+    agyPermissionMode(buildRequest({ runtime: runtime("full-auto"), runIntent: "plan" })),
+    "plan",
+  );
+});
+
+test("runAntigravityWithRunner retries once without --mode on an older AGY CLI", async () => {
+  const specs: CommandSpec[] = [];
+  const progress: string[] = [];
+  const runner = mockRunCommand((spec) =>
+    spec.args.includes("--mode")
+      ? commandResult({
+          status: "failed",
+          exitCode: 1,
+          stdout: "",
+          stderr: "Error: unknown flag: --mode",
+        })
+      : commandResult({}),
+  );
+  await new Promise<void>((resolve, reject) => {
+    runAntigravityWithRunner(
+      buildRequest({ runtime: { ...buildRequest().runtime, mode: "auto-edit" } }),
+      {
+        onResponse: () => resolve(),
+        onError: (message) => reject(new Error(message)),
+        onProgress: (update) => progress.push(update.text),
+      },
+      ((spec, handlers) => {
+        specs.push(spec);
+        return runner(spec, handlers);
+      }) as typeof runCommand,
+      "agy",
+      "linux",
+      DISCOVERED_AGY_MODELS,
+    );
+  });
+  assert.equal(specs.length, 2);
+  assert.equal(specs[0]!.args[specs[0]!.args.indexOf("--mode") + 1], "accept-edits");
+  assert.equal(specs[1]!.args.includes("--mode"), false);
+  assert.ok(progress.some((text) => /Antigravity permissions: accept-edits/.test(text)));
+  assert.ok(progress.some((text) => /does not support --mode/.test(text)));
+  assert.equal(
+    specs.some((spec) => spec.args.includes("--dangerously-skip-permissions")),
+    false,
+  );
 });

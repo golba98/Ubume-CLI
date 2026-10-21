@@ -19,7 +19,12 @@ import { buildUserInputRows } from "./cards.js";
 import { buildActionRequiredRows } from "./eventRows.js";
 import { createBlankRow, wrapRows } from "./rows.js";
 import { buildTimelineSnapshot } from "./stableSnapshot.js";
-import { buildStreamEventRows, collectStreamEvents, compactActionBursts } from "./streamRows.js";
+import {
+  buildRecordedAnswerRows,
+  buildStreamEventRows,
+  collectStreamEvents,
+  compactActionBursts,
+} from "./streamRows.js";
 import type {
   NativeTranscriptParts,
   RenderTimelineItem,
@@ -97,7 +102,15 @@ function appendNativeTurnParts(
     }
   }
 
-  if (!run) return;
+  if (!run) {
+    const rows = buildRecordedAnswerRows(item, innerWidth);
+    if (rows.length)
+      output.staticItems.push({
+        key: `${item.key}-recorded-answer`,
+        rows: wrapNativeRows(rows, options.totalWidth, item.padded, item.key),
+      });
+    return;
+  }
 
   const events = compactActionBursts(collectStreamEvents(item), verbose, run.status !== "running");
   events.forEach((event, eventIndex) => {

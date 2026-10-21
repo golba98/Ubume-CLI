@@ -439,6 +439,7 @@ export function createRoutedProvider(
               prompt,
               {
                 ...options,
+                nativeSessions: nativeSessions?.(),
                 runtime: override?.codexCommandPath
                   ? { ...options.runtime, codexCommandPath: override.codexCommandPath }
                   : options.runtime,
@@ -543,6 +544,7 @@ export function createRoutedProvider(
               nativeSessions: nativeSessions?.(),
               localConfig: route.providerId === "local" ? override : undefined,
               runIntent: options.runIntent,
+              approvalSurface: options.approvalSurface,
               conversationHistory: options.conversationHistory,
               localContextCheckpoint: options.localContextCheckpoint,
               imageAttachments: options.imageAttachments,

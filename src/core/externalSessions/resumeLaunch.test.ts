@@ -77,3 +77,32 @@ test("buildExternalResumeLaunch refuses when the session folder is gone or unkno
     assert.match(unknown.ok ? "" : unknown.message, /original folder/);
   }
 });
+
+test("native resume refuses option-like and control-character identifiers before executable resolution", async () => {
+  for (const id of ["--dangerously-skip-permissions", "bad\nidentity", "bad identity"]) {
+    const result = await buildExternalResumeLaunch(
+      {
+        source: "claude",
+        id,
+        title: "invalid",
+        cwd: "/fixture",
+        updatedAt: "2026-10-21T00:00:00Z",
+      },
+      {
+        fallbackCwd: "/fixture",
+        folderExists: () => true,
+        resolveExecutable: async () => {
+          throw new Error("must not resolve invalid native IDs");
+        },
+      },
+    );
+    assert.equal(result.ok, false);
+  }
+});
+
+test("native resume never guesses the base of a relative saved working directory", async () => {
+  assert.equal(
+    (await buildExternalResumeLaunch(summary("codex", "relative/project"), options)).ok,
+    false,
+  );
+});

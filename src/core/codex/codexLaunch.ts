@@ -135,9 +135,11 @@ export async function prepareCodexExecLaunch(
   });
   perf.mark("exec_resolve_end");
   perf.mark("caps_probe_start");
-  const capabilities = options.probeCapabilities
-    ? await capabilityResolver(executable)
-    : MODERN_CODEX_CLI_CAPABILITIES;
+  const capabilities = options.nativeSessionId
+    ? await capabilityResolver(executable).catch(() => MODERN_CODEX_CLI_CAPABILITIES)
+    : options.probeCapabilities
+      ? await capabilityResolver(executable)
+      : MODERN_CODEX_CLI_CAPABILITIES;
   perf.mark("caps_probe_end");
   const argsResult = buildCodexExecArgs(options, capabilities);
   const responsibleModulePath = resolveResponsibleModulePath(responsibleModuleUrl);

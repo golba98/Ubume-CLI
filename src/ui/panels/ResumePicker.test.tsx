@@ -343,3 +343,110 @@ test("narrow provider bars always contain the active section", () => {
     for (const width of [14, 25, 45, 80])
       assert.ok(visibleResumeTabs(tabs, tab, width).includes(tab));
 });
+
+test("large resume lists never exceed their panel budget, including tiny heights", () => {
+  const conversations = Array.from({ length: 1000 }, (_, index) => ({
+    version: 1 as const,
+    id: `chat_${index}`,
+    title: `Long title ${index} ${"界".repeat(60)}`,
+    createdAt: "2026-10-20T00:00:00Z",
+    updatedAt: "2026-10-20T00:00:00Z",
+    providerId: "openai",
+    modelId: "fixture",
+    backendKind: null,
+    messageCount: 2,
+  }));
+  for (const columns of [60, 80, 100, 120, 160, 200])
+    for (const rows of [1, 2, 3, 4, 5, 8, 12, 20]) {
+      const frame = stripVTControlCharacters(
+        renderToString(
+          <ThemeProvider theme="purple">
+            <PanelLayoutContext.Provider
+              value={{ mode: "compact", availableRows: rows, availableCols: columns }}
+            >
+              <ResumePicker conversations={conversations} onSelect={() => {}} onCancel={() => {}} />
+            </PanelLayoutContext.Provider>
+          </ThemeProvider>,
+          { columns },
+        ),
+      );
+      const lines = frame.split("\n");
+      assert(lines.length <= rows, `${columns}x${rows} rendered ${lines.length} rows`);
+      assert(lines.every((line) => getTextWidth(line) <= columns));
+    }
+});
+
+test("batched search input filters before Enter and never reaches the global composer", async () => {
+  const selected: string[] = [];
+  const picker = mountPicker({
+    loadSessions: async () => ({
+      sessions: mergeSessionSummaries([], [here, elsewhere]),
+      errors: [],
+    }),
+    onOpenExternal: (entry) => selected.push(entry.id),
+  });
+  try {
+    await sleep();
+    picker.stdin.write("a");
+    await sleep();
+    picker.stdin.write("/Movie");
+    await sleep();
+    assert.match(picker.lastFrame(), /Movie app/);
+    assert.doesNotMatch(picker.lastFrame(), /Fix flaky/);
+    picker.stdin.write("\r");
+    await sleep();
+    picker.stdin.write("\r");
+    await sleep();
+    assert.deepEqual(selected, ["far-2"]);
+  } finally {
+    await picker.cleanup();
+  }
+});
+
+test("asynchronous catalog reordering preserves the highlighted session identity", async () => {
+  const records = ["one", "two"].map((id) => ({
+    version: 1 as const,
+    id: `chat_${id}`,
+    title: id,
+    createdAt: "2026-10-01T00:00:00Z",
+    updatedAt: "2026-10-01T00:00:00Z",
+    providerId: "openai",
+    modelId: "fixture",
+    backendKind: null,
+    workspaceRoot: "/work/app",
+    storageWorkspaceKey: "fixture",
+    messageCount: 2,
+  }));
+  let finish!: (value: {
+    sessions: ReturnType<typeof conversationSummary>[];
+    errors: string[];
+  }) => void;
+  const chosen: string[] = [];
+  const picker = mountPicker({
+    conversations: records,
+    loadSessions: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    onSelectSession: (entry) => {
+      chosen.push(entry.title);
+    },
+  });
+  try {
+    await sleep();
+    picker.stdin.write("j");
+    await sleep();
+    finish({
+      sessions: records
+        .toReversed()
+        .map((entry) => conversationSummary(entry, "/work/app", "fixture")),
+      errors: [],
+    });
+    await sleep();
+    picker.stdin.write("\r");
+    await sleep();
+    assert.deepEqual(chosen, ["two"]);
+  } finally {
+    await picker.cleanup();
+  }
+});

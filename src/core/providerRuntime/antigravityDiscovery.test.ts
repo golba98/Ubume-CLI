@@ -103,7 +103,20 @@ test("execution carries exact slug plus only verified parameter effort", async (
       [model],
     ),
   );
-  expect(args).toEqual(["--model", "claude-opus-4-6-thinking", "--effort", "low", "-p", "hello"]);
+  expect(args).toEqual([
+    "--model",
+    "claude-opus-4-6-thinking",
+    "--effort",
+    "low",
+    "--mode",
+    "auto",
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "0",
+    "-p",
+    "hello",
+  ]);
 });
 
 test("selected future AGY models resolve adjustable capabilities without requiring a Thinking label", async () => {

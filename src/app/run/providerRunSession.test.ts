@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
+import type { ToolApprovalDecision, ToolApprovalRequest } from "../../core/providers/types.js";
 import type { PersistedFileActivity } from "../../session/persistedResponse.js";
-import { describeRunFailure, mergeFileActivity } from "./providerRunSession.js";
+import type { Screen } from "../../session/types.js";
+import {
+  describeRunFailure,
+  mergeFileActivity,
+  presentToolApproval,
+} from "./providerRunSession.js";
 
 const route = (providerId: ProviderRoute["providerId"]) =>
   ({ providerId, modelId: "model-x", backendKind: "codex-cli-auth" }) as ProviderRoute;
@@ -49,4 +55,71 @@ test("Codex auth failures add login recovery only on the OpenAI route", () => {
     route: route("anthropic"),
   });
   assert.equal(anthropic.codexAuthFailure, false);
+});
+
+function approvalDeps() {
+  const state = {
+    screen: "main" as Screen,
+    approval: null as ToolApprovalRequest | null,
+    resolver: { current: null as ((decision: ToolApprovalDecision) => void) | null },
+    queue: { paused: false },
+  };
+  const deps = {
+    toolApprovalResolverRef: state.resolver,
+    promptQueue: state.queue,
+    bumpWorkbench: () => undefined,
+    setToolApproval: (value: unknown) => {
+      state.approval = value as ToolApprovalRequest | null;
+    },
+    setScreen: (value: unknown) => {
+      state.screen = value as Screen;
+    },
+  } as unknown as Parameters<typeof presentToolApproval>[0];
+  return { state, deps };
+}
+
+const writeRequest: ToolApprovalRequest = { tool: "Write", signature: "w", paths: ["index.html"] };
+
+test("a tool approval opens the overlay and resolves with the user's decision", async () => {
+  const { state, deps } = approvalDeps();
+  const decision = presentToolApproval(deps, () => true, writeRequest);
+  assert.equal(state.screen, "tool-approval");
+  assert.equal(state.approval, writeRequest);
+  assert.equal(state.queue.paused, true);
+  state.resolver.current?.("allow-once");
+  assert.equal(await decision, "allow-once");
+});
+
+test("a withdrawn approval closes its own overlay and resolves as denied", async () => {
+  const { state, deps } = approvalDeps();
+  const abort = new AbortController();
+  const decision = presentToolApproval(deps, () => true, writeRequest, abort.signal);
+  abort.abort();
+  assert.equal(await decision, "deny");
+  assert.equal(state.screen, "main");
+  assert.equal(state.approval, null);
+  assert.equal(state.resolver.current, null);
+});
+
+test("a withdrawal after a newer prompt opened leaves the newer prompt alone", async () => {
+  const { state, deps } = approvalDeps();
+  const abort = new AbortController();
+  const first = presentToolApproval(deps, () => true, writeRequest, abort.signal);
+  const second = presentToolApproval(deps, () => true, { ...writeRequest, signature: "w2" });
+  assert.equal(await first, "deny");
+  abort.abort();
+  assert.equal(state.screen, "tool-approval");
+  assert.equal(state.approval?.signature, "w2");
+  state.resolver.current?.("deny");
+  assert.equal(await second, "deny");
+});
+
+test("stale runs and already-withdrawn requests are denied without showing a prompt", async () => {
+  const { state, deps } = approvalDeps();
+  assert.equal(await presentToolApproval(deps, () => false, writeRequest), "deny");
+  const abort = new AbortController();
+  abort.abort();
+  assert.equal(await presentToolApproval(deps, () => true, writeRequest, abort.signal), "deny");
+  assert.equal(state.screen, "main");
+  assert.equal(state.approval, null);
 });

@@ -127,10 +127,12 @@ Main composer bindings (see `composerKeymap.ts`):
 
 ## Terminal size and resizing
 
-`useTerminalViewport` coalesces stdout resize events in fixed 50 ms windows, committing
-the latest dimensions even during a sustained drag. Invalid measurements retain the
-last valid geometry; small positive measurements describe actual small windows. Cleanup
-removes the subscription, cancels pending work and releases the resize flag.
+`useTerminalViewport` commits the leading stdout resize immediately, then coalesces
+further measurements in 16 ms frames. Latest dimensions win, including during
+continuous drags; invalid measurements preserve the last valid layout. Cleanup
+removes the subscription and cancels pending work. Long transcript reflow yields
+between finalized items; the prompt/live view updates before historical replay.
+The clear-frame boundary publishes prepared history at the current dimensions.
 
 `computeResponsiveHeader` allocates startup branding after the measured composer,
 viewport gutter, live-window safety row and content reserve. It independently limits

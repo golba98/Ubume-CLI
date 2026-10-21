@@ -1,3 +1,4 @@
+import { getResizeGeneration, resizeTraceEnabled, traceResize } from "../perf/resizeTrace.js";
 /**
  * Serializes and normalizes Ink stdout frames to prevent interleaving, duplicates, width
  * residue, and resize corruption.
@@ -13,7 +14,11 @@ import { isTerminalResizing } from "./terminalControl.js";
 
 /** The writable surface the frame lock wraps; satisfied by `NodeJS.WriteStream`. */
 interface FrameWritable {
-  write(chunk: string | Uint8Array): boolean;
+  write(
+    chunk: string | Uint8Array,
+    encoding?: BufferEncoding | ((error?: Error | null) => void),
+    callback?: (error?: Error | null) => void,
+  ): boolean;
 }
 
 interface FrameLockOptions<T extends FrameWritable> {
@@ -84,23 +89,28 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
   });
 
   const target: FrameWritable = stdout;
-  target.write = (chunk: string | Uint8Array) => {
-    if (typeof chunk !== "string") {
-      return originalWrite(chunk);
+  target.write = (chunk, encoding, callback) => {
+    if (typeof chunk !== "string" || chunk.length === 0) {
+      return originalWrite(chunk, encoding, callback);
     }
 
     // Task 7: Frame Lock
     // Ensure only one render flush can write to stdout at a time.
     if (isFlushing) {
-      logDebug("Frame dropped: lock active (concurrent flush)");
-      return true;
+      // Node's Writable queue owns serialization. A reentrant write is still
+      // real output, and dropping it would violate the stream contract.
+      lastFrame = "";
+      return originalWrite(chunk, encoding, callback);
     }
 
     // Task 8: Full-frame Deduplication
     // Skip if identical to last frame.
     if (chunk === lastFrame) {
       logDebug("Frame dropped: identical to last frame");
-      return true;
+      // Empty writes still provide an ordered completion barrier to Ink.
+      return typeof encoding === "function" || callback
+        ? originalWrite("", encoding, callback)
+        : true;
     }
 
     // Task 4: Width-Safe Injection
@@ -141,9 +151,33 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
       logDebug(
         `Frame written: length=${processed.length} original=${chunk.length} resizing=${resizing}`,
       );
+      const traceGeneration = resizeTraceEnabled ? getResizeGeneration() : 0;
+      const traceCols = (stdout as { columns?: number }).columns;
+      const traceRows = (stdout as { rows?: number }).rows;
+      if (resizeTraceEnabled)
+        traceResize("write", {
+          visible: /[^\s]/.test(chunk.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")),
+          cols: (stdout as { columns?: number }).columns,
+          rows: (stdout as { rows?: number }).rows,
+          bytes: processed.length,
+        });
+      const completed = resizeTraceEnabled
+        ? (error?: Error | null) => {
+            traceResize("writeComplete", {
+              generation: traceGeneration,
+              colsAtWrite: traceCols,
+              rowsAtWrite: traceRows,
+              cols: (stdout as { columns?: number }).columns,
+              rows: (stdout as { rows?: number }).rows,
+            });
+            callback?.(error);
+          }
+        : callback;
       return originalWrite(
         (getStartupGraphicsChannel(stdout)?.prepareFrame(chunk) ?? "") +
           (getStartupGraphicsChannel(stdout)?.transformFrame(processed) ?? processed),
+        encoding,
+        completed,
       );
     } catch (error) {
       lastFrame = "";

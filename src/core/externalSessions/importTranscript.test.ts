@@ -77,3 +77,24 @@ test("externalTranscriptToConversationMessages keeps the newest turns within the
     { role: "assistant", content: "new reply" },
   ]);
 });
+
+test("imported display history retains tool output, failures and chronological response fragments", () => {
+  const messages = externalTranscriptToConversationMessages(
+    transcript([
+      entry("user", "task"),
+      entry("assistant", "before tool"),
+      {
+        ...entry("tool", "exit 7\npermission denied\n```embedded fence```", "Bash"),
+        status: "failed",
+      },
+      entry("assistant", "after tool"),
+    ]),
+    { includeToolDetails: true },
+  );
+  const content = messages[1]!.content;
+  assert(content.indexOf("before tool") < content.indexOf("permission denied"));
+  assert(content.indexOf("permission denied") < content.indexOf("after tool"));
+  assert(content.includes("failed"));
+  assert(content.includes("````text"));
+  assert.match(messages[1]!.activitySummary!, /Bash \(failed\)/);
+});

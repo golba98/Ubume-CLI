@@ -1,6 +1,6 @@
 /**
  * Google runtime backed by the Antigravity CLI. Keeps native selectors and reasoning metadata,
- * validates AGY, adapts buffered output and preserves cancellation across owned subprocesses.
+ * validates AGY, adapts structured output and preserves cancellation across owned subprocesses.
  */
 
 import { formatConversationHistory } from "../../session/conversation.js";
@@ -19,7 +19,14 @@ import { createRunControl } from "../providers/runControl.js";
 import type { BackendRunHandlers } from "../providers/types.js";
 import { errorMessage } from "../shared/values.js";
 import { sanitizeTerminalOutput } from "../terminal/terminalSanitize.js";
-import { classifyProviderFailure } from "./failures.js";
+import { createAntigravityStreamParser } from "./antigravityStream.js";
+import { createProviderExecution } from "./execution.js";
+import { classifyProviderFailure, isUnknownCliOption } from "./failures.js";
+import {
+  completedNativeSession,
+  isMissingNativeSession,
+  nativeContinuation,
+} from "./nativeContinuation.js";
 import type {
   ProviderChatRequest,
   ProviderModel,
@@ -28,7 +35,6 @@ import type {
   ProviderRuntime,
 } from "./types.js";
 
-const ANTIGRAVITY_TIMEOUT_MS = 120_000;
 const ANTIGRAVITY_VALIDATION_TIMEOUT_MS = 10_000;
 const ANTIGRAVITY_ROUTE_SETUP_MESSAGE =
   "`agy` command not found. Install Antigravity CLI or set AGY_EXECUTABLE to the full path.";
@@ -593,6 +599,15 @@ export async function validateAntigravityRoute(options: {
 // ---------------------------------------------------------------------------
 
 /**
+ * Maps Ubume's mode/run intent to AGY's `--mode`. AGY cannot route approval prompts to Ubume,
+ * so this mode alone decides what runs; `--dangerously-skip-permissions` is never used.
+ */
+export function agyPermissionMode(request: ProviderChatRequest): "plan" | "accept-edits" | "auto" {
+  if (request.runIntent === "plan" || request.runtime.mode === "suggest") return "plan";
+  return request.runtime.mode === "full-auto" ? "auto" : "accept-edits";
+}
+
+/**
  * Runs the selected native AGY route and adapts output; cancellation retains ownership until
  * subprocess cleanup settles.
  */
@@ -616,9 +631,6 @@ export function runAntigravityWithRunner(
     );
     return () => undefined;
   }
-  const prompt = request.conversationHistory?.length
-    ? `Previous conversation:\n${formatConversationHistory(request.conversationHistory)}\n\nCurrent request:\n${request.prompt}`
-    : request.prompt;
   const selected = models.find(
     (item) => item.modelId === request.route.modelId || item.id === request.route.modelId,
   );
@@ -634,56 +646,157 @@ export function runAntigravityWithRunner(
     source: "stdout",
     text: `Using Google / ${selector}`,
   });
-  const spawnSpec = buildSpawnSpec(
-    executable,
-    ["--model", selector, ...effort, "-p", prompt],
-    platform,
-  );
-
-  const runner = runCommandImpl({
-    executable: spawnSpec.executable,
-    args: spawnSpec.args,
-    cwd: request.workspaceRoot,
-    env: { ...process.env },
-    timeoutMs: ANTIGRAVITY_TIMEOUT_MS,
-  });
-
   const control = createRunControl(handlers);
+  const execution = createProviderExecution(request, handlers);
   let canceled = false;
-  control.track(runner.stopped ?? runner.result.then(() => undefined));
-  runner.result
-    .then((result) => {
-      control.finish();
-      if (canceled || result.status === "canceled") return;
-
-      if (result.status !== "completed" || result.exitCode !== 0) {
-        const message = result.userMessage || result.stderr || "Antigravity CLI execution failed.";
-        handlers.onError(
-          message,
-          `agy command: ${JSON.stringify([spawnSpec.executable, ...spawnSpec.args])}`,
-          classifyProviderFailure(message),
-        );
-        return;
-      }
-
-      const text = sanitizeTerminalOutput(result.stdout).trim();
-      if (text) {
-        handlers.onAssistantDelta?.(text);
-      }
-      handlers.onFinalAnswerObserved?.(text);
-      handlers.onResponse(text);
-    })
-    .catch((error) => {
-      control.finish();
-      if (canceled) return;
-      const message = errorMessage(error, "Google Antigravity CLI execution failed.");
-      handlers.onError(message);
-    });
-
-  return () => {
-    canceled = true;
-    runner.cancel();
+  let finished = false;
+  let cancelChild: (() => void) | undefined;
+  const finish = () => {
+    finished = true;
+    execution.finish();
     control.finish();
+  };
+  let allowResume = true;
+  let allowModeFlag = true;
+  const permissionMode = agyPermissionMode(request);
+  handlers.onProgress?.({
+    id: "agy-permissions",
+    source: "stdout",
+    text: `Antigravity permissions: ${permissionMode}. Antigravity cannot send approval prompts to Ubume; actions its policy would ask about are denied.`,
+  });
+  const runAttempt = () => {
+    if (canceled || finished) return;
+    const reference = allowResume ? nativeContinuation(request, "antigravity") : undefined;
+    const modeArgs = allowModeFlag ? ["--mode", permissionMode] : [];
+    const prompt =
+      !reference && request.conversationHistory?.length
+        ? `Previous conversation:\n${formatConversationHistory(request.conversationHistory)}\n\nCurrent request:\n${request.prompt}`
+        : request.prompt;
+    const spawnSpec = buildSpawnSpec(
+      executable,
+      [
+        "--model",
+        selector,
+        ...effort,
+        ...modeArgs,
+        "--output-format",
+        "stream-json",
+        "--print-timeout",
+        "0",
+        ...(reference ? ["--conversation", reference.sessionId] : []),
+        "-p",
+        prompt,
+      ],
+      platform,
+    );
+
+    const parser = createAntigravityStreamParser(execution.handlers);
+    let received = false;
+    try {
+      const runner = execution.run(
+        {
+          executable: spawnSpec.executable,
+          args: spawnSpec.args,
+          cwd: request.workspaceRoot,
+          env: { ...process.env },
+        },
+        {
+          onStdout: (chunk) => {
+            if (finished || canceled) return;
+            received = true;
+            parser.push(chunk);
+            if (parser.error) queueMicrotask(() => cancelChild?.());
+          },
+          onStderr: (chunk) => {
+            if (/permission|soft.denied|requires approval/i.test(chunk))
+              handlers.onProgress?.({
+                id: "agy-permission",
+                source: "stderr",
+                text: `Antigravity blocked a tool under its native permission policy (mode ${allowModeFlag ? permissionMode : "default"}); it cannot ask for approval in Ubume. Configure a scoped native permission rule if needed.`,
+              });
+          },
+        },
+        runCommandImpl,
+      );
+      cancelChild = runner.cancel;
+      control.track(runner.stopped ?? runner.result.then(() => undefined));
+      void runner.result
+        .then(async (result) => {
+          if (canceled || finished) return;
+          if (!received) parser.push(result.stdout);
+          parser.flush();
+          if (parser.error && result.status !== "timeout") {
+            finish();
+            handlers.onError(parser.error, result.stderr, {
+              kind: "protocol",
+              message: parser.error,
+              retryable: false,
+            });
+            return;
+          }
+          if (result.status === "canceled") {
+            finish();
+            return;
+          }
+          if (reference && !parser.productive && isMissingNativeSession(result, parser.failure)) {
+            allowResume = false;
+            handlers.onProgress?.({
+              id: "agy-session-recovery",
+              source: "stderr",
+              text: "Saved AGY conversation is unavailable; recovering this chat into a fresh conversation.",
+            });
+            await runner.stopped;
+            if (!canceled) runAttempt();
+            return;
+          }
+          if (
+            modeArgs.length &&
+            !parser.productive &&
+            result.status === "failed" &&
+            isUnknownCliOption(result.stderr, "--mode")
+          ) {
+            allowModeFlag = false;
+            handlers.onProgress?.({
+              id: "agy-mode-retry",
+              source: "stderr",
+              text: "This Antigravity CLI does not support --mode; retrying under its default permission policy.",
+            });
+            await runner.stopped;
+            if (!canceled) runAttempt();
+            return;
+          }
+          const failure = execution.failure(result);
+          if (result.status !== "completed" || result.exitCode !== 0 || parser.failure) {
+            const message = failure?.message ?? parser.failure ?? result.userMessage;
+            finish();
+            handlers.onError(message, result.stderr, failure ?? classifyProviderFailure(message));
+            return;
+          }
+          const text = parser.finalText();
+          if (parser.sessionId)
+            handlers.onNativeSession?.(
+              completedNativeSession(request, "antigravity", parser.sessionId, text),
+            );
+          finish();
+          handlers.onFinalAnswerObserved?.(text);
+          handlers.onResponse(text);
+        })
+        .catch((error) => {
+          if (canceled || finished) return;
+          finish();
+          handlers.onError(errorMessage(error, "Google Antigravity CLI execution failed."));
+        });
+    } catch (error) {
+      finish();
+      handlers.onError(errorMessage(error));
+    }
+  };
+  runAttempt();
+  return () => {
+    if (finished || canceled) return;
+    canceled = true;
+    cancelChild?.();
+    finish();
   };
 }
 

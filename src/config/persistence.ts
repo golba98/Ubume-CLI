@@ -444,18 +444,73 @@ export function loadSettings(): AppSettings {
     }
     const rawData = JSON.parse(text);
     maybeMigrateLegacyRuntime(rawData);
-    return parseSettingsData(rawData);
+    const settings = parseSettingsData(rawData);
+    savedSettingsBaseline = serializeSettings(settings);
+    return settings;
   } catch {
     return getDefaultSettings();
   }
 }
 
 /**
- * Persists user settings to `~/.ubume-settings.json` atomically.
+ * What this process last loaded or saved. Other Ubume instances share the settings file, so a
+ * save writes only the fields that changed since then and keeps their newer values for the rest.
+ */
+let savedSettingsBaseline: Record<string, unknown> | null = null;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Applies `next`'s changes relative to `base` onto `disk`, keeping disk-only keys. */
+function mergeChangedSettings(
+  base: Record<string, unknown>,
+  next: Record<string, unknown>,
+  disk: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...disk };
+  for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
+    const before = base[key];
+    const after = next[key];
+    if (sameJson(before, after)) {
+      if (!(key in disk) && after !== undefined) merged[key] = after;
+      continue;
+    }
+    if (isPlainObject(before) && isPlainObject(after) && isPlainObject(disk[key]))
+      merged[key] = mergeChangedSettings(before, after, disk[key] as Record<string, unknown>);
+    else if (after === undefined) delete merged[key];
+    else merged[key] = after;
+  }
+  return merged;
+}
+
+function readSettingsFileObject(): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(getSettingsFile(), "utf8"));
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists user settings to `~/.ubume-settings.json` atomically. Fields this process did not
+ * change keep whatever another Ubume instance saved in the meantime.
  */
 export function saveSettings(settings: AppSettings): void {
   try {
-    writeJsonFileAtomic(getSettingsFile(), serializeSettings(settings));
+    const next = serializeSettings(settings);
+    const disk = savedSettingsBaseline ? readSettingsFileObject() : null;
+    const payload =
+      savedSettingsBaseline && disk
+        ? mergeChangedSettings(savedSettingsBaseline, next, disk)
+        : next;
+    writeJsonFileAtomic(getSettingsFile(), payload);
+    savedSettingsBaseline = next;
   } catch {
     // Silently ignore — settings are best-effort
   }

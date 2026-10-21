@@ -235,6 +235,7 @@ export async function readClaudeTranscript(
           )
             continue;
           const tool = toolEntries.get(block.tool_use_id);
+          if (tool) tool.status = block.is_error === true ? "failed" : "completed";
           const result = toolResultText(block);
           if (tool && result) tool.text = clampText(`${tool.text}\n\n${result}`, TOOL_TEXT_LIMIT);
         }

@@ -38,7 +38,11 @@
     "bench:all": "bun scripts/bench/all.ts",
     "bench:compare": "bun scripts/bench/compare.ts",
     "check:pty": "python3 scripts/pty-terminal-check.py",
-    "check:e2e": "python3 scripts/e2e-offline-workflow.py"
+    "check:resume": "python3 scripts/check-resume-pty.py",
+    "bench:resume": "bun scripts/bench/resume.ts",
+    "check:e2e": "python3 scripts/e2e-offline-workflow.py",
+    "bench:resize": "python3 scripts/bench/resize.py",
+    "check:resize": "python3 scripts/check-resize-pty.py"
   },
   "dependencies": {
     "playwright": "1.63.0",

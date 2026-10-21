@@ -10,6 +10,7 @@ import {
   resolveInkRenderInstance,
 } from "../../core/terminal/inkRenderReset.js";
 import type { RunEvent, TimelineEvent, UIState, UserPromptEvent } from "../../session/types.js";
+import { waitFor } from "../../test/async.js";
 import { TEST_RUNTIME } from "../../test/runtimeTestUtils.js";
 import { createLayoutSnapshot } from "../layout.js";
 import { LOGO_COMPACT, LOGO_LARGE } from "../render/logoVariants.js";
@@ -1268,6 +1269,35 @@ test("a stale wider frame during a shrink truncates rows instead of wrapping the
     assert.equal(logoRowCount(lines.join("\n")), 3);
   } finally {
     h.instance.unmount();
+    h.instance.cleanup();
+  }
+});
+
+test("a hidden transcript defers historical reflow during selector resizes", async () => {
+  const events = Array.from({ length: 12 }, (_, index) => finalizedTurnEvents(index + 1)).flat();
+  const h = renderTranscript(events);
+  try {
+    await h.instance.waitUntilRenderFlush();
+    h.instance.rerender(transcriptNode({ staticEvents: events, visible: false }));
+    await h.instance.waitUntilRenderFlush();
+    __resetNativeTurnBuildCountForTests();
+    h.instance.rerender(
+      transcriptNode({ staticEvents: events, visible: false, cols: 60, rows: 20 }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    assert.equal(
+      __getNativeTurnBuildCountForTests(),
+      0,
+      "hidden history must not delay overlay resize input",
+    );
+    h.instance.rerender(
+      transcriptNode({ staticEvents: events, visible: true, cols: 60, rows: 20 }),
+    );
+    await h.instance.waitUntilRenderFlush();
+    await waitFor(() => __getNativeTurnBuildCountForTests() > 0, {
+      label: "showing the transcript prepares its new width cooperatively",
+    });
+  } finally {
     h.instance.cleanup();
   }
 });

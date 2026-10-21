@@ -140,6 +140,7 @@ export function matchDirectCommand(
   if (value.startsWith("/resume ")) {
     return () => {
       if (!ctx.busy) {
+        ctx.resetComposer();
         void ctx.resumeConversation(value.slice("/resume ".length).trim());
       }
     };

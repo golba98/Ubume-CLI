@@ -34,7 +34,7 @@ export interface WorkspaceCommandContext {
   summaryMessage: string;
 }
 
-interface WorkspaceRelaunchPlan {
+export interface WorkspaceRelaunchPlan {
   executable: string;
   args: string[];
   cwd: string;

@@ -1,0 +1,238 @@
+/**
+ * Claude Code permission integration: maps Ubume's execution mode to Claude's native
+ * `--permission-mode`, and bridges Claude's stream-json `can_use_tool` control requests
+ * (`--permission-prompt-tool stdio`) into Ubume's shared tool-approval handler.
+ *
+ * Claude itself evaluates every tool call (including compound shell commands and protected
+ * paths); Ubume only answers the requests Claude escalates. Approvals are never broadened:
+ * "allow for run" reuses a decision only for the byte-identical tool input.
+ */
+
+import type {
+  BackendRunHandlers,
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+} from "../providers/types.js";
+import { isRecord } from "../shared/values.js";
+import {
+  canonicalJson,
+  createProviderApprovalQueue,
+  displayWorkspacePath,
+  isOutsideWorkspace,
+} from "./providerApprovalQueue.js";
+
+export type ClaudePermissionMode = "default" | "acceptEdits" | "auto" | "dontAsk" | "plan";
+
+export interface ClaudePermissionModeResolution {
+  mode: ClaudePermissionMode;
+  /** The mode Ubume wanted before falling back for an older CLI. */
+  requested: ClaudePermissionMode;
+}
+
+/**
+ * Maps Ubume's mode/run intent to Claude's permission mode. Read-only uses `dontAsk` so
+ * anything Claude would ask about is denied instead of prompting; `bypassPermissions` is
+ * never produced. `supported` is the CLI's advertised choice list, when discovery saw one.
+ */
+export function resolveClaudePermissionMode(
+  mode: string,
+  runIntent: "normal" | "plan" | "approved-execution" | undefined,
+  supported?: readonly string[] | null,
+): ClaudePermissionModeResolution {
+  const requested: ClaudePermissionMode =
+    runIntent === "plan"
+      ? "plan"
+      : mode === "suggest"
+        ? "dontAsk"
+        : mode === "auto-edit"
+          ? "acceptEdits"
+          : mode === "full-auto"
+            ? "auto"
+            : "default";
+  const available = !supported?.length || supported.includes(requested);
+  return { mode: available ? requested : "default", requested };
+}
+
+/** One escalated `can_use_tool` control request from Claude's stdout. */
+export interface ClaudeCanUseToolRequest {
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  toolUseId?: string;
+  decisionReason?: string;
+  blockedPath?: string;
+}
+
+export type ClaudeControlMessage =
+  | { kind: "can-use-tool"; request: ClaudeCanUseToolRequest }
+  | { kind: "cancel"; requestId: string }
+  | { kind: "other-request"; requestId: string; subtype: string };
+
+/** Recognizes the control-protocol records Claude writes to stdout; returns null for others. */
+export function parseClaudeControlMessage(
+  record: Record<string, unknown>,
+): ClaudeControlMessage | null {
+  if (record.type === "control_cancel_request" && typeof record.request_id === "string")
+    return { kind: "cancel", requestId: record.request_id };
+  if (record.type !== "control_request" || typeof record.request_id !== "string") return null;
+  const body = record.request;
+  if (!isRecord(body)) return null;
+  if (body.subtype !== "can_use_tool" || typeof body.tool_name !== "string")
+    return {
+      kind: "other-request",
+      requestId: record.request_id,
+      subtype: String(body.subtype ?? "unknown"),
+    };
+  return {
+    kind: "can-use-tool",
+    request: {
+      requestId: record.request_id,
+      toolName: body.tool_name,
+      input: isRecord(body.input) ? body.input : {},
+      ...(typeof body.tool_use_id === "string" ? { toolUseId: body.tool_use_id } : {}),
+      ...(typeof body.decision_reason === "string" ? { decisionReason: body.decision_reason } : {}),
+      ...(typeof body.blocked_path === "string" ? { blockedPath: body.blocked_path } : {}),
+    },
+  };
+}
+
+const FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const COMMAND_TOOLS = new Set(["Bash", "PowerShell"]);
+
+export { isOutsideWorkspace };
+
+/** Converts a Claude control request into the provider-neutral approval prompt. */
+export function toToolApprovalRequest(
+  request: ClaudeCanUseToolRequest,
+  workspaceRoot: string,
+): ToolApprovalRequest {
+  const { input, toolName } = request;
+  const kind = COMMAND_TOOLS.has(toolName) ? "command" : FILE_TOOLS.has(toolName) ? "file" : "tool";
+  const rawPaths = [input.file_path, input.notebook_path, input.path, request.blockedPath].filter(
+    (value, index, all): value is string =>
+      typeof value === "string" && value.length > 0 && all.indexOf(value) === index,
+  );
+  const outsideWorkspace = rawPaths.some((path) => isOutsideWorkspace(path, workspaceRoot));
+  const command = kind === "command" && typeof input.command === "string" ? input.command : null;
+  return {
+    tool: toolName,
+    signature: `${toolName}:${canonicalJson(input)}`,
+    ...(command !== null ? { command } : {}),
+    paths: rawPaths.map((path) => displayWorkspacePath(path, workspaceRoot)),
+    ...(typeof input.description === "string" ? { description: input.description } : {}),
+    // Exact-match reuse only; never offered for paths outside the workspace.
+    allowForRun: !outsideWorkspace,
+    provider: "Claude Code",
+    workspace: workspaceRoot,
+    kind,
+    ...(outsideWorkspace ? { outsideWorkspace } : {}),
+    ...(request.decisionReason ? { reason: request.decisionReason } : {}),
+  };
+}
+
+export const CLAUDE_USER_DENIED_MESSAGE = "The user denied this action in Ubume.";
+export const CLAUDE_APPROVAL_UNAVAILABLE_MESSAGE =
+  "Ubume could not show an approval prompt for this action, so it was denied.";
+
+/**
+ * Labels a failed Claude tool result that was a permission outcome rather than an execution
+ * failure; returns null for ordinary errors (non-zero exits, filesystem errors).
+ */
+export function classifyClaudeToolDenial(output: string): string | null {
+  if (output.includes(CLAUDE_USER_DENIED_MESSAGE)) return "Denied by you in Ubume";
+  if (output.includes(CLAUDE_APPROVAL_UNAVAILABLE_MESSAGE) || /no approval surface/i.test(output))
+    return "Denied: no approval prompt available in this run";
+  if (/outside (of )?(the )?(allowed |working |project )?(working )?director/i.test(output))
+    return "Blocked: path is outside the allowed workspace";
+  if (
+    /permission to use .+ has been denied|denied by (your )?permission (settings|rules)/i.test(
+      output,
+    )
+  )
+    return "Blocked by Claude's permission policy";
+  return null;
+}
+
+/** Serializes one stream-json control response line. */
+export function claudeControlResponse(
+  requestId: string,
+  response: Record<string, unknown>,
+): string {
+  return `${JSON.stringify({
+    type: "control_response",
+    response: { subtype: "success", request_id: requestId, response },
+  })}\n`;
+}
+
+function claudeControlError(requestId: string, error: string): string {
+  return `${JSON.stringify({
+    type: "control_response",
+    response: { subtype: "error", request_id: requestId, error },
+  })}\n`;
+}
+
+export interface ClaudeApprovalBridgeOptions {
+  workspaceRoot: string;
+  onToolApproval?: BackendRunHandlers["onToolApproval"];
+  /** Writes one line to Claude's stdin; returns false once stdin is closed. */
+  write: (line: string) => boolean;
+  /** Reports whether Ubume is waiting on the user, so quiet-provider notices pause. */
+  onAwaitingUser?: (waiting: boolean) => void;
+  onDecision?: (request: ToolApprovalRequest, decision: ToolApprovalDecision | "cached") => void;
+}
+
+/**
+ * Answers Claude's permission requests one at a time. Duplicate request ids are ignored, a
+ * cancel withdraws a queued or visible request, and `dispose` (process exit or run cancel)
+ * withdraws everything without writing to the closed stdin.
+ */
+export function createClaudeApprovalBridge(options: ClaudeApprovalBridgeOptions) {
+  const queue = createProviderApprovalQueue<ClaudeCanUseToolRequest>({
+    onToolApproval: options.onToolApproval,
+    toApproval: (request) => toToolApprovalRequest(request, options.workspaceRoot),
+    respond: (request, outcome) =>
+      options.write(
+        claudeControlResponse(
+          request.requestId,
+          outcome === "allow"
+            ? { behavior: "allow", updatedInput: request.input }
+            : {
+                behavior: "deny",
+                message:
+                  outcome === "deny"
+                    ? CLAUDE_USER_DENIED_MESSAGE
+                    : CLAUDE_APPROVAL_UNAVAILABLE_MESSAGE,
+              },
+        ),
+      ),
+    onAwaitingUser: options.onAwaitingUser,
+    onDecision: options.onDecision,
+  });
+
+  return {
+    /** Handles a control record; returns true when the record belonged to the protocol. */
+    handle(record: Record<string, unknown>): boolean {
+      const message = parseClaudeControlMessage(record);
+      if (!message) return false;
+      if (queue.disposed) return true;
+      if (message.kind === "other-request") {
+        options.write(
+          claudeControlError(message.requestId, `Unsupported control request: ${message.subtype}`),
+        );
+        return true;
+      }
+      if (message.kind === "cancel") {
+        queue.withdraw(message.requestId);
+        return true;
+      }
+      queue.enqueue(message.request.requestId, message.request);
+      return true;
+    },
+    get pending(): number {
+      return queue.pending;
+    },
+    dispose(): void {
+      queue.dispose();
+    },
+  };
+}

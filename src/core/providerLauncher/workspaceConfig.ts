@@ -4,8 +4,9 @@
  * orchestration owns concurrent updates and execution leases.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { writeTextFileAtomic } from "../../config/atomicFile.js";
 import { getProviderRuntime, isProviderRoutableInUbume } from "../providerRuntime/registry.js";
 import { isRecord } from "../shared/values.js";
 import {
@@ -193,6 +194,15 @@ function parseProviderOverride(value: unknown): ProviderWorkspaceOverride | unde
     override.apiTimeoutMs = apiTimeoutMs;
   }
 
+  const executionTimeoutMs = value.executionTimeoutMs ?? value.execution_timeout_ms;
+  if (
+    typeof executionTimeoutMs === "number" &&
+    Number.isSafeInteger(executionTimeoutMs) &&
+    executionTimeoutMs >= 0 &&
+    executionTimeoutMs <= 2_147_483_647
+  ) {
+    override.executionTimeoutMs = executionTimeoutMs;
+  }
   return override;
 }
 
@@ -407,6 +417,9 @@ export function serializeProviderWorkspaceConfig(
           ? { codex_command_path: override.codexCommandPath }
           : {}),
         ...(override.apiTimeoutMs !== undefined ? { api_timeout_ms: override.apiTimeoutMs } : {}),
+        ...(override.executionTimeoutMs !== undefined
+          ? { execution_timeout_ms: override.executionTimeoutMs }
+          : {}),
       },
     ]),
   );
@@ -486,14 +499,11 @@ export function saveProviderWorkspaceConfig(
   workspaceRoot: string,
   config: ProviderWorkspaceConfig,
 ): void {
-  const filePath = getProviderWorkspaceConfigFile(workspaceRoot);
-  mkdirSync(dirname(filePath), { recursive: true });
-  const tmpFile = `${filePath}.tmp`;
-  writeFileSync(tmpFile, JSON.stringify(serializeProviderWorkspaceConfig(config), null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  renameSync(tmpFile, filePath);
+  // A per-process temporary name keeps two Ubume instances writing this file from colliding.
+  writeTextFileAtomic(
+    getProviderWorkspaceConfigFile(workspaceRoot),
+    JSON.stringify(serializeProviderWorkspaceConfig(config), null, 2),
+  );
 }
 
 /** Returns a new workspace default preference without changing the active route. */

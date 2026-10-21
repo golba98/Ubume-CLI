@@ -348,6 +348,14 @@ function createProviderHandlers(
       writeDiagnostic(io.stderr, "error", details);
       state.settle(EXIT_CODE.FAILED, details);
     },
+    onExecutionDiagnostic: (event) => {
+      timing?.mark(`provider_${event.phase}`, {
+        provider_id: event.providerId,
+        run_id: event.runId,
+        provider_elapsed_ms: event.elapsedMs,
+      });
+      observers?.onExecutionDiagnostic?.(event);
+    },
     benchmarkHooks: timing?.enabled ? createBenchmarkHooks(timing, options.prompt) : undefined,
   };
 }

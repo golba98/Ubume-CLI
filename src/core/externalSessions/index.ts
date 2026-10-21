@@ -5,6 +5,7 @@
  */
 
 import { statSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { verifyAgyExecutable } from "../executables/antigravityExecutable.js";
 import { resolveCodexExecutable } from "../executables/codexExecutable.js";
 import {
@@ -24,7 +25,7 @@ import type {
   ExternalSessionSummary,
   ExternalTranscript,
 } from "./types.js";
-import { externalSourceLabel } from "./types.js";
+import { externalSourceLabel, isSafeNativeSessionId } from "./types.js";
 import { listVibeSessions, readVibeTranscript } from "./vibeSessions.js";
 
 export * from "./types.js";
@@ -156,8 +157,13 @@ export async function buildExternalResumeLaunch(
   options: ResumeLaunchOptions,
 ): Promise<ExternalResumeLaunchResult> {
   const displayName = externalSourceLabel(summary.source);
+  if (!isSafeNativeSessionId(summary.id))
+    return {
+      ok: false,
+      message: "The native session identifier is invalid. Open its transcript for viewing.",
+    };
   // Claude Code looks sessions up by the project folder they were started in.
-  if (!summary.cwd) {
+  if (!summary.cwd || !isAbsolute(summary.cwd)) {
     return {
       ok: false,
       message: `${displayName} resumes a session from its original folder, which this session does not record.`,
@@ -210,7 +216,7 @@ function formatToolCounts(counts: Map<string, number>): string {
  */
 export function externalTranscriptToConversationMessages(
   transcript: ExternalTranscript,
-  options: { maxChars?: number } = {},
+  options: { maxChars?: number; includeToolDetails?: boolean } = {},
 ): ConversationMessage[] {
   const messages: ConversationMessage[] = [];
   let tools = new Map<string, number>();
@@ -238,8 +244,19 @@ export function externalTranscriptToConversationMessages(
       if (last?.role === "assistant") last.content = `${last.content}\n\n${entry.text}`;
       else messages.push({ role: "assistant", content: entry.text });
     } else if (entry.kind === "tool") {
-      const name = toolName(entry.title);
+      const name =
+        toolName(entry.title) +
+        (entry.status === "failed" || entry.status === "interrupted" ? ` (${entry.status})` : "");
       tools.set(name, (tools.get(name) ?? 0) + 1);
+      if (options.includeToolDetails) {
+        const fence = "`".repeat(
+          Math.max(3, ...[...entry.text.matchAll(/`+/g)].map((match) => match[0].length + 1)),
+        );
+        const detail = `Historical tool · ${entry.title} · ${entry.status ?? "outcome unknown"}\n\n${fence}text\n${entry.text}\n${fence}`;
+        const last = messages.at(-1);
+        if (last?.role === "assistant") last.content += `\n\n${detail}`;
+        else messages.push({ role: "assistant", content: detail });
+      }
     }
   }
   flushTools();

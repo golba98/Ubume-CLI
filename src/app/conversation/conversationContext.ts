@@ -4,9 +4,10 @@
  * own module so the sub-hooks do not import their composer.
  */
 
-import type { useFocusManager } from "ink";
+import type { useApp, useFocusManager } from "ink";
 import type { LaunchArgs } from "../../config/launchArgs.js";
 import type { ExternalSessionSummary } from "../../core/externalSessions/index.js";
+import type { SelectionCoordinator } from "../../core/models/selectionCoordinator.js";
 import type { ProviderConfig, ProviderWorkspaceConfig } from "../../core/providerLauncher/types.js";
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 import type {
@@ -43,6 +44,12 @@ import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
 import type { ActiveRunCapture } from "../run/providerRunSession.js";
 
 export interface UseConversationContext {
+  selectionCoordinator: SelectionCoordinator;
+  modelSelectionInFlightRef: React.RefObject<boolean>;
+  modelPickerOpenRef: React.RefObject<boolean>;
+  setRouteSwitchBusy: React.Dispatch<React.SetStateAction<boolean>>;
+  waitUntilRenderFlush: ReturnType<typeof useApp>["waitUntilRenderFlush"];
+  suspendTerminal: <T>(callback: () => Promise<T>) => Promise<T>;
   // Transcript swap and the active conversation record
   armTranscriptReplacement: (source: string) => {
     clearGeneration: number;

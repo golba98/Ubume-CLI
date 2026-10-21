@@ -21,6 +21,7 @@ import type { RenderTimelineItem } from "./measure/types.js";
 import type { TurnOpacity } from "./TurnGroup.js";
 import {
   buildNativeTranscriptParts,
+  type NativeTranscriptParts,
   type NativeTranscriptRowItem,
   type TimelineRow,
 } from "./timelineMeasure.js";
@@ -36,14 +37,13 @@ import {
  * that changes nothing in the static half costs one Map lookup per item.
  *
  * Retention: only the newest MAX_RETAINED_STATIC_TURNS turns keep row objects.
- * Older turns still emit placeholder items (with no rows) so the <Static> item
+ * Older turns print once on a fresh mount, then emit placeholder items so the <Static> item
  * count stays monotonic — Ink advances its printed index by items.length, so a
  * shrinking list would swallow the next newly finalized turn. A turn that
  * leaves the window keeps exactly the item keys it had while retained; those
  * keys survive generation changes so the count never drops. Their rows are
- * already in the terminal's scrollback; the only visible effect is that a
- * width resize (which re-flushes <Static> from these items) redraws just the
- * retained window.
+ * already in the terminal's scrollback. Resume and width-resize remounts use a
+ * fresh cache, printing the complete transcript before evicting older rows.
  */
 export const MAX_RETAINED_STATIC_TURNS = 200;
 
@@ -68,7 +68,7 @@ interface CachedEventEntry {
 
 type CachedEntry = CachedTurnEntry | CachedEventEntry;
 
-interface StaticTranscriptBuildOptions {
+export interface StaticTranscriptBuildOptions {
   totalWidth: number;
   verboseMode: boolean;
   workspaceRoot: string | null;
@@ -127,6 +127,7 @@ export function buildStaticTranscript(
   cache: StaticTranscriptCache,
   renderItems: RenderTimelineItem[],
   options: StaticTranscriptBuildOptions,
+  prepared?: ReadonlyMap<string, NativeTranscriptParts>,
 ): { staticItems: NativeTranscriptRowItem[]; liveRows: TimelineRow[] } {
   const generation = staticTranscriptGeneration(options);
   if (cache.generation !== generation) {
@@ -140,6 +141,8 @@ export function buildStaticTranscript(
     workspaceRoot: options.workspaceRoot,
     debugLabel: "transcript-shell-static",
   };
+  const partsFor = (item: RenderTimelineItem) =>
+    prepared?.get(item.key) ?? buildNativeTranscriptParts([item], buildOptions);
   const staticItems: NativeTranscriptRowItem[] = [];
   const liveRows: TimelineRow[] = [];
   const seen = new Set<string>();
@@ -151,7 +154,7 @@ export function buildStaticTranscript(
 
   for (const item of renderItems) {
     if (item.type === "intro") {
-      staticItems.push(...buildNativeTranscriptParts([item], buildOptions).staticItems);
+      staticItems.push(...partsFor(item).staticItems);
       continue;
     }
 
@@ -161,12 +164,17 @@ export function buildStaticTranscript(
       if (ordinal < firstRetainedTurnOrdinal) {
         let keys = cache.placeholders.get(item.key);
         if (!keys) {
+          // A fresh Static instance has printed nothing. Emit old turns once
+          // before evicting their rows, including after resume and width resize.
+          const emit = !cache.entries.has(item.key);
+          const initial = cache.entries.get(item.key)?.items ?? partsFor(item).staticItems;
+          if (emit) staticItems.push(...initial);
           // Leaving the window: keep this turn's item keys so the count stays
-          // exactly what Ink already printed. A turn first seen outside the
-          // window was never printed by this <Static>, so one item suffices.
-          keys = cache.entries.get(item.key)?.items.map((entry) => entry.key) ?? [item.key];
+          // exactly what Ink already printed, including the initial historical reflush.
+          keys = initial.map((entry) => entry.key);
           cache.placeholders.set(item.key, keys);
           cache.entries.delete(item.key);
+          if (emit) continue;
         }
         for (const key of keys) staticItems.push({ key, rows: EMPTY_ROWS });
         continue;
@@ -180,7 +188,7 @@ export function buildStaticTranscript(
       continue;
     }
 
-    const parts = buildNativeTranscriptParts([item], buildOptions);
+    const parts = partsFor(item);
     staticItems.push(...parts.staticItems);
     liveRows.push(...parts.liveRows);
     if (!isCacheable(item, parts.liveRows.length)) continue;

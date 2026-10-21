@@ -65,13 +65,20 @@ export function conversationMessagesToTimeline(
       events.push(user);
       continue;
     }
+    if (turnId === 0) turnId = nextTurnId();
+    const previous = events.at(-1);
+    const content = message.activitySummary
+      ? `${message.content}\n\n---\n${message.activitySummary}`
+      : message.content;
+    if (previous?.type === "assistant") {
+      previous.content += `\n\n${content}`;
+      continue;
+    }
     const assistant: AssistantEvent = {
       id: createEventId(),
       type: "assistant",
-      createdAt: Date.now(),
-      content: message.activitySummary
-        ? `${message.content}\n\n---\n${message.activitySummary}`
-        : message.content,
+      createdAt: message.createdAt ?? Date.now(),
+      content,
       contentChunks: [],
       turnId,
     };
@@ -91,6 +98,9 @@ export function toProviderConversationHistory(
 ): ConversationMessage[] {
   return messages.map((message) => ({
     role: message.role,
+    ...(options.includeActivitySummaries && message.activitySummary
+      ? { submittedContent: message.submittedContent ?? message.content }
+      : {}),
     content:
       options.includeActivitySummaries && message.activitySummary
         ? `${message.submittedContent ?? message.content}\n\n${message.activitySummary}`

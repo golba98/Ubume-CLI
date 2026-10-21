@@ -108,7 +108,18 @@ test("installed launcher routes Google and its compatibility alias to AGY, prese
     assert.equal(JSON.parse(resumed.stdout).data.text, "AGY_REPLY:gemini-fixture-low");
     assert.equal(resumed.status, 0, resumed.stderr);
     const calls = f.entries();
-    assert.deepEqual(calls[0].args, ["--model", "gemini-fixture-high", "-p", "first turn"]);
+    assert.deepEqual(calls[0].args, [
+      "--model",
+      "gemini-fixture-high",
+      "--mode",
+      "auto",
+      "--output-format",
+      "stream-json",
+      "--print-timeout",
+      "0",
+      "-p",
+      "first turn",
+    ]);
     assert.match(calls[1].args.at(-1), /first turn/);
     assert.match(calls[1].args.at(-1), /AGY_REPLY:gemini-fixture-high/);
     assert.match(calls[1].args.at(-1), /second turn/);

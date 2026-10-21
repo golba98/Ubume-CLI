@@ -50,6 +50,7 @@ import {
 } from "./resumePickerRows.js";
 
 interface ResumePickerProps {
+  loading?: boolean;
   /** Ubume conversations shown until (or unless) the catalog loads. */
   conversations: readonly ConversationListEntry[];
   /** Enter on an Ubume conversation when `onSelectSession` is not provided. */
@@ -104,6 +105,7 @@ export function visibleResumeTabs(
 
 /** Resume picker; see the module header for data flow and keys. */
 export function ResumePicker({
+  loading = false,
   conversations,
   onSelect,
   onSelectSession,
@@ -128,6 +130,7 @@ export function ResumePicker({
   const [scrollOffset, setScrollOffset] = useState(0);
   const [lists, setLists] = useState<Partial<Record<ExternalListScope, ListState>>>({});
   const pendingSelection = useRef(position?.selectedId ?? null);
+  const selectedKey = useRef(position?.selectedId ?? null);
   const mounted = useRef(true);
   const pendingLoads = useRef(new Set<ExternalListScope>());
   useEffect(() => {
@@ -207,20 +210,26 @@ export function ResumePicker({
       ].sort(),
     [sessions, backend],
   );
+  const identityIndex = selectedKey.current
+    ? items.findIndex((item) => item.key === selectedKey.current)
+    : -1;
+  const displayIndex =
+    identityIndex >= 0 ? identityIndex : Math.max(0, Math.min(selectedIndex, items.length - 1));
+  if (!selectedKey.current && items[displayIndex]) selectedKey.current = items[displayIndex]!.key;
   const rows = Math.max(1, layout?.availableRows ?? 12);
   const width = Math.max(1, (layout?.availableCols ?? 80) - 4);
   // Chrome: title + status + hint at 4+ rows, title + hint at 3, none below.
-  const chromeRows = rows >= 4 ? 3 : rows >= 3 ? 2 : 0;
+  const chromeRows = rows >= 6 ? 5 : rows >= 4 ? 3 : 0;
   const viewport = useMemo(
     () =>
       calculateResponsivePickerViewport({
         itemCount: items.length,
-        selectedIndex,
+        selectedIndex: displayIndex,
         availableRows: rows,
         chromeRows,
         scrollOffset,
       }),
-    [items.length, selectedIndex, rows, chromeRows, scrollOffset],
+    [items.length, displayIndex, rows, chromeRows, scrollOffset],
   );
   // Restore the remembered selection once its row exists; otherwise just keep
   // the index in range when the list changes.
@@ -229,6 +238,7 @@ export function ResumePicker({
       const index = items.findIndex((item) => item.key === pendingSelection.current);
       if (index >= 0) {
         pendingSelection.current = null;
+        selectedKey.current = items[index]!.key;
         setSelectedIndex(index);
         return;
       }
@@ -236,12 +246,13 @@ export function ResumePicker({
     setSelectedIndex((index) => Math.max(0, Math.min(index, items.length - 1)));
   }, [items]);
   useEffect(() => setScrollOffset(viewport.start), [viewport.start]);
-  const selected = items[selectedIndex];
+  const selected = items[displayIndex];
   useEffect(() => {
     onPositionChange?.({ tab, scope, selectedId: selected?.key ?? null, backend, model, query });
   }, [onPositionChange, tab, scope, selected?.key, backend, model, query]);
   const resetSelection = () => {
     pendingSelection.current = null;
+    selectedKey.current = null;
     setSelectedIndex(0);
     setScrollOffset(0);
   };
@@ -252,6 +263,10 @@ export function ResumePicker({
   };
   useInput(
     (input, key) => {
+      if (loading) {
+        if (key.escape) onCancel();
+        return;
+      }
       if (searching) {
         if (key.escape) {
           setSearching(false);
@@ -262,14 +277,19 @@ export function ResumePicker({
           setSearching(false);
           return;
         }
-        if (key.backspace || key.delete) setQuery((value) => value.slice(0, -1));
+        if (key.backspace || key.delete)
+          setQuery((value) => Array.from(value).slice(0, -1).join(""));
         else if (!key.ctrl && !key.meta && input) setQuery((value) => value + input);
         resetSelection();
         return;
       }
       if (key.escape) return onCancel();
-      if (input === "/") {
+      if (input.startsWith("/")) {
         setSearching(true);
+        if (input.length > 1) {
+          setQuery(input.slice(1));
+          resetSelection();
+        }
         return;
       }
       if (key.leftArrow) return switchTab(nextResumeTab(tab, -1, tabs));
@@ -302,14 +322,17 @@ export function ResumePicker({
         if (input === "o") return onResumeExternalNative?.(selected.native);
         if (input === "c") return onContinueExternal?.(selected.native);
       }
-      const move = (index: number) =>
-        setSelectedIndex(Math.max(0, Math.min(index, items.length - 1)));
-      if (key.upArrow || input === "k") return move(selectedIndex - 1);
-      if (key.downArrow || input === "j") return move(selectedIndex + 1);
+      const move = (index: number) => {
+        const next = Math.max(0, Math.min(index, items.length - 1));
+        selectedKey.current = items[next]?.key ?? null;
+        setSelectedIndex(next);
+      };
+      if (key.upArrow || input === "k") return move(displayIndex - 1);
+      if (key.downArrow || input === "j") return move(displayIndex + 1);
       if (key.home) return move(0);
       if (key.end) return move(items.length - 1);
-      if (key.pageUp) return move(selectedIndex - Math.max(1, viewport.capacity));
-      if (key.pageDown) return move(selectedIndex + Math.max(1, viewport.capacity));
+      if (key.pageUp) return move(displayIndex - Math.max(1, viewport.capacity));
+      if (key.pageDown) return move(displayIndex + Math.max(1, viewport.capacity));
     },
     { isActive: isFocused },
   );
@@ -324,7 +347,8 @@ export function ResumePicker({
             ]
           : []),
         ...(query ? [`“${query}”`] : []),
-        ...(items.length ? [`${selectedIndex + 1}/${items.length}`] : []),
+        ...(items.length ? [`${displayIndex + 1}/${items.length}`] : []),
+        ...(selected?.workspaceRoot ? [selected.workspaceRoot] : []),
       ].join(" · ");
   const warning =
     state?.status === "ready"
@@ -344,14 +368,14 @@ export function ResumePicker({
   const visibleTabs = visibleResumeTabs(tabs, tab, Math.max(1, width - 9));
   return (
     <Box
-      borderStyle={rows >= 3 ? "round" : undefined}
+      borderStyle={rows >= 4 ? "round" : undefined}
       borderColor={theme.borderFocused}
-      paddingX={rows >= 3 ? 1 : 0}
+      paddingX={rows >= 4 ? 1 : 0}
       width="100%"
       flexDirection="column"
       overflow="hidden"
     >
-      {rows >= 3 && (
+      {rows >= 4 && (
         <Text wrap="truncate">
           <Text color={theme.accent} bold>
             Resume{" "}
@@ -371,9 +395,9 @@ export function ResumePicker({
           {visibleTabs.at(-1) !== tabs.at(-1) && <Text color={theme.textDim}> ›</Text>}
         </Text>
       )}
-      {rows >= 4 && (
+      {rows >= 6 && (
         <Text color={warning ? theme.error : theme.textDim} wrap="truncate">
-          {warning ? `${status} · ${warning}` : status}
+          {loading ? "Restoring session… Esc cancels" : warning ? `${status} · ${warning}` : status}
         </Text>
       )}
       {items.length === 0 && (
@@ -384,15 +408,15 @@ export function ResumePicker({
       {items.slice(viewport.start, viewport.end).map((item, offset) => (
         <Text
           key={item.key}
-          color={viewport.start + offset === selectedIndex ? theme.accent : theme.textMuted}
-          bold={viewport.start + offset === selectedIndex}
+          color={viewport.start + offset === displayIndex ? theme.accent : theme.textMuted}
+          bold={viewport.start + offset === displayIndex}
           wrap="truncate"
         >
-          {viewport.start + offset === selectedIndex ? "> " : "  "}
+          {viewport.start + offset === displayIndex ? "> " : "  "}
           {clampVisualText(sessionRowText(item, scope), Math.max(1, width - 2))}
         </Text>
       ))}
-      {rows >= 3 && (
+      {rows >= 6 && (
         <Text color={theme.textDim} wrap="truncate">
           {hint}
         </Text>
