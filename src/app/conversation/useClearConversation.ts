@@ -47,11 +47,13 @@ interface UseClearConversationContext
     | "activeRunTimingRef"
     | "providerWorkspaceConfig"
     | "pendingQuitRef"
+    | "lastSaveErrorRef"
   > {
   // Conversation actions
   cancelActiveRun: (retainHistory?: boolean) => boolean;
   saveActiveConversation: () => void;
   resetToHomeScreen: (seedEvents?: TimelineEvent[]) => void;
+  appendEvent: (type: "system" | "error", title: string, content: string) => void;
 
   // Transcript swap and plan flow
   armTranscriptReplacement: (source: string) => {
@@ -90,6 +92,8 @@ export function useClearConversation(context: UseClearConversationContext) {
     saveActiveConversation,
     setPlanFlow,
     resetToHomeScreen,
+    lastSaveErrorRef,
+    appendEvent,
   } = context;
 
   const handleClear = useCallback(async () => {
@@ -99,13 +103,15 @@ export function useClearConversation(context: UseClearConversationContext) {
     // Abandon any submission still waiting on attachments or a stopping run.
     pipelineGenerationRef.current++;
     recoveryRef.current = true;
-    const replacement = armTranscriptReplacement(
-      "src/app/conversation/useClearConversation.ts:handleClear",
-    );
     try {
       cancelActiveRun(true);
       await stoppingRef.current;
       saveActiveConversation();
+      if (lastSaveErrorRef.current)
+        throw new Error(`Current chat could not be saved: ${lastSaveErrorRef.current}`);
+      const replacement = armTranscriptReplacement(
+        "src/app/conversation/useClearConversation.ts:handleClear",
+      );
 
       // Detach the finished conversation.
       const harnessSessionId =
@@ -142,6 +148,8 @@ export function useClearConversation(context: UseClearConversationContext) {
         }),
       );
       replacement.finish();
+    } catch (error) {
+      appendEvent("error", "Clear failed", error instanceof Error ? error.message : String(error));
     } finally {
       finishRecovery({ recoveryRef, bumpWorkbench, pendingQuitRef });
     }

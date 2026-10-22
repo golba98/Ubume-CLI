@@ -15,7 +15,7 @@
  * - A spacer pads short transcripts so the composer sits at the bottom.
  *
  * Remount boundaries: the outer component keys the inner one on `clearCount`
- * and `repaintGeneration`, so `/clear` and width repaints get a fresh
+ * width and `repaintGeneration`, so `/clear` and width repaints get a fresh
  * `<Static>` and a fresh static cache. Screen clearing itself is owned by
  * `core/terminal/clearFrameBoundary.ts`, not by this component. While hidden
  * behind an overlay (`visible === false`) the last visible events/UI state are
@@ -23,12 +23,13 @@
  */
 import { Box, Static, Text, useStdout } from "ink";
 import type React from "react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { RuntimeSummary } from "../../config/runtimeConfig.js";
 import type { StartupHeaderMiddleLine, StartupLogoRendering } from "../../config/settings.js";
 import { formatWorkspaceBrandingPath, type StartupLogoStyle } from "../../config/settings.js";
 import type { CodexAuthState } from "../../core/codex/codexAuth.js";
 import * as renderDebug from "../../core/perf/renderDebug.js";
+import type { PreparedStaticFrame } from "../../core/terminal/preparedStaticFrame.js";
 import type { TimelineEvent, UIState } from "../../session/types.js";
 import {
   getShellHeight,
@@ -56,11 +57,7 @@ import { useTheme } from "../theme.js";
 import { LIVE_WINDOW_SAFETY_ROWS, windowLiveRows } from "./liveViewportWindow.js";
 import { wrapRows } from "./measure/rows.js";
 import { buildCompactStartupRows } from "./measure/startupBrandingRows.js";
-import {
-  buildStaticTranscript,
-  createStaticTranscriptCache,
-  type StaticTranscriptCache,
-} from "./staticTranscriptCache.js";
+import { measuredRowsToAnsi } from "./measuredAnsi.js";
 import { TimelineRowView } from "./TimelineRows.js";
 import {
   buildActiveRenderItems,
@@ -73,6 +70,8 @@ import {
   type NativeTranscriptRowItem,
   type TimelineRow,
 } from "./timelineMeasure.js";
+import { createTranscriptReflowState, type TranscriptReflowState } from "./transcriptReflow.js";
+import { useStaticTranscript } from "./useStaticTranscript.js";
 
 interface TranscriptShellProps {
   layout: TerminalViewport;
@@ -98,6 +97,8 @@ interface TranscriptShellProps {
   verboseMode?: boolean;
   clearCount?: number;
   repaintGeneration?: number;
+  onHistoryReflowChange?: (pending: boolean) => void;
+  onPreparedStaticFrame?: (frame: PreparedStaticFrame | null) => void;
   visible?: boolean;
 }
 
@@ -178,12 +179,16 @@ function TranscriptShellInner({
   onStartupLiveChange,
   presentation,
   headerLayout,
+  reflowState,
+  onHistoryReflowChange,
+  onPreparedStaticFrame,
 }: TranscriptShellProps & {
   logoFrame: StartupLogoAnimationFrame;
   logoImageId: number | null;
   logoSize: StartupLogoSize | null;
   presentation: { committed: boolean };
   headerLayout: ResponsiveHeader;
+  reflowState: TranscriptReflowState;
 }) {
   const theme = useTheme();
   const startupHeaderMode = useMemo(
@@ -299,30 +304,44 @@ function TranscriptShellInner({
     ],
   );
 
-  // Static half: intro + finalized turns, built incrementally. The cache ref
-  // lives in this keyed instance, so /clear and width repaints (which remount
-  // the shell) start from an empty cache.
-  const staticCacheRef = useRef<StaticTranscriptCache | null>(null);
-  const staticTranscript = useMemo(() => {
-    const cache =
-      staticCacheRef.current ?? (staticCacheRef.current = createStaticTranscriptCache());
-    return buildStaticTranscript(
-      cache,
-      [
-        introItem,
-        ...buildStaticRenderItems(staticTimelineItems, allTurnIds, activeTurnId, null, null),
-      ],
-      { totalWidth: shellWidth, verboseMode, workspaceRoot },
-    );
-  }, [
-    activeTurnId,
-    allTurnIds,
-    introItem,
-    shellWidth,
-    staticTimelineItems,
-    verboseMode,
-    workspaceRoot,
-  ]);
+  const staticRenderItems = useMemo(
+    () => [
+      introItem,
+      ...buildStaticRenderItems(staticTimelineItems, allTurnIds, activeTurnId, null, null),
+    ],
+    [introItem, staticTimelineItems, allTurnIds, activeTurnId],
+  );
+  const staticOptions = useMemo(
+    () => ({ totalWidth: shellWidth, verboseMode, workspaceRoot }),
+    [shellWidth, verboseMode, workspaceRoot],
+  );
+  const colors =
+    Boolean(useStdout().stdout.isTTY) && !process.env.NO_COLOR && process.env.FORCE_COLOR !== "0";
+  const encodeStatic = useCallback(
+    (parts: ReturnType<typeof buildNativeTranscriptParts>) =>
+      parts.staticItems
+        .map((item) =>
+          item.rows.length ? `${measuredRowsToAnsi(item.rows, theme, colors)}\n` : "",
+        )
+        .join(""),
+    [theme, colors],
+  );
+  const staticTranscript = useStaticTranscript(
+    staticRenderItems,
+    staticOptions,
+    reflowState,
+    onHistoryReflowChange,
+    encodeStatic,
+    visible,
+  );
+  const prepared = staticTranscript.prepared;
+  if (prepared && !prepared.frame)
+    prepared.frame = {
+      cols: layout.rawCols ?? layout.cols,
+      rows: layout.rawRows ?? layout.rows,
+      output: prepared.output,
+    };
+  onPreparedStaticFrame?.(prepared?.frame ?? null);
 
   // Live half: only the running turn, rebuilt per streaming flush.
   const activeTranscript = useMemo(
@@ -465,7 +484,12 @@ function TranscriptShellInner({
         key={`native-static-${clearCount}`}
         items={compactHome ? [] : nativeTranscript.staticItems}
       >
-        {(item: NativeTranscriptRowItem) => <NativeRowsItem key={item.key} rows={item.rows} />}
+        {(item: NativeTranscriptRowItem, index: number) => (
+          <NativeRowsItem
+            key={item.key}
+            rows={prepared && onPreparedStaticFrame && index < prepared.count ? [] : item.rows}
+          />
+        )}
       </Static>
       {compactHome && (
         <NativeRowsItem rows={visibleLiveRows} logoImageId={logoImageId} logoSize={logoSize} />
@@ -503,74 +527,105 @@ function getConversationViewportRows(
 const STARTUP_BODY_RESERVE_ROWS = 1;
 
 /** Main-chat transcript + composer; remounted per `/clear` and width repaint (see below). */
-export const TranscriptShell = memo(function TranscriptShell(props: TranscriptShellProps) {
-  const { stdout } = useStdout();
-  const presentation = useRef({ clearCount: props.clearCount, committed: false });
-  if (presentation.current.clearCount !== props.clearCount)
-    presentation.current = { clearCount: props.clearCount, committed: false };
-  // The mark's size lives above the resize/clear remount: it is the hysteresis
-  // baseline for the next resize, and freezes once the header enters scrollback
-  // (Static never re-renders, so a later size could not apply to it anyway).
-  const logoSizeRef = useRef<StartupLogoSize | null>(null);
-  const { cols, rows } = props.layout;
-  const headerLayout = useMemo(
-    () =>
-      computeResponsiveHeader({
-        innerWidth: getCompactShellWidth(cols) - 2,
-        terminalRows: rows,
-        availableRows:
-          getConversationViewportRows(rows, props.composerRows, props.notice) -
-          LIVE_WINDOW_SAFETY_ROWS -
-          STARTUP_BODY_RESERVE_ROWS,
-        metadataRows:
-          props.startupHeaderMiddleLine === "hidden" && isCompactLogoStyle(props.logoStyle) ? 2 : 3,
-        style: props.logoStyle ?? "normal",
-        previous: logoSizeRef.current,
-        hideLogo: !isCompactLogoStyle(props.logoStyle) && process.env.UBUME_NO_ASCII_LOGO === "1",
-      }),
-    [cols, rows, props.composerRows, props.notice, props.startupHeaderMiddleLine, props.logoStyle],
-  );
-  if (!presentation.current.committed) logoSizeRef.current = headerLayout.size;
-  const logoSize = isCompactLogoStyle(props.logoStyle) ? logoSizeRef.current : null;
-  const canAnimate =
-    props.visible !== false &&
-    !props.staticEvents.some(isTranscriptEvent) &&
-    !props.activeEvents.some(isTranscriptEvent) &&
-    props.uiState.kind === "IDLE" &&
-    shouldPlayStartupAnimation({
-      stdout: { isTTY: stdout.isTTY },
-      env: process.env,
-      logoStyle: props.logoStyle ?? "normal",
-      animationEnabled: props.startupAnimation ?? true,
-      logoSize,
-    });
-  const logoFrame = useStartupLogoAnimation(canAnimate);
-  // Keep raster state above the resize/clear remount, just like animation state.
-  const logoImageId = useStartupLogoGraphic(
-    logoFrame,
-    props.startupLogoRendering ?? "auto",
-    logoSize !== null && props.visible !== false && !presentation.current.committed,
-    undefined,
-    logoSize ?? undefined,
-    props.layout.isResizing,
-  );
-  // repaintGeneration must fold into the outer remount key (not just <Static>'s
-  // own key) — Ink only reliably re-flushes already-printed <Static> content on
-  // a genuine fresh mount of the whole subtree, confirmed empirically: keying
-  // away only the inner <Static> node did not trigger Ink's isStaticDirty/
-  // onImmediateRender escape hatch the same way a full remount does.
-  return (
-    <TranscriptShellInner
-      key={`clear-${props.clearCount ?? 0}-repaint-${props.repaintGeneration ?? 0}`}
-      {...props}
-      logoFrame={logoFrame}
-      logoImageId={logoImageId}
-      logoSize={logoSize}
-      presentation={presentation.current}
-      headerLayout={headerLayout}
-    />
-  );
-});
+export const TranscriptShell = memo(
+  function TranscriptShell(props: TranscriptShellProps) {
+    const { stdout } = useStdout();
+    const reflow = useRef({ clearCount: props.clearCount, state: createTranscriptReflowState() });
+    if (reflow.current.clearCount !== props.clearCount)
+      reflow.current = { clearCount: props.clearCount, state: createTranscriptReflowState() };
+    const presentation = useRef({ clearCount: props.clearCount, committed: false });
+    if (presentation.current.clearCount !== props.clearCount)
+      presentation.current = { clearCount: props.clearCount, committed: false };
+    // The mark's size lives above the resize/clear remount: it is the hysteresis
+    // baseline for the next resize, and freezes once the header enters scrollback
+    // (Static never re-renders, so a later size could not apply to it anyway).
+    const logoSizeRef = useRef<StartupLogoSize | null>(null);
+    const { cols, rows } = props.layout;
+    const headerLayout = useMemo(
+      () =>
+        computeResponsiveHeader({
+          innerWidth: getCompactShellWidth(cols) - 2,
+          terminalRows: rows,
+          availableRows:
+            getConversationViewportRows(rows, props.composerRows, props.notice) -
+            LIVE_WINDOW_SAFETY_ROWS -
+            STARTUP_BODY_RESERVE_ROWS,
+          metadataRows:
+            props.startupHeaderMiddleLine === "hidden" && isCompactLogoStyle(props.logoStyle)
+              ? 2
+              : 3,
+          style: props.logoStyle ?? "normal",
+          previous: logoSizeRef.current,
+          hideLogo: !isCompactLogoStyle(props.logoStyle) && process.env.UBUME_NO_ASCII_LOGO === "1",
+        }),
+      [
+        cols,
+        rows,
+        props.composerRows,
+        props.notice,
+        props.startupHeaderMiddleLine,
+        props.logoStyle,
+      ],
+    );
+    if (!presentation.current.committed) logoSizeRef.current = headerLayout.size;
+    const logoSize = isCompactLogoStyle(props.logoStyle) ? logoSizeRef.current : null;
+    const canAnimate =
+      props.visible !== false &&
+      !props.staticEvents.some(isTranscriptEvent) &&
+      !props.activeEvents.some(isTranscriptEvent) &&
+      props.uiState.kind === "IDLE" &&
+      shouldPlayStartupAnimation({
+        stdout: { isTTY: stdout.isTTY },
+        env: process.env,
+        logoStyle: props.logoStyle ?? "normal",
+        animationEnabled: props.startupAnimation ?? true,
+        logoSize,
+      });
+    const logoFrame = useStartupLogoAnimation(canAnimate);
+    // Keep raster state above the resize/clear remount, just like animation state.
+    const logoImageId = useStartupLogoGraphic(
+      logoFrame,
+      props.startupLogoRendering ?? "auto",
+      logoSize !== null && props.visible !== false && !presentation.current.committed,
+      undefined,
+      logoSize ?? undefined,
+      props.layout.isResizing,
+    );
+    // repaintGeneration must fold into the outer remount key (not just <Static>'s
+    // own key) — Ink only reliably re-flushes already-printed <Static> content on
+    // a genuine fresh mount of the whole subtree, confirmed empirically: keying
+    // away only the inner <Static> node did not trigger Ink's isStaticDirty/
+    // onImmediateRender escape hatch the same way a full remount does.
+    return (
+      <TranscriptShellInner
+        key={`clear-${props.clearCount ?? 0}-width-${props.layout.cols}-repaint-${props.repaintGeneration ?? 0}`}
+        {...props}
+        logoFrame={logoFrame}
+        logoImageId={logoImageId}
+        logoSize={logoSize}
+        presentation={presentation.current}
+        headerLayout={headerLayout}
+        reflowState={reflow.current.state}
+      />
+    );
+  },
+  (previous, next) => {
+    // An overlay owns the viewport. Defer costly historical reflow until the
+    // transcript becomes visible, but never defer a conversation replacement.
+    if (
+      previous.visible === false &&
+      next.visible === false &&
+      previous.clearCount === next.clearCount
+    )
+      return true;
+    return (
+      Object.keys(next).length === Object.keys(previous).length &&
+      (Object.keys(next) as (keyof TranscriptShellProps)[]).every((key) =>
+        Object.is(previous[key], next[key]),
+      )
+    );
+  },
+);
 
 /** A column of measured rows, one Ink line each. */
 function NativeRowsItem({

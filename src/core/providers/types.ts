@@ -7,6 +7,7 @@
 import type { ResolvedRuntimeConfig } from "../../config/runtimeConfig.js";
 import type { AvailableBackend } from "../../config/settings.js";
 import type { RunProgressSource, RunToolActivity } from "../../session/types.js";
+import type { ExecutionDiagnostic } from "../providerRuntime/execution.js";
 import type { ProviderFailure } from "../providerRuntime/failures.js";
 import type { ProviderImageAttachment } from "../providerRuntime/types.js";
 import type {
@@ -41,6 +42,16 @@ export interface ToolApprovalRequest {
   paths: string[];
   description?: string;
   allowForRun?: boolean;
+  /** Provider label for the prompt title; absent for the local harness. */
+  provider?: string;
+  /** Workspace the action targets. */
+  workspace?: string;
+  /** Distinguishes shell commands from file edits in the prompt. */
+  kind?: "command" | "file" | "tool";
+  /** Set when a target path resolves outside the workspace (symlinks included). */
+  outsideWorkspace?: boolean;
+  /** The provider's own explanation for why it escalated to the user. */
+  reason?: string;
 }
 
 export type BackendAuthState = "delegated" | "api-key-required" | "coming-soon";
@@ -55,6 +66,7 @@ export interface ProviderRunControl {
 
 /** Normalized provider events; application orchestration owns session state and ignores stale runs. */
 export interface BackendRunHandlers {
+  onExecutionDiagnostic?: (event: ExecutionDiagnostic) => void;
   onGenerationMetadata?: (metadata: GenerationMetadata) => void;
   onRunControl?: (control: ProviderRunControl) => void;
   /** Delivers the completed response; callers separately await run-control cleanup. */
@@ -69,8 +81,15 @@ export interface BackendRunHandlers {
   onFinalAnswerObserved?: (response: string) => void;
   /** Called when the backend starts or finishes a tool/shell action during a run. */
   onToolActivity?: (activity: RunToolActivity) => void;
-  /** Requests consent before a local model performs a mutating action. */
-  onToolApproval?: (request: ToolApprovalRequest) => Promise<ToolApprovalDecision>;
+  /**
+   * Requests consent before a provider performs an action that needs approval. `signal`
+   * aborts when the provider withdraws the request or the run ends; the UI then closes the
+   * prompt and the result is ignored.
+   */
+  onToolApproval?: (
+    request: ToolApprovalRequest,
+    signal?: AbortSignal,
+  ) => Promise<ToolApprovalDecision>;
   /** Persists invisible rolling memory used only by Local context-window rollover. */
   onLocalContextCheckpoint?: (checkpoint: ConversationContextCheckpoint) => void;
   /** Reports a native CLI session reference for future resume. */
@@ -135,7 +154,10 @@ export interface BackendProvider {
       projectInstructions?: ProjectInstructions | null;
       promptPolicy?: "raw" | "wrapped";
       runIntent?: "normal" | "plan" | "approved-execution";
+      /** "interactive" when a person can answer tool approvals; headless runs omit it. */
+      approvalSurface?: "interactive" | "none";
       conversationHistory?: readonly ConversationMessage[];
+      nativeSessions?: readonly NativeSessionReference[];
       localContextCheckpoint?: ConversationContextCheckpoint;
       imageAttachments?: readonly ProviderImageAttachment[];
     },

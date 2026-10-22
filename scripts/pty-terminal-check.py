@@ -105,15 +105,20 @@ class Screen:
         self.scrollback = []
         self.row = self.col = 0
         self.saved = (0, 0)
+        self.normal_buffer = None
 
     def _line_feed(self):
         if self.row == self.rows - 1:
-            self.scrollback.append(self.grid.pop(0))
+            removed = self.grid.pop(0)
+            if self.normal_buffer is None:
+                self.scrollback.append(removed)
             self.grid.append([" "] * self.cols)
         else:
             self.row += 1
 
     def resize(self, rows, cols):
+        if self.normal_buffer is not None:
+            self.normal_buffer.resize(rows, cols)
         overflow = max(0, self.row - (rows - 1))
         self.scrollback.extend(self.grid[:overflow])
         self.grid = self.grid[overflow:overflow + rows]
@@ -140,6 +145,20 @@ class Screen:
             token = match.group(0)
             if match.group(3):
                 params, final = match.group(1), match.group(3)
+                if params == "?1049" and final in "hl":
+                    if final == "h" and self.normal_buffer is None:
+                        normal = Screen(self.rows, self.cols)
+                        for field in ("grid", "scrollback", "row", "col", "saved"):
+                            setattr(normal, field, getattr(self, field))
+                        self.normal_buffer = normal
+                        self.grid = [[" "] * self.cols for _ in range(self.rows)]
+                        self.scrollback = []
+                        self.row = self.col = 0
+                    elif final == "l" and self.normal_buffer is not None:
+                        for field in ("grid", "scrollback", "row", "col", "saved"):
+                            setattr(self, field, getattr(self.normal_buffer, field))
+                        self.normal_buffer = None
+                    continue
                 if params.startswith("?"):
                     continue
                 n = [int(v) if v else 0 for v in params.split(";")] if params else [0]

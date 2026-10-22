@@ -148,6 +148,24 @@ export function parseClaudeEffortLevelsFromHelp(helpText: string): string[] | nu
   return levels.length > 0 ? levels : null;
 }
 
+/** Extracts the advertised `--permission-mode` choices; null when the help omits them. */
+export function parseClaudePermissionModesFromHelp(helpText: string): string[] | null {
+  const section = helpText.match(
+    /^[ \t]*--permission-mode\b[^\r\n]*(?:\r?\n(?![ \t]*-|\S)[^\r\n]*)*/im,
+  )?.[0];
+  const choices = section?.match(/choices:\s*([^)]*)\)/)?.[1];
+  const modes = choices?.match(/"([A-Za-z]+)"/g)?.map((mode) => mode.slice(1, -1)) ?? [];
+  return modes.length ? modes : null;
+}
+
+/**
+ * True when the CLI can route permission prompts to a host over stream-json stdin
+ * (`--input-format stream-json` plus `--permission-prompt-tool stdio`).
+ */
+export function claudeHelpSupportsHostApprovals(helpText: string): boolean {
+  return /--input-format\b/.test(helpText) && /--permission-prompts?\b/.test(helpText);
+}
+
 function modelFamilyFromValue(value: string): ClaudeModelFamily {
   const normalized = value.toLowerCase();
   if (normalized.includes("fable")) return "fable";
@@ -935,6 +953,14 @@ export async function discoverClaudeCodeCapabilities(
       authStatus: authResult.status,
       authJsonParsed: authJson !== null,
       loggedIn: auth.loggedIn,
+      permissionPromptsSupported: /--permission-prompts\b/.test(helpText),
+      // Unknown help (empty) leaves both unset so callers keep their defaults.
+      ...(helpText
+        ? {
+            hostApprovalsSupported: claudeHelpSupportsHostApprovals(helpText),
+            permissionModes: parseClaudePermissionModesFromHelp(helpText)?.join(",") ?? null,
+          }
+        : {}),
       modelSource,
       settingsPath: settings?.path ?? null,
       packageMetadataPath: packageMetadata?.sourcePath ?? null,

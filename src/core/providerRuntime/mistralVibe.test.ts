@@ -21,6 +21,7 @@ import {
   mergeMistralVibeModels,
   runMistralVibe,
   validateMistralVibeRoute,
+  vibeAgentFor,
 } from "./mistralVibe.js";
 import type { ProviderChatRequest } from "./types.js";
 
@@ -498,7 +499,7 @@ test("launchMistralVibeCli restores terminal state after SIGINT termination", as
   assert.deepEqual(events, ["before", "raw-off", "spawn", "raw-on", "after"]);
 });
 
-test("findLatestVibeSession selects the newest matching workspace session after the run started", async () => {
+test("findLatestVibeSession refuses ambiguous concurrent workspace sessions", async () => {
   const root = join(tmpdir(), `ubume-vibe-sessions-${Date.now()}`);
   const sessionRoot = join(root, ".vibe", "logs", "session");
   const workspaceRoot = join(root, "workspace");
@@ -527,7 +528,7 @@ test("findLatestVibeSession selects the newest matching workspace session after 
         homeDirectory: root,
         env: {},
       }),
-      "latest",
+      null,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -709,4 +710,65 @@ test("validateMistralVibeRoute reports missing and ready executable states", asy
   assert.equal(ready.status, "ready");
   assert.equal(ready.backendKind, "mistral-vibe-cli-auth");
   assert.equal(ready.diagnostics?.resolvedCommand, "/home/test/.local/bin/vibe");
+});
+
+test("vibeAgentFor maps Ubume modes to built-in Vibe agents and never auto-approve", () => {
+  const runtime = (mode: "suggest" | "auto-edit" | "full-auto") => ({
+    ...buildRequest().runtime,
+    mode,
+  });
+  assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("suggest") })), "plan");
+  assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("auto-edit") })), "accept-edits");
+  assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("full-auto") })), "smart-approve");
+  assert.equal(vibeAgentFor(buildRequest({ runIntent: "plan" })), "plan");
+});
+
+test("Vibe passes the mapped --agent and retries once without it on an older CLI", async () => {
+  const specs: CommandSpec[] = [];
+  const progress: string[] = [];
+  const request = buildRequest({ runtime: { ...buildRequest().runtime, mode: "auto-edit" } });
+  await new Promise<string>((resolve, reject) => {
+    runMistralVibe(
+      request,
+      {
+        onResponse: resolve,
+        onError: (message) => reject(new Error(message)),
+        onProgress: (update) => progress.push(update.text),
+      },
+      {
+        resolveExecutable: async () => "/bin/vibe",
+        runCommandImpl: (spec, handlers) => {
+          specs.push(spec);
+          if (spec.args.includes("--agent"))
+            return {
+              result: Promise.resolve(
+                commandResult({
+                  status: "failed",
+                  exitCode: 2,
+                  stderr: "vibe: error: unrecognized arguments: --agent accept-edits",
+                }),
+              ),
+              cancel: () => undefined,
+            };
+          handlers.onStdout?.(
+            `${JSON.stringify({ role: "user", content: request.prompt })}\n${JSON.stringify({ role: "assistant", content: "reply" })}\n`,
+          );
+          return {
+            result: Promise.resolve(commandResult({ stdout: "reply" })),
+            cancel: () => undefined,
+          };
+        },
+        findSessionImpl: async () => null,
+      },
+    );
+  });
+  assert.equal(specs.length, 2);
+  const agentIndex = specs[0]!.args.indexOf("--agent");
+  assert.equal(specs[0]!.args[agentIndex + 1], "accept-edits");
+  assert.equal(specs[1]!.args.includes("--agent"), false);
+  assert.ok(progress.some((text) => /agent accept-edits/.test(text)));
+  assert.equal(
+    specs.some((spec) => spec.args.includes("--auto-approve") || spec.args.includes("--yolo")),
+    false,
+  );
 });

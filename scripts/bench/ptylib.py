@@ -117,6 +117,7 @@ class Session:
         os.close(slave)
         self.output = b""
         self.chunks = []  # (epoch ms, offset) per read
+        self.monotonic_chunks = []  # (perf_counter_ns, offset), captured before VT parsing
 
     def elapsed_ms(self):
         return (time.perf_counter() - self.start) * 1000.0
@@ -131,6 +132,7 @@ class Session:
                     return
                 if not chunk:
                     return
+                self.monotonic_chunks.append((time.perf_counter_ns(), len(self.output)))
                 self.chunks.append((now_ms(), len(self.output)))
                 self.output += chunk
                 if reader_delay:

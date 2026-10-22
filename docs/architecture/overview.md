@@ -193,6 +193,47 @@ flowchart TD
 
 Provider truthfulness is an invariant: selectable routes must match actual `routeAvailable` and configuration state. A provider that can only be launched externally must not be presented as though Ubume can route an in-app conversation through it.
 
+### Native provider execution
+
+OpenAI/Codex uses the existing Codex subprocess transport and parser. Claude Code, Google
+(Antigravity/AGY, not Gemini CLI), and Mistral Vibe share the command runner and a native-task
+supervisor for task deadlines, quiet-period notices, diagnostics and teardown ownership.
+Their streaming protocols remain separate: Claude message/partial/result records, AGY
+init/step_update/result envelopes, and Vibe legacy messages or typed public history.
+
+Whole native tasks are unlimited by default; bounded discovery and API operations keep their
+own deadlines. A quiet text stream does not settle a task. Provider callbacks own logical
+completion, and `ProviderRunControl.stopped` owns workspace-release timing. See
+[subprocess output and cleanup](../development/subprocess-output.md) for configuration,
+trace phases and permission constraints.
+
+Native permissions follow Ubume's mode, not a fixed provider default. Claude receives
+`--permission-mode` (Read-only → `dontAsk`, Auto → `acceptEdits`, Full Access → `auto`, plan
+turns → `plan`; never `bypassPermissions`). In interactive runs Claude is started with
+stream-json input and `--permission-prompt-tool stdio`, and `claudePermissions.ts` answers
+its `can_use_tool` control requests through the shared `onToolApproval` overlay, one at a
+time and with exact-match "allow for run" reuse. Headless runs pass `--permission-prompts
+none` and announce that approvals are unavailable. Interactive Vibe runs use `vibe-acp`
+(Agent Client Protocol): `vibeAcp.ts` selects the mapped agent (`accept-edits` or
+`smart-approve`) with `session/set_mode` and answers `session/request_permission` through the
+same overlay, choosing only one-shot options (never `allow_always`). Plan, read-only and
+headless Vibe runs, and a `vibe-acp` that fails before the prompt is sent, use `vibe -p
+--agent`, where Vibe's native policy alone decides. AGY gets `--mode` but has no host approval
+protocol. Both bridges share `providerApprovalQueue.ts`.
+
+Native continuation belongs to an individual conversation. A completed model/dialogue
+watermark must match before a session is resumed by exact ID; otherwise saved dialogue starts
+a fresh session. Four Ubume instances in separate workspaces have independent execution
+leases and provider-run state, although native account quotas can still be shared.
+
+Each terminal is its own OS process, so provider, model, mode, conversation, approvals,
+timers and child processes are process-local; only files are shared. Per-workspace state
+(`providers.json`, conversations, locks) lives under the workspace's app-data key, and a second
+instance in the same workspace is refused with a message naming the owning PID. Leases record
+the owner's Linux start time, so a crashed owner whose PID was reused does not lock the
+workspace. Shared files are written through per-process temporary files, and
+`~/.ubume-settings.json` saves merge only the fields the saving process changed.
+
 ### Local OpenAI-compatible model profiles
 
 The `local` runtime owns compatibility for models served by LM Studio and Unsloth Studio through their OpenAI-compatible APIs. The provider picker keeps Local as one top-level route and opens a backend child page for LM Studio and Unsloth. The selected backend is stored per workspace and in conversation metadata. Unsloth discovery accepts only models marked as loaded and authenticates with `UNSLOTH_API_KEY` or a same-user agent key after verifying the loopback server identity. Model-family detection remains capability metadata only; the Local runtime always routes through the same generic DeepSeek Harness adapter regardless of whether the model is Qwen, Ornith, Llama, Gemma, GLM, DeepSeek, or another compatible family.

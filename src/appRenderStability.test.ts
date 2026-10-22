@@ -94,7 +94,7 @@ test("TranscriptShell owns native static history while AppShell remains the over
   assert.doesNotMatch(transcriptShellSource, /clear-offset-\$\{clearCount\}/);
   assert.match(
     transcriptShellSource,
-    /key=\{`clear-\$\{props\.clearCount \?\? 0\}-repaint-\$\{props\.repaintGeneration \?\? 0\}`\}/,
+    /key=\{`clear-\$\{props\.clearCount \?\? 0\}-width-\$\{props\.layout\.cols\}-repaint-\$\{props\.repaintGeneration \?\? 0\}`\}/,
   );
   assert.match(appShellSource, /MemoizedTopHeader/);
   assert.doesNotMatch(appShellSource, /import \{[^}]*Static[^}]*\} from "ink"/);

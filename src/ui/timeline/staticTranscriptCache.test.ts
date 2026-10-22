@@ -181,12 +181,15 @@ test("retains rows only for the newest MAX_RETAINED_STATIC_TURNS turns", () => {
   const itemsPerTurn = full.staticItems.length / total;
   assert.ok(itemsPerTurn > 1, "a finalized turn produces several static items");
 
-  // Turns first seen outside the window emit one empty placeholder each.
-  const placeholders = windowed.staticItems.slice(0, trimmed);
-  assert.ok(placeholders.every((item) => item.rows.length === 0));
+  // A newly mounted transcript must print every historical turn once.
+  assert.deepEqual(stripRows(windowed.staticItems), stripRows(full.staticItems));
+  const subsequent = buildStaticTranscript(cache, items, OPTIONS);
+  assert.ok(
+    subsequent.staticItems.slice(0, trimmed * itemsPerTurn).every((item) => item.rows.length === 0),
+  );
   assert.deepEqual(
-    stripRows(windowed.staticItems.slice(trimmed)),
-    stripRows(full.staticItems.slice(trimmed * itemsPerTurn)),
+    subsequent.staticItems.map((item) => item.key),
+    windowed.staticItems.map((item) => item.key),
   );
   assert.equal(cache.entries.size, MAX_RETAINED_STATIC_TURNS);
 });

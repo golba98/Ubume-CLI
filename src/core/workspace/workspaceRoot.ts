@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { parse, resolve, win32 } from "path";
 
 /** Recognizes drive-rooted or UNC paths independently of the host platform. */
@@ -43,7 +44,7 @@ export function resolveWorkspaceRoot(): string {
 
   for (const candidate of candidates) {
     const value = candidate?.trim();
-    if (value) return normalizeWorkspaceRoot(value);
+    if (value) return canonicalWorkspaceRoot(value);
   }
 
   return normalizeWorkspaceRoot(process.cwd());
@@ -53,5 +54,15 @@ export function resolveWorkspaceRoot(): string {
  * Compares normalized folder spellings; does not resolve filesystem symlinks or case aliases.
  */
 export function sameFolder(left: string, right: string): boolean {
-  return normalizeWorkspaceRoot(left) === normalizeWorkspaceRoot(right);
+  return canonicalWorkspaceRoot(left) === canonicalWorkspaceRoot(right);
+}
+
+/** Resolve existing aliases for comparisons without changing legacy storage keys. */
+export function canonicalWorkspaceRoot(value: string): string {
+  const normalized = normalizeWorkspaceRoot(value);
+  try {
+    return realpathSync(normalized);
+  } catch {
+    return normalized;
+  }
 }

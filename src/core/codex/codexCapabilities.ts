@@ -15,6 +15,7 @@ export interface CodexCliCapabilities {
   config: boolean;
   fullAuto: boolean;
   image?: boolean;
+  resume?: { jsonFlag: "--json" | "--experimental-json"; image: boolean; skipGit: boolean };
 }
 
 const capabilityCache = new Map<string, Promise<CodexCliCapabilities>>();
@@ -41,8 +42,15 @@ function hasCliToken(helpText: string, token: string): boolean {
 export function parseCodexCliCapabilities(
   execHelpText: string,
   _topLevelHelpText: string,
+  resumeHelpText = "",
 ): CodexCliCapabilities {
   const execHelp = normalizeHelpText(execHelpText);
+  const resumeHelp = normalizeHelpText(resumeHelpText);
+  const jsonFlag = hasCliToken(resumeHelp, "--json")
+    ? "--json"
+    : hasCliToken(resumeHelp, "--experimental-json")
+      ? "--experimental-json"
+      : null;
 
   return {
     askForApproval: hasCliToken(execHelp, "--ask-for-approval"),
@@ -50,6 +58,15 @@ export function parseCodexCliCapabilities(
     config: hasCliToken(execHelp, "--config") || hasCliToken(execHelp, "-c"),
     fullAuto: hasCliToken(execHelp, "--full-auto"),
     image: hasCliToken(execHelp, "--image") || hasCliToken(execHelp, "-i"),
+    ...(jsonFlag && hasCliToken(resumeHelp, "--config") && hasCliToken(resumeHelp, "--model")
+      ? {
+          resume: {
+            jsonFlag,
+            image: hasCliToken(resumeHelp, "--image"),
+            skipGit: hasCliToken(resumeHelp, "--skip-git-repo-check"),
+          },
+        }
+      : {}),
   };
 }
 
@@ -91,11 +108,25 @@ export async function getCodexCliCapabilities(executable: string): Promise<Codex
       throw new Error("Unable to determine Codex CLI capabilities from help output.");
     }
 
+    let resumeHelp = "";
+    if (execHelp.status === "fulfilled" && /\bresume\b/.test(execHelp.value.stdout)) {
+      try {
+        const result = await captureCodexProcessOutput(
+          executable,
+          ["exec", "resume", "--help"],
+          HELP_TIMEOUT_MS,
+        );
+        resumeHelp = `${result.stdout}\n${result.stderr}`;
+      } catch {
+        /* Unsupported resume: context reconstruction remains available. */
+      }
+    }
     return parseCodexCliCapabilities(
       execHelp.status === "fulfilled" ? `${execHelp.value.stdout}\n${execHelp.value.stderr}` : "",
       topLevelHelp.status === "fulfilled"
         ? `${topLevelHelp.value.stdout}\n${topLevelHelp.value.stderr}`
         : "",
+      resumeHelp,
     );
   })();
 

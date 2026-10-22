@@ -159,7 +159,9 @@ export function buildTimelineItems(events: TimelineEvent[]): TimelineItem[] {
     }
   }
 
-  return items.filter((item) => item.type === "event" || item.user !== null);
+  return items.filter(
+    (item) => item.type === "event" || item.user !== null || item.assistant !== null,
+  );
 }
 
 export type TurnOpacityResolver = (turnId: number, activeTurnId: number | null) => TurnOpacity;

@@ -93,7 +93,8 @@ lives in `src/ui/render/startupLogoLayout.ts`; a terminal cannot change its font
 "larger" always means more cells, never a scaled font.
 
 While the compact header is live, every resize (width or height) repaints with a
-scrollback-inclusive clear, as every other screen does on width changes. A shrinking
+scrollback-inclusive clear once its replacement is ready. During a long transcript
+reflow, the current live view first adapts with a viewport-only repaint. A shrinking
 window pushes the top of the live frame (the header) into scrollback, and only that clear
 removes those copies; otherwise each small → big cycle would leave another header behind.
 Theme and logo changes, which do not change geometry, still redraw only the visible screen.
@@ -183,17 +184,31 @@ A new conversation is saved from its first sent prompt. Starting Ubume and
 quitting, or typing a draft without sending it, does not create a `/resume`
 entry, and conversations with no messages are not listed.
 
-Resume restores Ubume's state. Resuming an Ubume conversation does not reattach
-the native Claude or Codex session that served it; the next invocation receives
-saved Ubume conversation context. The chosen route is restored when available and
-otherwise falls back with a notice. Native Local Harness session metadata retains
-its existing validation.
+Resume restores the complete saved transcript, including dialogue-only and legacy
+answers, code blocks, interrupted runs, and recorded tool outcomes. Historical tool
+operations are display data and never execute on restore. All restored turns are
+written to native scrollback, including turns outside the 200-turn row cache.
+
+The saved provider, model, reasoning and Local backend are restored. An unavailable
+route blocks submission until you explicitly choose a working provider/model.
+Owned Claude, Codex, Google/Antigravity, Mistral Vibe and Local sessions can retain
+native continuation metadata. The next prompt validates the saved native context;
+loading a transcript alone does not establish a provider connection. Codex resume
+requires help-confirmed support for structured output, model selection and policy
+configuration. Unsupported or incompatible native state uses saved dialogue with
+a notice; explicit missing-session errors can retry once before any productive
+activity. Authentication, quota and tool failures never trigger a replay.
+
+Session selection prepares the target under a temporary lease before committing.
+Escape cancels loading. Save or checkpoint-recovery failures retain the previous
+conversation and its lease. `/clear` also retains the conversation if saving fails.
+Background snapshot flushing does not change the recorded last conversation activity.
 
 ### Native CLI sessions
 
-`/resume` has sections for Ubume, Claude Code, Codex, and Mistral Vibe. Left/Right
-(or 1–4) switch sections. Native sections list sessions started in the current
-folder; `a` toggles all projects. Ubume reads those CLIs' own session stores
+`/resume` starts on All, with provider sections for OpenAI, Anthropic, Google,
+Mistral and Local. Left/Right or section numbers switch filters. It lists sessions
+from the current folder by default; `a` toggles all projects. Ubume reads those CLIs' own session stores
 read-only and never modifies them.
 
 | Key | In the list | In the transcript viewer |
@@ -208,11 +223,20 @@ read-only and never modifies them.
 Native sessions linked to an owned conversation are deduplicated by provider, session ID and workspace. Standalone programmatic sessions remain visible. Imported
 history is capped at about 200,000 characters, keeping the newest turns.
 
-The picker starts on **All**, with sections for OpenAI, Anthropic, Mistral and Local. In Local, `b` cycles all backends, LM Studio and Unsloth; `m` cycles recorded models. `a` switches between this folder and all projects. Search and filter choices survive transcript navigation.
+The picker starts on **All**, with sections for OpenAI, Anthropic, Google, Mistral and Local. In Local, `b` cycles all backends, LM Studio and Unsloth; `m` cycles recorded models. `a` switches between this folder and all projects. Search and filter choices survive transcript navigation.
 
 Ubume saves chats under its user data folder: `chats/<workspace-key>/conversations/<id>/snapshot.json`, with the original folder in `workspace.json` and local agent journals under `local-harness/v-<version>/`. The default Linux root is `~/.local/share/ubume` (or `$XDG_DATA_HOME/ubume`); `UBUME_DATA_DIR` overrides it. Older histories are copied on their next save, leaving original files intact.
 
-Resuming another project reopens Ubume in that project's folder. Chats with missing folders can still be viewed; `c` locates their original folder. An unavailable saved model or backend requires an explicit choice through `/provider` or `/model` before sending. Restarting does not silently switch providers. Local agent sessions flush before completed-turn persistence and recover into a fresh session when older state is missing or incompatible.
+Resuming another project reopens Ubume in its displayed original folder. The old
+application releases terminal input and completes cleanup before the replacement
+starts; previous startup prompts and resume targets are not replayed. Chats with
+missing folders remain available for viewing. Press `c` to locate their original
+folder or select an existing destination for relocation. Relocation requires typing
+`RELOCATE`; it creates a linked copy with a new ID and retains the original record.
+Native sessions, file checkpoints, queued actions and attachment registries are not
+carried into the relocated execution context. The destination's permissions apply.
+Existing symlink aliases are compared by their filesystem identity while legacy
+storage keys remain readable. An unavailable saved model or backend requires an explicit choice through `/provider` or `/model` before sending. Restarting does not silently switch providers. Local agent sessions flush before completed-turn persistence and recover into a fresh session when older state is missing or incompatible.
 
 From a terminal, `ubume --resume chat_ID` opens a saved chat without sending a prompt. `ubume --import-session vibe:SESSION_ID` imports a native history in the current workspace. Supported native sources are `claude`, `codex`, `google` and `vibe`.
 
@@ -231,3 +255,26 @@ not invoke a paid provider. Play the included [recording](recordings/terminal-wo
 with `asciinema play docs/terminal/recordings/terminal-workbench.cast`. Live authenticated provider
 behavior still depends on the installed provider CLI and terminal keyboard
 protocol; the recording is a UI smoke test.
+
+`bun run check:resume` drives the installed launcher through isolated real PTYs at
+60×20, 80×24, 100×22, 120×30, 160×40 and 200×50. It checks selection, search,
+cancellation, full long-history restoration, live resizing, native continuation,
+and actual execution in another workspace using a deterministic provider.
+`bun run bench:resume` measures metadata listing, hydration and transcript caching.
+Both write generated evidence only under ignored development reports.
+
+### Resize responsiveness
+
+Terminal measurements commit on the leading event and coalesce subsequent events in
+16 ms frames. Resize scheduling does not own provider execution or persistence.
+Long finalized transcripts prepare their new wrapping in cooperative slices while
+the prompt and newest output remain interactive. The existing clear-frame boundary
+publishes the complete prepared history atomically and prevents old dimensions
+from replacing a newer layout. Temporary historical tail rows may retain their
+previous line breaks until this preparation completes.
+
+Run `bun run check:resize` for offline executable-driven PTY scenarios and three
+independent Claude/Mistral/Google adapter terminals. `bun run bench:resize --scenario
+history --iterations 5 --cycles 3 --check-performance` additionally enforces the
+100 ms P95 live-geometry target on the benchmark host. `UBUME_RESIZE_TRACE` enables
+bounded monotonic phase records; it is disabled during normal execution.

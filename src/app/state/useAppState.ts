@@ -157,7 +157,7 @@ export function useAppState(context: UseAppStateContext) {
   // Assigned during render (like screenRef) so the clear-frame boundary can
   // tell, at frame-write time, whether the committing tree was laid out
   // against the current terminal width (the viewport hook commits dimensions
-  // on a trailing settle, so frames can lag stdout.columns).
+  // in coalesced frames, so queued frames can lag stdout.columns).
   const terminalLayoutColsRef = useRef<number | undefined>(
     terminalLayout.rawCols ?? terminalLayout.cols,
   );

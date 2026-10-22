@@ -124,7 +124,7 @@ function displayTitle(title: string): string {
 /** Row text for an Ubume conversation: title — activity · model · provider · [backend] · count · [import source]. */
 export function ubumeRowText(conversation: ConversationListEntry, now = new Date()): string {
   const parts = [
-    activityLabel(conversation.updatedAt, now),
+    activityLabel(conversation.lastActivityAt ?? conversation.updatedAt, now),
     conversation.modelId,
     providerLabel(conversation.providerId),
     ...(conversation.localBackend

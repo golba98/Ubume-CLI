@@ -14,6 +14,8 @@ import type { InkRenderInstance } from "./inkRenderReset.js";
 function createHarness(
   overrides: {
     onWidthResizeRefresh?: () => void;
+    isHistoryReflowPending?: () => boolean;
+    getPreparedStaticFrame?: () => { cols: number; rows: number; output: string } | null;
     isOverlayActive?: () => boolean;
     hasLiveStartupHeader?: () => boolean;
     hasResponsiveStartupHeader?: () => boolean;
@@ -1242,6 +1244,100 @@ test("classic home height changes wait for static branding before committing a r
     assert.ok(h.events.includes("write:settled composer:10:14"));
     h.instance.renderInteractiveFrame?.("next frame", 10, "");
     assert.equal(generation, 1, "settled height does not repeatedly re-arm");
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test("overlay resize suppresses stale geometry until the measured layout catches up", () => {
+  let columns = 120;
+  let rows = 40;
+  const h = createHarness({
+    isOverlayActive: () => true,
+    getRenderedLayoutCols: () => columns,
+    getRenderedLayoutRows: () => rows,
+  });
+  try {
+    h.instance.renderInteractiveFrame?.("picker initial", 20, "");
+    h.events.length = 0;
+    h.stdout.columns = 60;
+    h.stdout.rows = 20;
+    h.instance.renderInteractiveFrame?.("stale wide picker", 20, "");
+    assert.equal(h.events.length, 0, "no stale frame or clear reaches the narrower terminal");
+    columns = 60;
+    rows = 20;
+    h.instance.renderInteractiveFrame?.("settled narrow picker", 18, "");
+    assert(h.events.some((event) => event.includes("overlayResize")));
+    assert(h.events.includes("write:settled narrow picker:18:0"));
+    assert(!h.events.some((event) => event.includes("stale wide")));
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test("the Ink log wrapper preserves done() for native terminal suspension", () => {
+  let calls = 0;
+  const log = Object.assign((_output: string) => undefined, {
+    done: () => {
+      calls++;
+    },
+    reset: () => undefined,
+  });
+  const instance: InkRenderInstance = { log, renderInteractiveFrame: () => undefined };
+  const controller = createClearFrameBoundaryController({
+    instance,
+    terminalControl: { clearTranscript() {}, clearViewport() {} },
+    stdout: { columns: 100, rows: 22 },
+  });
+  try {
+    (instance.log as unknown as { done: () => void }).done();
+    assert.equal(calls, 1);
+  } finally {
+    controller?.dispose();
+  }
+  assert.equal(instance.log, log);
+});
+
+test("cooperative reflow publishes live geometry first, then one complete historical frame", () => {
+  let pending = true;
+  let prepared: { cols: number; rows: number; output: string } | null = null;
+  const h = createHarness({
+    isHistoryReflowPending: () => pending,
+    getPreparedStaticFrame: () => prepared,
+    getRenderedLayoutCols: () => 60,
+    getRenderedLayoutRows: () => 20,
+  });
+  try {
+    h.stdout.columns = 60;
+    h.stdout.rows = 20;
+    h.instance.renderInteractiveFrame?.("new live tail", 18, "");
+    assert(h.events.some((event) => event.includes("liveResize")));
+    assert(h.events.includes("write:new live tail:18:0"));
+    pending = false;
+    prepared = { cols: 60, rows: 20, output: "ALL_HISTORY\n" };
+    h.instance.renderInteractiveFrame?.("latest live tail", 18, "new turn\n");
+    assert.equal(h.instance.fullStaticOutput, "ALL_HISTORY\nnew turn\n");
+    assert.equal(h.controller.getState().widthRepaintPending, false);
+    const clearCount = h.events.filter((event) => event.startsWith("clear:")).length;
+    h.instance.renderInteractiveFrame?.("next delta", 18, "");
+    assert.equal(h.events.filter((event) => event.startsWith("clear:")).length, clearCount);
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test("a stale prepared history cannot replace a newer viewport", () => {
+  const h = createHarness({
+    getPreparedStaticFrame: () => ({ cols: 200, rows: 50, output: "STALE_HISTORY" }),
+    getRenderedLayoutCols: () => 60,
+    getRenderedLayoutRows: () => 20,
+  });
+  try {
+    h.stdout.columns = 60;
+    h.stdout.rows = 20;
+    h.instance.renderInteractiveFrame?.("current tail", 18, "");
+    assert(!h.events.some((event) => event.includes("cooperativeHistoryReady")));
+    assert(!h.instance.fullStaticOutput?.includes("STALE_HISTORY"));
   } finally {
     h.controller.dispose();
   }

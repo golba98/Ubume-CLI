@@ -1,5 +1,5 @@
 /**
- * `!command` shell execution and relaunching Ubume in another workspace.
+ * `!command` shell execution in the locked workspace.
  *
  * A shell command is a run like a prompt: it holds the workspace execution
  * lease, occupies `activeRunIdRef` (so Ctrl+C and queueing treat it as the
@@ -7,22 +7,15 @@
  * event when the process exits.
  */
 
-import { spawn } from "node:child_process";
 import type { useFocusManager } from "ink";
 import { startTransition, useCallback } from "react";
 import { runShellCommand, summarizeCommandResult } from "../../core/process/commandRunner.js";
-import { errorMessage } from "../../core/shared/values.js";
 import {
   sanitizeTerminalInput,
   sanitizeTerminalLines,
   sanitizeTerminalOutput,
 } from "../../core/terminal/terminalSanitize.js";
 import { assertFileRecoveryReady } from "../../core/workspace/checkpoints.js";
-import type { LaunchContext } from "../../core/workspace/launchContext.js";
-import {
-  createWorkspaceRelaunchPlan,
-  guardWorkspaceRelaunch,
-} from "../../core/workspace/launchContext.js";
 import { acquireOwnership, type OwnershipLease } from "../../core/workspace/ownership.js";
 import { getShellWorkspaceGuardMessage } from "../../core/workspace/workspaceGuard.js";
 import type { SessionAction } from "../../session/appSession.js";
@@ -104,11 +97,6 @@ interface UsePromptExecutionContext {
   dispatchSession: (action: SessionAction) => void;
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
   focusManager: ReturnType<typeof useFocusManager>;
-  busy: boolean;
-
-  // Launch and exit
-  launchContext: LaunchContext;
-  exit: (errorOrResult?: Error | unknown) => void;
 }
 
 export function usePromptExecution(context: UsePromptExecutionContext) {
@@ -127,9 +115,6 @@ export function usePromptExecution(context: UsePromptExecutionContext) {
     stoppingRef,
     cleanupRef,
     focusManager,
-    busy,
-    launchContext,
-    exit,
   } = context;
 
   /**
@@ -256,50 +241,5 @@ export function usePromptExecution(context: UsePromptExecutionContext) {
     [allowedWritableRoots, appendEvent, dispatchSession, focusManager, workspaceRoot],
   );
 
-  /** `/workspace <path>`: starts Ubume in another folder and exits this instance once it spawned. */
-  const handleWorkspaceRelaunch = useCallback(
-    (targetPath: string) => {
-      const gate = guardWorkspaceRelaunch(busy);
-      if (!gate.allowed) {
-        appendEvent(
-          "system",
-          "Busy",
-          gate.message ?? "Finish the current run before relaunching into another workspace.",
-        );
-        return;
-      }
-
-      const relaunchResult = createWorkspaceRelaunchPlan(targetPath, launchContext);
-      if (!relaunchResult.ok) {
-        appendEvent("error", "Workspace relaunch failed", relaunchResult.message);
-        return;
-      }
-
-      try {
-        const child = spawn(relaunchResult.plan.executable, relaunchResult.plan.args, {
-          cwd: relaunchResult.plan.cwd,
-          env: relaunchResult.plan.env,
-          stdio: "inherit",
-        });
-
-        let launched = false;
-        child.once("error", (error) => {
-          if (launched) {
-            return;
-          }
-          appendEvent("error", "Workspace relaunch failed", error.message);
-        });
-        child.once("spawn", () => {
-          launched = true;
-          exit();
-        });
-      } catch (error) {
-        const message = errorMessage(error, "Unknown relaunch failure");
-        appendEvent("error", "Workspace relaunch failed", message);
-      }
-    },
-    [appendEvent, busy, exit, launchContext],
-  );
-
-  return { handleShellExecute, handleWorkspaceRelaunch };
+  return { handleShellExecute };
 }

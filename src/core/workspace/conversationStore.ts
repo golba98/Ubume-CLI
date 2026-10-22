@@ -4,9 +4,11 @@
  * leases around mutations.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
+  copyFileSync,
   existsSync,
   fsyncSync,
   mkdirSync,
@@ -101,6 +103,10 @@ export interface ConversationMetadata {
   parentCheckpointId?: string;
   importedFrom?: ConversationImportSource;
   workspaceRoot?: string;
+  originalWorkspaceRoot?: string;
+  relocatedFrom?: { workspaceKey: string; conversationId: string };
+  /** Conversation activity, independent of background snapshot flushing. */
+  lastActivityAt?: string;
   nativeSessions?: NativeSessionReference[];
 }
 
@@ -235,6 +241,7 @@ function parseMessages(value: unknown): ConversationMessage[] | null {
 
 function parseMetadata(value: unknown, fallbackId: string): ConversationMetadata | null {
   if (!isRecord(value)) return null;
+  if (value.version !== undefined && value.version !== 1) return null;
   const id = safeString(value.id) ?? fallbackId;
   const title = safeString(value.title) ?? "Untitled conversation";
   const createdAt = safeString(value.createdAt) ?? new Date(0).toISOString();
@@ -266,6 +273,24 @@ function parseMetadata(value: unknown, fallbackId: string): ConversationMetadata
     ...(localHarnessSession ? { localHarnessSession } : {}),
     messageCount,
     ...(safeString(value.workspaceRoot) ? { workspaceRoot: value.workspaceRoot as string } : {}),
+    ...(safeString(value.originalWorkspaceRoot)
+      ? { originalWorkspaceRoot: value.originalWorkspaceRoot as string }
+      : {}),
+    ...(safeString(value.lastActivityAt) &&
+    Number.isFinite(Date.parse(value.lastActivityAt as string))
+      ? { lastActivityAt: value.lastActivityAt as string }
+      : {}),
+    ...(isRecord(value.relocatedFrom) &&
+    /^[a-f0-9]{16}$/.test(String(value.relocatedFrom.workspaceKey)) &&
+    typeof value.relocatedFrom.conversationId === "string" &&
+    isSafeConversationId(value.relocatedFrom.conversationId)
+      ? {
+          relocatedFrom: {
+            workspaceKey: value.relocatedFrom.workspaceKey as string,
+            conversationId: value.relocatedFrom.conversationId,
+          },
+        }
+      : {}),
     ...(Array.isArray(value.nativeSessions)
       ? { nativeSessions: value.nativeSessions.filter(isNativeSessionReference) }
       : {}),
@@ -289,7 +314,7 @@ function titleFromMessages(messages: ConversationMessage[]): string {
 function isNativeSessionReference(value: unknown): value is NativeSessionReference {
   return (
     isRecord(value) &&
-    ["claude", "codex", "vibe"].includes(String(value.source)) &&
+    ["claude", "codex", "vibe", "google", "antigravity"].includes(String(value.source)) &&
     !!safeString(value.sessionId) &&
     (value.throughMessageCount === undefined || isNonNegativeInteger(value.throughMessageCount)) &&
     (value.transcriptHash === undefined || !!safeString(value.transcriptHash))
@@ -337,6 +362,7 @@ function isSafeConversationId(id: string): boolean {
 
 /** Workspace-scoped canonical dialogue storage with optional caller-released ownership leases. */
 export class ConversationStore {
+  private readonly activities = new Map<string, { hash: string; at: string }>();
   private readonly rootDir: string;
   private readonly legacyRootDirs: readonly string[];
   private readonly managedRoot: boolean;
@@ -382,6 +408,25 @@ export class ConversationStore {
     const value = acquireOwnership(this.workspace, id);
     this.release();
     this.lease = { id, value };
+  }
+
+  /** Hold a target lease without surrendering the active conversation's lease. */
+  prepareLease(id: string): { commit: () => void; release: () => void } {
+    this.conversationDir(id);
+    if (!this.ownership || this.lease?.id === id) return { commit() {}, release() {} };
+    const value = acquireOwnership(this.workspace, id);
+    let committed = false;
+    return {
+      commit: () => {
+        if (committed) return;
+        this.release();
+        this.lease = { id, value };
+        committed = true;
+      },
+      release: () => {
+        if (!committed) value.release();
+      },
+    };
   }
   /**
    * Releases this store's current token-checked conversation lease; repeated calls are
@@ -433,6 +478,7 @@ export class ConversationStore {
       ...(route.providerId === "local" ? { localBackend: route.localBackend ?? "lm-studio" } : {}),
       messageCount: 0,
       workspaceRoot: this.workspace,
+      originalWorkspaceRoot: this.workspace,
     };
     return { metadata, messages: [] };
   }
@@ -457,6 +503,26 @@ export class ConversationStore {
       ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
       ...(message.createdAt === undefined ? {} : { createdAt: message.createdAt }),
     }));
+    const activityHash = (value: ConversationRecord) =>
+      createHash("sha256")
+        .update(
+          JSON.stringify([
+            value.messages,
+            value.session?.events.filter((event) => event.type === "shell") ?? [],
+          ]),
+        )
+        .digest("hex");
+    let previousActivity = this.activities.get(record.metadata.id);
+    if (!previousActivity && existsSync(this.location(record.metadata.id))) {
+      const previous = this.load(record.metadata.id);
+      if (previous)
+        previousActivity = {
+          hash: activityHash(previous),
+          at: previous.metadata.lastActivityAt ?? previous.metadata.updatedAt,
+        };
+    }
+    const hash = activityHash(record);
+    const at = previousActivity?.hash === hash ? previousActivity.at : this.now().toISOString();
     const metadata: ConversationMetadata = {
       ...record.metadata,
       title:
@@ -466,10 +532,31 @@ export class ConversationStore {
       updatedAt: this.now().toISOString(),
       messageCount: messages.length,
       workspaceRoot: this.workspace,
+      originalWorkspaceRoot:
+        record.metadata.originalWorkspaceRoot ?? record.metadata.workspaceRoot ?? this.workspace,
+      lastActivityAt: at,
     };
     // One authoritative generation; legacy files are read-only migration inputs.
     const snapshotPath = join(dir, "snapshot.json");
+    if (!this.activities.has(record.metadata.id) && existsSync(snapshotPath)) {
+      // Dialogue recovery must not erase unsupported or damaged auxiliary data.
+      const previous = JSON.parse(readFileSync(snapshotPath, "utf8"));
+      if (previous.session && !parseWorkbench(previous.session)) {
+        const backup = join(dir, `snapshot.recovery-${randomUUID()}.json`);
+        copyFileSync(snapshotPath, backup, constants.COPYFILE_EXCL);
+        const backupFile = openSync(backup, "r+");
+        try {
+          fsyncSync(backupFile);
+        } finally {
+          closeSync(backupFile);
+        }
+        this.onDiagnostic(
+          `Conversation ${record.metadata.id}: original auxiliary data preserved at ${backup}.`,
+        );
+      }
+    }
     atomicWriteJson(snapshotPath, { version: 2, metadata, messages, session: record.session });
+    this.activities.set(record.metadata.id, { hash, at });
     // A cache failure must not turn a successful canonical save into a failure. The cache is
     // validated against the snapshot's revision on read, so it needs no fsync: a lost or stale
     // summary after a crash only makes list() read the snapshot itself.
@@ -599,7 +686,9 @@ export class ConversationStore {
     }
     return entries.sort(
       (left, right) =>
-        right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id),
+        (right.lastActivityAt ?? right.updatedAt).localeCompare(
+          left.lastActivityAt ?? left.updatedAt,
+        ) || right.id.localeCompare(left.id),
     );
   }
 }

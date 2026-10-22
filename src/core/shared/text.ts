@@ -43,8 +43,27 @@ export function getTextUnits(text: string): TextUnit[] {
 }
 
 /** Measures terminal column width while excluding ANSI formatting sequences. */
+const commonSingleWidth = /^[\x20-\x7e\u2500-\u259f\u27e6-\u27ef]*$/;
+const measuredWidths = new Map<string, number>();
+let measuredCharacters = 0;
 export function getTextWidth(text: string): number {
-  return stringWidth(text);
+  // Box drawing and mathematical brackets are single-column scalars, without
+  // emoji presentation. Variation selectors/combining marks take the full path.
+  if (commonSingleWidth.test(text)) return text.length;
+  const cached = measuredWidths.get(text);
+  if (cached !== undefined) return cached;
+  const width = stringWidth(text);
+  if (text.length <= 4096) {
+    measuredWidths.set(text, width);
+    measuredCharacters += text.length;
+    while (measuredWidths.size > 4096 || measuredCharacters > 256000) {
+      const oldest = measuredWidths.keys().next().value;
+      if (oldest === undefined) break;
+      measuredCharacters -= oldest.length;
+      measuredWidths.delete(oldest);
+    }
+  }
+  return width;
 }
 
 // ─── Input window ────────────────────────────────────────────────────────────

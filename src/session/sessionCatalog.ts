@@ -15,7 +15,8 @@
  */
 
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { parseLaunchArgs } from "../config/launchArgs.js";
 import type {
   ExternalSessionSource,
   ExternalSessionSummary,
@@ -50,8 +51,10 @@ import type {
 import { ConversationStore } from "../core/workspace/conversationStore.js";
 import type { LaunchContext } from "../core/workspace/launchContext.js";
 import { createWorkspaceRelaunchPlan } from "../core/workspace/launchContext.js";
-import { normalizeWorkspaceRoot, sameFolder } from "../core/workspace/workspaceRoot.js";
-import { buildResumedProviderRoute } from "./conversation.js";
+import { canonicalWorkspaceRoot, sameFolder } from "../core/workspace/workspaceRoot.js";
+import { buildResumedProviderRoute, conversationMessagesToTimeline } from "./conversation.js";
+import { createEventId, createTurnId } from "./eventIds.js";
+import { createInitialPlanFlowState } from "./planFlow.js";
 
 type SessionScope = "workspace" | "all";
 export type SessionRef =
@@ -104,9 +107,9 @@ export function conversationSummary(
     modelId: entry.modelId,
     localBackend: entry.localBackend,
     title: entry.title,
-    updatedAt: entry.updatedAt,
+    updatedAt: entry.lastActivityAt ?? entry.updatedAt,
     messageCount: entry.messageCount,
-    actions: workspace ? ["view", "resume"] : ["view"],
+    actions: workspace && isAbsolute(workspace) ? ["view", "resume"] : ["view"],
     conversation: entry,
   };
 }
@@ -117,7 +120,7 @@ export function mergeSessionSummaries(
 ): SessionSummary[] {
   const linked = new Set<string>();
   const nativeKey = (source: string, id: string, folder: string | null) =>
-    `${source === "antigravity" ? "google" : source}:${id}:${folder ? normalizeWorkspaceRoot(folder) : ""}`;
+    `${source === "antigravity" ? "google" : source}:${id}:${folder ? canonicalWorkspaceRoot(folder) : ""}`;
   for (const summary of conversations) {
     const entry = summary.conversation;
     for (const link of [
@@ -127,7 +130,16 @@ export function mergeSessionSummaries(
       linked.add(nativeKey(link.source, link.sessionId, summary.workspaceRoot));
     }
   }
-  const result = [...conversations];
+  const identities = new Set<string>();
+  const result = conversations.filter((session) => {
+    const identity =
+      session.ref.kind === "ubume" && session.workspaceRoot
+        ? `${canonicalWorkspaceRoot(session.workspaceRoot)}:${session.ref.conversationId}`
+        : session.key;
+    if (identities.has(identity)) return false;
+    identities.add(identity);
+    return true;
+  });
   for (const entry of native) {
     const key = nativeKey(entry.source, entry.id, entry.cwd);
     if (linked.has(key)) continue;
@@ -142,7 +154,7 @@ export function mergeSessionSummaries(
       title: entry.title,
       updatedAt: entry.updatedAt,
       messageCount: entry.messageCount,
-      actions: entry.cwd ? ["view", "native", "continue"] : ["view"],
+      actions: entry.cwd && isAbsolute(entry.cwd) ? ["view", "native", "continue"] : ["view"],
       native: entry,
     });
   }
@@ -176,17 +188,16 @@ function collectWorkspaceKeys(
 ): Set<string> {
   const keys = new Set<string>([workspaceStorageKey(workspaceRoot)]);
 
-  if (scope !== "all") {
-    return keys;
-  }
-
   for (const root of [
     join(dataDir, "chats"),
     join(dataDir, "workspaces"),
     join(legacyDataDir, "workspaces"),
   ]) {
     try {
-      for (const key of directories(root)) keys.add(key);
+      for (const key of directories(root)) {
+        const folder = resolveWorkspaceFolder(dataDir, key, workspaceRoot);
+        if (scope === "all" || (folder && sameFolder(folder, workspaceRoot))) keys.add(key);
+      }
     } catch (error) {
       errors.push(`Ubume: ${errorMessage(error, "Could not list chats")}`);
     }
@@ -214,6 +225,7 @@ function resolveWorkspaceFolder(
     if (
       manifest.version === 1 &&
       typeof manifest.workspaceRoot === "string" &&
+      isAbsolute(manifest.workspaceRoot) &&
       workspaceStorageKey(manifest.workspaceRoot) === key
     ) {
       folder = manifest.workspaceRoot;
@@ -459,6 +471,24 @@ export function importNativeConversation(
   record.metadata.title = summary.title;
   record.metadata.importedFrom = { source: summary.source, sessionId: summary.id };
   record.messages = messages;
+  record.session = {
+    version: 1,
+    events: conversationMessagesToTimeline(
+      externalTranscriptToConversationMessages(transcript, { includeToolDetails: true }),
+      createEventId,
+      createTurnId,
+    ),
+    uiState: { kind: "IDLE" },
+    plan: createInitialPlanFlowState(),
+    draft: "",
+    cursor: 0,
+    history: [],
+    pastes: [],
+    images: [],
+    files: [],
+    queue: [],
+    checkpoints: [],
+  };
   store.save(record);
   return record;
 }
@@ -467,15 +497,32 @@ export function importNativeConversation(
 export function createSessionWorkspaceRelaunch(
   target: string,
   context: LaunchContext,
-  resume: { conversationId: string } | { source: string; sessionId: string },
+  resume?: { conversationId: string } | { source: string; sessionId: string },
 ) {
   const result = createWorkspaceRelaunchPlan(target, context);
   if (!result.ok) return result;
+  const prefixLength = context.launchKind === "installed-bin" ? 1 : 3;
+  const forwarded = context.relaunchArgs.slice(prefixLength);
+  const delimiter = forwarded[0] === "--";
+  const parsed = parseLaunchArgs(delimiter ? forwarded.slice(1) : forwarded);
+  if (!parsed.ok) return { ok: false as const, message: parsed.error };
+  // Session and model selection belong to the target. Never replay a startup prompt.
+  const persistent: string[] = [];
+  if (parsed.value.profile) persistent.push("--profile", parsed.value.profile);
+  for (const override of parsed.value.configOverrides) {
+    if (!/^model\s*=/.test(override) && !/writable_roots\s*=/.test(override))
+      persistent.push("--config", override);
+  }
+  if (parsed.value.noClear) persistent.push("--no-clear");
   const args = [
-    ...result.plan.args,
-    ...("conversationId" in resume
-      ? ["--resume", resume.conversationId]
-      : ["--import-session", `${resume.source}:${resume.sessionId}`]),
+    ...result.plan.args.slice(0, prefixLength),
+    ...(delimiter ? ["--"] : []),
+    ...persistent,
+    ...(!resume
+      ? []
+      : "conversationId" in resume
+        ? ["--resume", resume.conversationId]
+        : ["--import-session", `${resume.source}:${resume.sessionId}`]),
   ];
   return { ok: true as const, plan: { ...result.plan, args } };
 }

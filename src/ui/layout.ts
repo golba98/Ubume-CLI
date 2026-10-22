@@ -15,15 +15,17 @@
  */
 
 import { useStdout } from "ink";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import * as renderDebug from "../core/perf/renderDebug.js";
+import { traceResize } from "../core/perf/resizeTrace.js";
+import { createResizeScheduler } from "../core/terminal/resizeScheduler.js";
 import { setTerminalResizing } from "../core/terminal/terminalControl.js";
 
 export const MIN_TERMINAL_COLS = 8;
 export const MIN_TERMINAL_ROWS = 3;
 export const MIN_VIEWPORT_COLS = 1;
 export const MIN_VIEWPORT_ROWS = 1;
-export const RESIZE_INTERVAL_MS = process.env.NODE_ENV === "test" ? 0 : 50;
+export const RESIZE_INTERVAL_MS = 16;
 const STARTUP_TINY_MIN_COLS = 40;
 const STARTUP_TINY_MIN_ROWS = 14;
 const STARTUP_FULL_MIN_COLS = 100; // matches LOGO_LARGE_MIN_COLS in logoVariants.ts
@@ -439,17 +441,15 @@ export function advanceTerminalViewport(
 /**
  * Current terminal viewport, updated on stdout `resize`.
  *
- * Leading edge: flag `isResizing`, retaining the last committed dimensions until
- * the fixed coalescing window ends (50ms, 0 in tests). Sustained drags still
- * commit every window. Graphics preparation pauses without resetting the one-shot
- * animation clock. Unchanged measurements reuse the previous object.
+ * The first notification commits immediately. A frame scheduler coalesces further
+ * events without delaying updates until dragging stops. Invalid sizes retain the
+ * last renderable viewport; all measurements come from this process's stdout.
  */
 export function useTerminalViewport(): TerminalViewport {
   const { stdout } = useStdout();
   const [viewport, setViewport] = useState<TerminalViewport>(() =>
     createTerminalViewport(stdout.columns, stdout.rows),
   );
-  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const commit = (isResizing = false) => {
@@ -504,34 +504,28 @@ export function useTerminalViewport(): TerminalViewport {
         rawRows: stdout.rows,
       });
 
-      // Leading edge: immediately enter isResizing state but do NOT commit
-      // new dimensions yet. This freezes the layout to prevent tearing while
-      // dragging, and signals animations to pause.
-      setTerminalResizing(true);
-      setViewport((current) => (current.isResizing ? current : { ...current, isResizing: true }));
-
-      // A fixed window coalesces a burst without starving commits during a drag.
-      if (settleTimerRef.current) return;
-
-      settleTimerRef.current = setTimeout(() => {
-        settleTimerRef.current = null;
-        setTerminalResizing(false);
-        // Trailing edge: commit final dimensions and exit isResizing state.
-        commit(false);
-      }, RESIZE_INTERVAL_MS);
+      scheduler.request();
     };
+    const scheduler = createResizeScheduler({
+      intervalMs: RESIZE_INTERVAL_MS,
+      commit: () => {
+        setTerminalResizing(false);
+        traceResize("dimensions", { cols: stdout.columns, rows: stdout.rows });
+        commit(false);
+      },
+    });
 
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
-      if (settleTimerRef.current) {
-        clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = null;
-      }
+      scheduler.dispose();
       setTerminalResizing(false);
     };
   }, [stdout]);
 
+  useEffect(() => {
+    traceResize("reactCommit", { cols: viewport.rawCols, rows: viewport.rawRows });
+  }, [viewport]);
   return viewport;
 }
 

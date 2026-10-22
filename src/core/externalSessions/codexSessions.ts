@@ -343,6 +343,15 @@ export async function readCodexTranscript(
       const callId = stringField(payload, "call_id");
       const tool = callId ? tools.get(callId) : undefined;
       const output = toolOutput(payload.output).trim();
+      if (tool) {
+        const code =
+          typeof payload.exit_code === "number"
+            ? payload.exit_code
+            : isRecord(payload.output) && typeof payload.output.exit_code === "number"
+              ? payload.output.exit_code
+              : null;
+        tool.status = code === null ? "unknown" : code === 0 ? "completed" : "failed";
+      }
       if (tool && output) tool.text = clampText(`${tool.text}\n\n${output}`, TOOL_TEXT_LIMIT);
     }
   });

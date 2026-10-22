@@ -1,3 +1,4 @@
+import type { PreparedStaticFrame } from "../core/terminal/preparedStaticFrame.js";
 import { startupHeaderUsage } from "../ui/render/startupHeaderUsage.js";
 /**
  * The interactive app's root component.
@@ -117,7 +118,7 @@ interface AppProps {
 }
 
 export function App({ launchArgs, providerOverride }: AppProps) {
-  const { exit, suspendTerminal } = useApp();
+  const { exit, suspendTerminal, waitUntilRenderFlush } = useApp();
   const focusManager = useFocusManager();
   // ─── Startup state ───────────────────────────────────────────────────────────
 
@@ -231,6 +232,14 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   // Live Ink instance behind this stdout, used to reset Ink's frame caches on
   // the /clear boundary so the next frame is authoritative (see handleClear).
   const inkInstance = useMemo(() => resolveInkRenderInstance(stdout), [stdout]);
+  const preparedStaticFrameRef = useRef<PreparedStaticFrame | null>(null);
+  const reportPreparedStaticFrame = useCallback((frame: PreparedStaticFrame | null) => {
+    preparedStaticFrameRef.current = frame;
+  }, []);
+  const historyReflowPendingRef = useRef(false);
+  const reportHistoryReflow = useCallback((pending: boolean) => {
+    historyReflowPendingRef.current = pending;
+  }, []);
   const liveStartupHeaderRef = useRef(false);
   const responsiveStartupHeaderRef = useRef(false);
   const reportStartupLive = useCallback((live: boolean, responsive = live) => {
@@ -244,6 +253,9 @@ export function App({ launchArgs, providerOverride }: AppProps) {
         terminalControl,
         stdout,
         source: "src/app/App.tsx:clearBoundary",
+        staticGenerationFollowsWidth: true,
+        getPreparedStaticFrame: () => preparedStaticFrameRef.current,
+        isHistoryReflowPending: () => historyReflowPendingRef.current,
         onWidthResizeRefresh: () => bumpStaticRepaintGeneration((tick) => tick + 1),
         getRenderedRepaintGeneration: () => staticRepaintGenerationRef.current,
         getRenderedLayoutCols: () => terminalLayoutColsRef.current,
@@ -740,6 +752,16 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   // input. Later hooks consume earlier hooks' callbacks.
 
   const conversation = useConversation({
+    modelSelectionInFlightRef,
+    modelPickerOpenRef,
+    waitUntilRenderFlush,
+    suspendTerminal: async (callback) => {
+      let result!: Awaited<ReturnType<typeof callback>>;
+      await suspendTerminal(async () => {
+        result = await callback();
+      });
+      return result;
+    },
     armTranscriptReplacement,
     ...appState,
     activeProviderRoute,
@@ -771,6 +793,11 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     continueExternalSession,
     selectResumeSession,
     locateSavedWorkspace,
+    resumeLoading,
+    cancelResume,
+    relocationTarget,
+    relocationError,
+    cancelRelocation,
   } = conversation;
 
   const runtimeSettings = useRuntimeSettings({
@@ -959,6 +986,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
   });
 
   const { handleClear } = useClearConversation({
+    appendEvent,
     ...appState,
     ...conversation,
     ...runLifecycle,
@@ -971,8 +999,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     allowedWritableRoots,
     appendEvent,
     focusManager,
-    busy,
-    exit,
   });
 
   const { startPromptRun } = usePromptRun({
@@ -1177,6 +1203,8 @@ export function App({ launchArgs, providerOverride }: AppProps) {
           verboseMode={verboseMode}
           clearCount={sessionState.clearCount}
           repaintGeneration={staticRepaintGeneration}
+          onHistoryReflowChange={reportHistoryReflow}
+          onPreparedStaticFrame={reportPreparedStaticFrame}
           notice={themeNotice}
           composer={composerElement}
           composerRows={composerRows}
@@ -1213,6 +1241,11 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               handleRewind={handleRewind}
               setScreen={setScreen}
               resumeConversations={resumeConversations}
+              resumeLoading={resumeLoading}
+              cancelResume={cancelResume}
+              relocationTarget={relocationTarget}
+              relocationError={relocationError}
+              cancelRelocation={cancelRelocation}
               resumeConversation={resumeConversation}
               loadResumeSessions={loadResumeSessions}
               selectResumeSession={selectResumeSession}

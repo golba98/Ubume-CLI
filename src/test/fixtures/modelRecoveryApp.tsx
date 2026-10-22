@@ -162,8 +162,21 @@ async function chooseWorkingModel() {
     "Google recovery picker",
   );
   recording.push(terminal.lastFrame());
-  stdin.write("\x1b[F");
-  await pause();
+  // The first rendered picker frame can precede its input subscription. Observe
+  // the requested highlight before Enter instead of relying on a fixed delay.
+  await waitFor(
+    () => {
+      if (/>\s+gemini-working/.test(terminal.lastFrame())) return true;
+      stdin.write("\x1b[F");
+      return false;
+    },
+    {
+      label: "working model highlighted",
+      timeoutMs: 8000,
+      intervalMs: 70,
+      diagnostics: () => terminal.lastFrame(),
+    },
+  );
   stdin.write("\r");
   await pause();
   await until(

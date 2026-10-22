@@ -6,6 +6,7 @@ import { loadSettings } from "./config/persistence.js";
 import { APP_NAME, formatTerminalTitlePath } from "./config/settings.js";
 import * as benchTrace from "./core/perf/benchTrace.js";
 import * as renderDebug from "./core/perf/renderDebug.js";
+import { flushResizeTrace, instrumentResizeLayout, traceResize } from "./core/perf/resizeTrace.js";
 import type { BackendProvider } from "./core/providers/types.js";
 import {
   releaseFrameLock,
@@ -27,6 +28,7 @@ import {
 } from "./core/terminal/terminalControl.js";
 import { createTerminalQueryInput } from "./core/terminal/terminalQueryInput.js";
 import { setIntendedTerminalTitle } from "./core/terminal/terminalTitle.js";
+import { isWorkspaceHandoff, runWorkspaceHandoff } from "./core/workspace/workspaceHandoff.js";
 import { resolveWorkspaceRoot } from "./core/workspace/workspaceRoot.js";
 import { MIN_VIEWPORT_COLS, MIN_VIEWPORT_ROWS } from "./ui/layout.js";
 
@@ -214,12 +216,13 @@ export function startApp({
   let repaintArmed = false;
   let renderHandle: RenderHandle | null = null;
   let inkInstance: InkRenderInstance | null = null;
+  let releaseResizeProfile = () => {};
   let previousResizeCols = stdout.columns;
   let previousResizeRows = stdout.rows;
 
   // Kitty may leave an image placed while it is still settling an OS-window
   // resize unpainted until some unrelated redraw. Once the resize repaint has
-  // landed (the viewport commits within 50ms), re-issue the
+  // landed (the viewport commits on the leading event), re-issue the
   // data-free placements so the logo appears without waiting for input.
   let placementRefreshTimers: ReturnType<typeof setTimeout>[] = [];
   let capabilityRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -237,6 +240,7 @@ export function startApp({
   };
 
   const onResize = () => {
+    traceResize("notification", { cols: stdout.columns, rows: stdout.rows });
     if (graphics && !capabilityRefreshTimer)
       capabilityRefreshTimer = setTimeout(() => {
         capabilityRefreshTimer = undefined;
@@ -274,6 +278,9 @@ export function startApp({
   const cleanup = () => {
     if (cleanupDone) return;
     cleanupDone = true;
+    releaseResizeProfile();
+    flushResizeTrace();
+    benchTrace.flushBenchTrace();
     clearTimeout(capabilityRefreshTimer);
     stdout.off("resize", onResize);
     process.off("SIGINT", handleSignal);
@@ -337,9 +344,14 @@ export function startApp({
     renderHandle = renderApp(<App launchArgs={launchArgs} providerOverride={providerOverride} />, {
       // App owns cancel, draft clearing, and the deliberate second Ctrl-C quit.
       exitOnCtrlC: false,
-      onRender: () => {
+      onRender: (info) => {
         benchTrace.startupMarkOnce("ink-output-generated");
         benchTrace.traceInkOutputGenerated();
+        traceResize("inkOutput", {
+          cols: stdout.columns,
+          rows: stdout.rows,
+          durationMs: info?.renderTime,
+        });
       },
       ...(kittyKeyboard ? { kittyKeyboard } : {}),
       // AppStdout is the narrow surface the app uses; Ink wants the full stream type.
@@ -354,6 +366,7 @@ export function startApp({
   // Resolve the real Ink class instance to get access to lastOutput,
   // onRender, calculateLayout, etc.  Gracefully degrades to null in tests.
   inkInstance = resolveInkInstanceForStdout(wrappedStdout);
+  releaseResizeProfile = instrumentResizeLayout(inkInstance);
 
   // Remove Ink's own resize handler so the app is the sole resize handler.
   // This eliminates the race where Ink's resized() fires alongside our
@@ -363,7 +376,40 @@ export function startApp({
   }
 
   benchTrace.startupMark("render-returned");
-  void renderHandle.waitUntilExit().finally(cleanup);
+  void renderHandle.waitUntilExit().then(
+    async (result) => {
+      // No child may compete with the old Ink reader or its terminal cleanup.
+      cleanup();
+      if (!isWorkspaceHandoff(result)) return;
+      try {
+        process.exitCode = await runWorkspaceHandoff(result.plan);
+      } catch (error) {
+        writeStderr(`Workspace relaunch failed: ${String(error)}\n`, "src/index.tsx:handoff");
+        const returnArgs = [
+          ...launchArgs.passthroughArgs,
+          ...(launchArgs.noClear ? ["--no-clear"] : []),
+          ...(result.returnResumeId ? ["--resume", result.returnResumeId] : []),
+        ];
+        startApp({
+          stdin,
+          stdout,
+          stderr,
+          env,
+          platform,
+          argv: returnArgs,
+          renderApp,
+          resolveInkInstanceForStdout,
+          registerExitHandler,
+          providerOverride,
+        });
+      }
+    },
+    (error) => {
+      cleanup();
+      writeStderr(`${String(error)}\n`, "src/index.tsx:rendererExit");
+      process.exitCode = 1;
+    },
+  );
 
   activeRoot = { cleanup };
   return { started: true, exitCode: 0 };

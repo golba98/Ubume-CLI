@@ -15,9 +15,9 @@
  * transcript are not printed twice.
  */
 
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { useCallback, useEffect } from "react";
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   buildExternalResumeLaunch,
   type ExternalSessionSummary,
@@ -35,23 +35,29 @@ import { closeLocalHarnessSession } from "../../core/providerRuntime/localHarnes
 import { discoverProviderModels } from "../../core/providerRuntime/registry.js";
 import type { BackendProvider } from "../../core/providers/types.js";
 import { errorMessage } from "../../core/shared/values.js";
-import { workspaceStorageKey } from "../../core/workspace/appData.js";
 import { CheckpointStore } from "../../core/workspace/checkpoints.js";
-import type { ConversationMetadata } from "../../core/workspace/conversationStore.js";
+import {
+  type ConversationMetadata,
+  ConversationStore,
+} from "../../core/workspace/conversationStore.js";
 import { acquireOwnership } from "../../core/workspace/ownership.js";
 import { normalizeWorkspaceRoot, sameFolder } from "../../core/workspace/workspaceRoot.js";
-import { conversationMessagesToTimeline } from "../../session/conversation.js";
-import { advanceIdsPast, createEventId, createTurnId } from "../../session/eventIds.js";
+import { advanceIdsPast } from "../../session/eventIds.js";
 import { createInitialPlanFlowState } from "../../session/planFlow.js";
+import { relocateConversation } from "../../session/relocateConversation.js";
+import { hydrateConversationEvents } from "../../session/restoreConversation.js";
+import { ResumeTransition } from "../../session/resumeTransition.js";
 import {
   assessSavedRoute,
   createSessionWorkspaceRelaunch,
   importNativeConversation,
   listSessionCatalog,
+  readOwnedConversation,
+  type SessionRef,
   type SessionSummary,
   sessionIsInWorkspace,
 } from "../../session/sessionCatalog.js";
-import { restoredEvents } from "../../session/workbench.js";
+import { describeContinuation } from "../../session/sessionContinuation.js";
 import { FOCUS_IDS } from "../../ui/input/focus.js";
 import type { ExternalListScope, ResumePickerPosition } from "../../ui/panels/resumePickerRows.js";
 import { resetTimelineMeasureCaches } from "../../ui/timeline/timelineMeasure.js";
@@ -69,14 +75,6 @@ type ResumeFlowsContext = Omit<
 > & {
   saveActiveConversation: () => void;
 };
-
-// Ink throttles frame writes (~34 ms at 30 fps). Leaving an overlay exits the
-// alternate screen inside that write, so a child CLI waits this long before it
-// takes the terminal.
-const OVERLAY_EXIT_SETTLE_MS = 80;
-
-const waitForOverlayExit = () =>
-  new Promise((resolve) => setTimeout(resolve, OVERLAY_EXIT_SETTLE_MS));
 
 /**
  * Decides whether a resumed chat can keep running on the route it was saved
@@ -103,6 +101,14 @@ function assessResumedRoute(
     providerOverride ? null : discovery,
     Boolean(providerOverride) || providerEnabled,
   );
+}
+
+function isDirectory(folder: string): boolean {
+  try {
+    return statSync(folder).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export function useResumeFlows(context: ResumeFlowsContext) {
@@ -184,7 +190,29 @@ export function useResumeFlows(context: ResumeFlowsContext) {
 
     // Conversation saving
     saveActiveConversation,
+    selectionCoordinator,
+    modelSelectionInFlightRef,
+    modelPickerOpenRef,
+    setRouteSwitchBusy,
+    waitUntilRenderFlush,
+    suspendTerminal,
   } = context;
+
+  const [transition] = useState(() => new ResumeTransition());
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [relocationTarget, setRelocationTarget] = useState<string | null>(null);
+  const [relocationError, setRelocationError] = useState<string | null>(null);
+  const relocationRef = useRef<{ folder: string; session: SessionSummary } | null>(null);
+  useEffect(
+    () => () => {
+      transition.cancel();
+    },
+    [transition],
+  );
+  const cancelResume = useCallback(() => {
+    transition.cancel();
+    setScreen("main");
+  }, [transition]);
 
   // ---------------------------------------------------------------------------
   // Shared guards
@@ -207,7 +235,7 @@ export function useResumeFlows(context: ResumeFlowsContext) {
   // ---------------------------------------------------------------------------
 
   const openResumePicker = useCallback(() => {
-    if (busy) {
+    if (busy || operationActive()) {
       appendEvent(
         "system",
         "Resume unavailable",
@@ -229,7 +257,9 @@ export function useResumeFlows(context: ResumeFlowsContext) {
       if (!pending) {
         pending = listSessionCatalog(workspaceRoot, scope);
         catalogListsRef.current.set(scope, pending);
-        pending.catch(() => catalogListsRef.current.delete(scope));
+        pending.catch(() => {
+          if (catalogListsRef.current.get(scope) === pending) catalogListsRef.current.delete(scope);
+        });
       }
       return pending;
     },
@@ -254,6 +284,10 @@ export function useResumeFlows(context: ResumeFlowsContext) {
   );
 
   const returnToResumePicker = useCallback(() => {
+    transition.cancel();
+    relocationRef.current = null;
+    setRelocationTarget(null);
+    setRelocationError(null);
     setExternalViewerSession(null);
     setSavedViewerSession(null);
     setScreen("resume-picker");
@@ -270,7 +304,7 @@ export function useResumeFlows(context: ResumeFlowsContext) {
   const relaunchSavedSession = useCallback(
     async (
       target: string,
-      resume: { conversationId: string } | { source: string; sessionId: string },
+      resume?: { conversationId: string } | { source: string; sessionId: string },
     ) => {
       if (operationActive()) {
         appendEvent(
@@ -283,6 +317,7 @@ export function useResumeFlows(context: ResumeFlowsContext) {
       const prepared = createSessionWorkspaceRelaunch(target, launchContext, resume);
       if (!prepared.ok) {
         appendEvent("error", "Workspace unavailable", prepared.message);
+        setScreen("main");
         return;
       }
 
@@ -299,21 +334,16 @@ export function useResumeFlows(context: ResumeFlowsContext) {
         workspaceLeaseRef.current = undefined;
         setScreen("main");
         appendEvent("system", "Opening saved workspace", prepared.plan.targetWorkspaceRoot);
-        await waitForOverlayExit();
-
-        const child = spawn(prepared.plan.executable, prepared.plan.args, {
-          cwd: prepared.plan.cwd,
-          env: prepared.plan.env,
-          stdio: "inherit",
+        await waitUntilRenderFlush();
+        exit({
+          kind: "workspace-relaunch",
+          plan: prepared.plan,
+          returnResumeId: activeConversationRef.current?.metadata.id,
         });
-        child.once("error", (error) => {
-          recoveryRef.current = false;
-          appendEvent("error", "Workspace resume failed", error.message);
-        });
-        child.once("spawn", () => exit());
       } catch (error) {
         recoveryRef.current = false;
         appendEvent("error", "Workspace resume failed", errorMessage(error));
+        setScreen("main");
       }
     },
     [appendEvent, conversationStore, exit, launchContext],
@@ -322,7 +352,7 @@ export function useResumeFlows(context: ResumeFlowsContext) {
   /** Suspends Ubume and resumes an external session in its own CLI. */
   const resumeExternalSessionNative = useCallback(
     async (summary: ExternalSessionSummary) => {
-      if (busyRef.current || activeRunIdRef.current !== null) {
+      if (busyRef.current || operationActive()) {
         appendEvent(
           "system",
           "Resume unavailable",
@@ -334,10 +364,11 @@ export function useResumeFlows(context: ResumeFlowsContext) {
       // (throttled) frame write, which must land before the child owns the terminal.
       setExternalViewerSession(null);
       setScreen("main");
-      await waitForOverlayExit();
+      recoveryRef.current = true;
 
       const label = externalSourceLabel(summary.source);
       try {
+        await waitUntilRenderFlush();
         saveCurrentChatOrThrow();
         const providers = providerWorkspaceConfig.providers;
         const prepared = await buildExternalResumeLaunch(summary, {
@@ -361,7 +392,9 @@ export function useResumeFlows(context: ResumeFlowsContext) {
           "Resume in native CLI",
           `Suspending Ubume and resuming "${summary.title}" in ${label} (${launch.cwd}). Ubume will resume when ${label} exits.`,
         );
-        const result = await launchCliCommand(launch.displayName, launch, externalCliLaunchHooks);
+        const result = await suspendTerminal(() =>
+          launchCliCommand(launch.displayName, launch, externalCliLaunchHooks),
+        );
         if (!isMountedRef.current) {
           return;
         }
@@ -374,6 +407,8 @@ export function useResumeFlows(context: ResumeFlowsContext) {
         if (isMountedRef.current) {
           appendEvent("error", `${label} resume failed`, errorMessage(error, "Launch failed."));
         }
+      } finally {
+        finishRecovery({ recoveryRef, bumpWorkbench, pendingQuitRef });
       }
     },
     [appendEvent, externalCliLaunchHooks, workspaceRoot],
@@ -402,7 +437,7 @@ export function useResumeFlows(context: ResumeFlowsContext) {
    * decides whether its saved route can still be used.
    */
   const resumeConversation = useCallback(
-    async (id: string) => {
+    async (id: string, ref?: Extract<SessionRef, { kind: "ubume" }>) => {
       if (operationActive()) {
         appendEvent(
           "system",
@@ -412,59 +447,65 @@ export function useResumeFlows(context: ResumeFlowsContext) {
         return;
       }
 
+      const operation = transition.begin();
       recoveryRef.current = true;
+      setResumeLoading(true);
+      setScreen("resume-picker");
+      let lease: ReturnType<ConversationStore["prepareLease"]> | undefined;
       try {
         await stoppingRef.current;
+        if (!operation.current() || !isMountedRef.current) return;
         saveCurrentChatOrThrow();
-
-        // Lock the conversation, then reload it so we see the locked version.
-        let loaded = conversationStore.load(id);
-        if (loaded) {
-          try {
-            conversationStore.acquire(id);
-            loaded = conversationStore.load(id);
-          } catch (error) {
-            appendEvent("error", "Resume unavailable", (error as Error).message);
-            return;
-          }
-        }
-        if (!loaded) {
-          appendEvent("error", "Resume failed", "That conversation could not be loaded.");
-          setScreen("main");
-          return;
-        }
-
-        const previousHarnessSessionId =
-          activeConversationRef.current?.metadata.localHarnessSession?.sessionId;
-        if (
-          previousHarnessSessionId &&
-          previousHarnessSessionId !== loaded.metadata.localHarnessSession?.sessionId
-        ) {
-          stoppingRef.current = stoppingRef.current.then(() =>
-            closeLocalHarnessSession(previousHarnessSessionId),
+        lease = conversationStore.prepareLease(id);
+        let loaded = ref ? readOwnedConversation(ref) : conversationStore.load(id);
+        if (!loaded && !ref) {
+          const catalog = await listSessionCatalog(workspaceRoot, "workspace", { sources: [] });
+          const alias = catalog.sessions.find(
+            (entry) => entry.ref.kind === "ubume" && entry.ref.conversationId === id,
           );
+          if (alias?.ref.kind === "ubume") loaded = readOwnedConversation(alias.ref);
         }
-
-        const replacement = armTranscriptReplacement(
-          "src/app/conversation/useResumeFlows.ts:resumeConversation",
-        );
+        if (!operation.current() || !isMountedRef.current) return;
+        if (!loaded) throw new Error("That conversation could not be loaded.");
         const saved = loaded.session;
         const interrupted = saved ? interruptedRunMessage(saved.events, loaded.messages) : null;
         const resumed = interrupted
           ? { ...loaded, messages: [...loaded.messages, interrupted] }
           : loaded;
+        const events = hydrateConversationEvents(resumed);
+        advanceIdsPast(events);
+        const assessment = assessResumedRoute(
+          resumed.metadata,
+          providerOverride,
+          providerWorkspaceConfig,
+        );
 
+        // Recovery may fail or yield. Do not replace the active chat until it succeeds.
+        const executionLease = acquireOwnership(workspaceRoot, "execution");
+        let recovered = false;
+        try {
+          recovered = await new CheckpointStore(workspaceRoot, id).recover();
+        } finally {
+          executionLease.release();
+        }
+        if (!operation.current() || !isMountedRef.current) return;
+        operation.commit();
+        const previousHarnessSessionId =
+          activeConversationRef.current?.metadata.localHarnessSession?.sessionId;
+        lease.commit();
+        selectionCoordinator.cancel();
+        selectionCoordinator.navigate(assessment.route?.providerId);
+        modelSelectionInFlightRef.current = false;
+        modelPickerOpenRef.current = false;
+        setRouteSwitchBusy(false);
+        const replacement = armTranscriptReplacement(
+          "src/app/conversation/useResumeFlows.ts:resumeConversation",
+        );
         preserveSavedRouteRef.current = true;
         activeConversationRef.current = resumed;
-        // Counted before the interrupted-run note, which was never sent to a model.
         setConversationChars(conversationCharCount(loaded.messages));
         resetTimelineMeasureCaches();
         resetRunStateForResume();
-
-        const events = saved
-          ? restoredEvents(saved.events)
-          : conversationMessagesToTimeline(resumed.messages, createEventId, createTurnId);
-        advanceIdsPast(events);
         restoreConversationScratchState(
           {
             pastedContentRegistryRef,
@@ -476,8 +517,10 @@ export function useResumeFlows(context: ResumeFlowsContext) {
           },
           saved,
         );
-
         setPlanFlow(saved?.plan ?? createInitialPlanFlowState());
+        routeChoiceRequiredRef.current =
+          assessment.status === "unavailable" ? assessment.message : null;
+        setConversationRouteOverride(assessment.route ?? null);
         dispatchSession({
           type: "RESTORE_SESSION",
           events,
@@ -486,43 +529,41 @@ export function useResumeFlows(context: ResumeFlowsContext) {
           history: saved?.history ?? promptHistoryFromMessages(resumed.messages),
           uiState: saved?.uiState,
         });
-
-        // Roll back a file restoration that was interrupted mid-way.
-        const lease = acquireOwnership(workspaceRoot, "execution");
-        try {
-          if (await new CheckpointStore(workspaceRoot, id).recover()) {
-            appendEvent("system", "File recovery", "Rolled back an interrupted restoration.");
-          }
-        } finally {
-          lease.release();
-        }
         bumpWorkbench((value) => value + 1);
         replacement.finish();
-
-        const assessment = assessResumedRoute(
-          resumed.metadata,
-          providerOverride,
-          providerWorkspaceConfig,
-        );
-        routeChoiceRequiredRef.current =
-          assessment.status === "unavailable" ? assessment.message : null;
-        setConversationRouteOverride(assessment.route ?? null);
-        if (assessment.status === "unavailable") {
+        if (
+          previousHarnessSessionId &&
+          previousHarnessSessionId !== resumed.metadata.localHarnessSession?.sessionId
+        )
+          stoppingRef.current = stoppingRef.current.then(() =>
+            closeLocalHarnessSession(previousHarnessSessionId),
+          );
+        if (recovered)
+          appendEvent("system", "File recovery", "Rolled back an interrupted restoration.");
+        if (assessment.status === "unavailable")
           appendEvent(
             "system",
             "Original route unavailable",
             `${assessment.message} History has been restored for viewing.`,
           );
-        } else {
-          appendEvent("system", "Conversation resumed", resumed.metadata.title);
-        }
-
+        else
+          appendEvent(
+            "system",
+            "Conversation resumed",
+            `${resumed.metadata.title}\n${describeContinuation(resumed)}`,
+          );
         setScreen("main");
         intendedFocusTargetRef.current = FOCUS_IDS.composer;
         focusManager.focus(FOCUS_IDS.composer);
       } catch (error) {
-        appendEvent("error", "Resume failed", (error as Error).message);
+        if (operation.current() && isMountedRef.current) {
+          appendEvent("error", "Resume failed", errorMessage(error));
+          setScreen("main");
+        }
       } finally {
+        lease?.release();
+        operation.finish();
+        if (isMountedRef.current) setResumeLoading(false);
         finishRecovery({ recoveryRef, bumpWorkbench, pendingQuitRef });
       }
     },
@@ -551,11 +592,11 @@ export function useResumeFlows(context: ResumeFlowsContext) {
         );
         return;
       }
-      if (!summary.cwd) {
+      if (!summary.cwd || !isAbsolute(summary.cwd)) {
         appendEvent(
           "error",
           "Original workspace unknown",
-          "This session does not record its original folder. Open its transcript for viewing.",
+          "This session does not record an absolute original folder. Open its transcript for viewing.",
         );
         return;
       }
@@ -564,33 +605,46 @@ export function useResumeFlows(context: ResumeFlowsContext) {
         return;
       }
 
+      const operation = transition.begin();
       recoveryRef.current = true;
+      setResumeLoading(true);
+      let recordId: string | undefined;
+      let notice = "";
       try {
         saveCurrentChatOrThrow();
         const providerId = externalProviderId(summary.source);
         const transcript = await readExternalTranscript(summary);
-        const record = importNativeConversation(
-          conversationStore,
-          transcript,
-          findProvider(providerRegistry, providerId)?.currentModel ?? "unknown",
-        );
-        conversationStore.release();
+        if (!operation.current() || !isMountedRef.current) return;
+        // The import owns its target lease; it must not replace the active store's lease.
+        const importStore = new ConversationStore(workspaceRoot, { ownership: true });
+        try {
+          const record = importNativeConversation(
+            importStore,
+            transcript,
+            findProvider(providerRegistry, providerId)?.currentModel ?? "unknown",
+          );
+          recordId = record.metadata.id;
+        } finally {
+          importStore.release();
+        }
+        notice = transcript.notice ?? "";
+      } catch (error) {
+        if (operation.current() && isMountedRef.current)
+          appendEvent("error", "Continue failed", errorMessage(error));
+      } finally {
+        operation.finish();
+        setResumeLoading(false);
+        finishRecovery({ recoveryRef, bumpWorkbench, pendingQuitRef });
+      }
+      if (recordId && !operation.signal.aborted && isMountedRef.current) {
         setExternalViewerSession(null);
-        // resumeConversation takes its own recovery guard.
-        recoveryRef.current = false;
-        await resumeConversation(record.metadata.id);
-        if (activeConversationRef.current?.metadata.id === record.metadata.id) {
-          const notice = transcript.notice ? ` ${transcript.notice}` : "";
+        await resumeConversation(recordId);
+        if (activeConversationRef.current?.metadata.id === recordId)
           appendEvent(
             "system",
             "Continuing in Ubume",
-            `Imported “${summary.title}” from ${externalSourceLabel(summary.source)}.${notice}`,
+            `Imported “${summary.title}” from ${externalSourceLabel(summary.source)}. Context is reconstructed from its transcript. ${notice}`,
           );
-        }
-      } catch (error) {
-        appendEvent("error", "Continue failed", errorMessage(error));
-      } finally {
-        recoveryRef.current = false;
       }
     },
     [
@@ -617,7 +671,11 @@ export function useResumeFlows(context: ResumeFlowsContext) {
       if (session.ref.kind !== "ubume") {
         return;
       }
-      if (!session.workspaceRoot || !existsSync(session.workspaceRoot)) {
+      if (
+        !session.workspaceRoot ||
+        !isAbsolute(session.workspaceRoot) ||
+        !isDirectory(session.workspaceRoot)
+      ) {
         setSavedViewerSession(session);
         setScreen("saved-session-viewer");
         return;
@@ -628,7 +686,7 @@ export function useResumeFlows(context: ResumeFlowsContext) {
         });
         return;
       }
-      await resumeConversation(session.ref.conversationId);
+      await resumeConversation(session.ref.conversationId, session.ref);
     },
     [openExternalSession, relaunchSavedSession, resumeConversation, workspaceRoot],
   );
@@ -643,22 +701,45 @@ export function useResumeFlows(context: ResumeFlowsContext) {
       if (!session || session.ref.kind !== "ubume") {
         return;
       }
-      const folder = normalizeWorkspaceRoot(value);
-      if (workspaceStorageKey(folder) !== session.ref.workspaceKey) {
-        appendEvent(
-          "error",
-          "Workspace does not match",
-          "Select the original project folder; its identity must match this saved chat.",
-        );
-        return;
+      try {
+        setRelocationError(null);
+        const pending = relocationRef.current;
+        if (pending) {
+          if (value.trim() !== "RELOCATE")
+            throw new Error("Type RELOCATE to confirm, or Escape to cancel.");
+          if (operationActive()) throw new Error("Finish the active operation before relocating.");
+          saveCurrentChatOrThrow();
+          const relocated = relocateConversation(session.ref, pending.folder);
+          relocationRef.current = null;
+          setRelocationTarget(null);
+          if (sameFolder(relocated.folder, workspaceRoot)) await resumeConversation(relocated.id);
+          else await relaunchSavedSession(relocated.folder, { conversationId: relocated.id });
+          return;
+        }
+        const folder = realpathSync(normalizeWorkspaceRoot(value));
+        if (!statSync(folder).isDirectory()) throw new Error("Select an existing directory.");
+        if (session.workspaceRoot && sameFolder(folder, session.workspaceRoot)) {
+          await selectResumeSession({
+            ...session,
+            workspaceRoot: folder,
+            ref: { ...session.ref, workspaceRoot: folder },
+          });
+          return;
+        }
+        relocationRef.current = { folder, session };
+        setRelocationTarget(folder);
+      } catch (error) {
+        setRelocationError(errorMessage(error));
       }
-      await selectResumeSession({
-        ...session,
-        workspaceRoot: folder,
-        ref: { ...session.ref, workspaceRoot: folder },
-      });
     },
-    [appendEvent, savedViewerSession, selectResumeSession],
+    [
+      appendEvent,
+      savedViewerSession,
+      selectResumeSession,
+      resumeConversation,
+      relaunchSavedSession,
+      workspaceRoot,
+    ],
   );
 
   // `--resume <id>` and `--import <source>:<session>` run once at startup.
@@ -694,6 +775,17 @@ export function useResumeFlows(context: ResumeFlowsContext) {
   ]);
 
   return {
+    resumeLoading,
+    relocationTarget,
+    relocationError,
+    cancelRelocation: () => {
+      relocationRef.current = null;
+      setRelocationTarget(null);
+      setRelocationError(null);
+      setScreen("saved-session-viewer");
+    },
+    cancelResume,
+    handleWorkspaceRelaunch: (target: string) => relaunchSavedSession(target),
     openResumePicker,
     loadResumeSessions,
     rememberResumePickerPosition,

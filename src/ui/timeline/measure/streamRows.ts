@@ -918,16 +918,34 @@ export function buildTurnRows(
 ): TimelineRow[] {
   const rows: TimelineRow[] = [];
 
-  rows.push(...buildUserInputRows(item, width));
-  rows.push(createBlankRow(`${item.key}-prompt-gap`, width));
+  if (item.item.user) {
+    rows.push(...buildUserInputRows(item, width));
+    rows.push(createBlankRow(`${item.key}-prompt-gap`, width));
+  }
 
   if (item.item.run) {
     rows.push(...buildUnifiedStreamRows(item, width, options));
+  } else {
+    rows.push(...buildRecordedAnswerRows(item, width));
   }
 
   rows.push(...buildActionRequiredRows(item, width));
   rows.push(createBlankRow(`${item.key}-turn-end-gap`, width));
   return applyTurnOpacity(rows, item.renderState.opacity);
+}
+
+/** Dialogue-only snapshots have no run stream. Render their answer as inert Markdown. */
+export function buildRecordedAnswerRows(item: TurnRenderItem, width: number): TimelineRow[] {
+  const text = getAssistantContent(item.item.assistant);
+  if (!text) return [];
+  return buildCodexPlainRows(
+    `${item.key}-recorded-answer`,
+    width,
+    buildMarkdownRows(
+      parseMarkdown(sanitizeTerminalOutput(text)),
+      Math.max(1, width - transcriptContentIndent),
+    ),
+  );
 }
 
 /**

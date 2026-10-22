@@ -819,7 +819,11 @@ test("buildClaudeCodeArgs: includes -p, model, effort, permission-mode, and prom
   assert.ok(args.includes("--effort"), "must include --effort");
   assert.ok(args.includes("high"), "must include high effort");
   assert.ok(args.includes("--permission-mode"), "must include --permission-mode");
-  assert.ok(args.includes("default"), "must default to safe permission mode");
+  // The test runtime uses Ubume's default Full Access mode, which maps to Claude's classifier
+  // mode; bypassPermissions is never used.
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "auto");
+  assert.ok(!args.includes("bypassPermissions"));
+  assert.ok(!args.includes("--dangerously-skip-permissions"));
   assert.ok(args.includes("Hello world"), "must include the prompt");
 });
 

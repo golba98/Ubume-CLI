@@ -10,6 +10,12 @@ import { buildCodexPrompt } from "../codex/codexPrompt.js";
 import { formatCodexLaunchError, spawnCodexProcess } from "../executables/codexExecutable.js";
 import * as perf from "../perf/profiler.js";
 import { createOutputBuffer, type OutputBuffer } from "../process/outputCapture.js";
+import {
+  completedNativeSession,
+  isMissingNativeSession,
+  nativeContinuation,
+} from "../providerRuntime/nativeContinuation.js";
+import type { ProviderChatRequest } from "../providerRuntime/types.js";
 import { normalizeLineBreaks } from "../shared/text.js";
 import { createTerminalTitleSequenceStripper } from "../terminal/terminalTitle.js";
 import { createCodexJsonStreamParser } from "./codexJsonStream.js";
@@ -66,6 +72,21 @@ export const codexSubprocessProvider: BackendProvider = {
     // classified (e.g. as an auth failure) when the run errors.
     let currentRawStderr: OutputBuffer = createOutputBuffer({ maxChars: RAW_STDERR_CHARS });
     let finalAnswerObserved = false;
+    const request: ProviderChatRequest = {
+      prompt,
+      workspaceRoot: options.workspaceRoot,
+      runtime: options.runtime,
+      route: {
+        providerId: "openai",
+        modelId: options.runtime.model,
+        backendKind: "codex-cli-auth",
+      },
+      conversationHistory: options.conversationHistory,
+      nativeSessions: options.nativeSessions,
+    };
+    let resumeId = nativeContinuation(request, "codex")?.sessionId;
+    let threadId: string | undefined;
+    let productive = false;
 
     const finishError = (message: string) => {
       if (done) return;
@@ -100,6 +121,7 @@ export const codexSubprocessProvider: BackendProvider = {
           probeCapabilities,
           imageAttachments: options.imageAttachments,
           codexCommandPath: options.runtime.codexCommandPath,
+          nativeSessionId: resumeId,
         },
         import.meta.url,
       )
@@ -113,6 +135,13 @@ export const codexSubprocessProvider: BackendProvider = {
             finishError("Codex launch preparation did not return an executable.");
             return;
           }
+          const resuming = launchPlan.args[1] === "resume";
+          if (resumeId && !resuming)
+            handlers.onProgress?.({
+              id: "codex-resume-context",
+              source: "stderr",
+              text: "Installed Codex cannot safely resume this session; reconstructing saved conversation context.",
+            });
           handlers.benchmarkHooks?.onProviderPrepComplete?.();
 
           // Per-stream copies exist only to replay output into the transcript parser and to
@@ -162,10 +191,12 @@ export const codexSubprocessProvider: BackendProvider = {
               });
             },
             onAssistantDelta: (chunk) => {
+              productive = true;
               resetTranscriptCoalescing();
               handlers.onAssistantDelta?.(chunk);
             },
             onToolActivity: (activity) => {
+              productive = true;
               resetTranscriptCoalescing();
               handlers.onToolActivity?.(activity);
             },
@@ -183,12 +214,19 @@ export const codexSubprocessProvider: BackendProvider = {
             origin: "codex-cli",
           });
           const jsonParser = createCodexJsonStreamParser({
-            onThreadStarted: (sessionId) =>
-              handlers.onNativeSession?.({ source: "codex", sessionId }),
+            onThreadStarted: (sessionId) => {
+              threadId = sessionId;
+            },
             onProgress: (update) => handlers.onProgress?.(update),
-            onAssistantDelta: (chunk) => handlers.onAssistantDelta?.(chunk),
+            onAssistantDelta: (chunk) => {
+              productive = true;
+              handlers.onAssistantDelta?.(chunk);
+            },
             onFinalAnswerObserved: emitFinalAnswerObserved,
-            onToolActivity: (activity) => handlers.onToolActivity?.(activity),
+            onToolActivity: (activity) => {
+              productive = true;
+              handlers.onToolActivity?.(activity);
+            },
           });
 
           const feedTranscript = (text: string, stream: "stdout" | "stderr") => {
@@ -203,6 +241,7 @@ export const codexSubprocessProvider: BackendProvider = {
           const switchToTranscriptFallback = () => {
             if (mode === "legacy") return;
             mode = "legacy";
+            if (resuming && rawStdout.trim()) productive = true;
             if (rawStdout) {
               feedTranscript(rawStdout, "stdout");
             }
@@ -258,6 +297,7 @@ export const codexSubprocessProvider: BackendProvider = {
             if (retainRawStreams) rawStdout += text;
 
             if (mode === "legacy") {
+              if (resuming && text.trim()) productive = true;
               feedTranscript(text, "stdout");
               return;
             }
@@ -291,6 +331,7 @@ export const codexSubprocessProvider: BackendProvider = {
           handlers.onProcessLifecycle?.("before-spawn");
           proc = spawnCodexProcess(launchPlan.executable, launchPlan.args, {
             stdio: ["pipe", "pipe", "pipe"],
+            cwd: options.workspaceRoot,
             detached: process.platform !== "win32",
           });
           control.track(
@@ -355,6 +396,7 @@ export const codexSubprocessProvider: BackendProvider = {
 
             if (
               structuredOutput &&
+              !resuming &&
               code !== 0 &&
               !jsonParser.hasStructuredEvents() &&
               looksLikeUnsupportedStructuredOutput(`${rawStdout}\n${rawStderr}`)
@@ -366,6 +408,26 @@ export const codexSubprocessProvider: BackendProvider = {
             }
 
             const structuredFailure = jsonParser.getFailureMessage();
+            if (
+              resuming &&
+              !productive &&
+              isMissingNativeSession(
+                { status: "failed", stderr: currentRawStderr.text() },
+                structuredFailure ?? undefined,
+              )
+            ) {
+              resumeId = undefined;
+              threadId = undefined;
+              currentRawOutput = createOutputBuffer();
+              currentRawStderr = createOutputBuffer({ maxChars: RAW_STDERR_CHARS });
+              handlers.onProgress?.({
+                id: "codex-resume-missing",
+                source: "stderr",
+                text: "Saved Codex session is missing; reconstructing saved conversation context in a fresh session.",
+              });
+              startAttempt(true);
+              return;
+            }
             if (structuredFailure) {
               finishError(structuredFailure);
               return;
@@ -377,6 +439,10 @@ export const codexSubprocessProvider: BackendProvider = {
                   ? jsonParser.getFinalResponse().trim() ||
                     sanitizeCodexTranscript(currentRawOutput.text())
                   : sanitizeCodexTranscript(currentRawOutput.text());
+              if (threadId)
+                handlers.onNativeSession?.(
+                  completedNativeSession(request, "codex", threadId, finalResponse),
+                );
               emitFinalAnswerObserved(finalResponse);
               finishSuccess(finalResponse);
               return;
@@ -393,9 +459,10 @@ export const codexSubprocessProvider: BackendProvider = {
           });
 
           const promptPolicy = options.promptPolicy ?? "wrapped";
-          const history = options.conversationHistory?.length
-            ? `Previous conversation:\n${formatConversationHistory(options.conversationHistory)}\n\n`
-            : "";
+          const history =
+            !resuming && options.conversationHistory?.length
+              ? `Previous conversation:\n${formatConversationHistory(options.conversationHistory)}\n\n`
+              : "";
           const baseProviderPrompt =
             promptPolicy === "raw"
               ? prompt

@@ -379,7 +379,18 @@ test("Google request executes agy with exact model and prompt arguments", async 
 
   expect(resultText).toBe("Antigravity response");
   expect(captured?.executable).toBe("agy");
-  expect(captured?.args).toEqual(["--model", "gemini-3.5-flash-high", "-p", "hello from test"]);
+  expect(captured?.args).toEqual([
+    "--model",
+    "gemini-3.5-flash-high",
+    "--mode",
+    "auto",
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "0",
+    "-p",
+    "hello from test",
+  ]);
 });
 
 test("Claude Messages API sends configured endpoint, native ID and only advertised effort", async () => {

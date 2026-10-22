@@ -170,7 +170,7 @@ export function SessionTranscriptViewer({
         entry: index,
         kind: entry.kind,
         header: true,
-        text: `${open ? "▾" : "▸"} ${time ? `${time} · ` : ""}${sanitizeTerminalOutput(entry.title)}`,
+        text: `${open ? "▾" : "▸"} ${time ? `${time} · ` : ""}${sanitizeTerminalOutput(entry.title)}${entry.kind === "tool" ? ` · ${entry.status ?? "outcome unknown"}` : ""}`,
       });
       if (!open) return;
       const key = `${entry.id}:${width}`;
@@ -412,7 +412,7 @@ export function SavedSessionViewer({
         }));
     return {
       entries,
-      notice: `Original workspace: ${session.workspaceRoot ?? "not recorded"}. Locate the original folder to resume.`,
+      notice: `Original workspace: ${session.workspaceRoot ?? "not recorded"}. Locate the original folder or explicitly relocate a copy to continue.`,
     };
   }, [session]);
   return (
@@ -422,7 +422,7 @@ export function SavedSessionViewer({
       loadTranscript={loadTranscript}
       onBack={onBack}
       onContinue={onLocateWorkspace}
-      continueLabel="locate original folder"
+      continueLabel="locate or relocate"
     />
   );
 }

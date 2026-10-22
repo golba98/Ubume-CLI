@@ -8,6 +8,11 @@ export const EXTERNAL_SESSION_SOURCES: readonly ExternalSessionSource[] = [
   "vibe",
 ];
 
+/** A stored identifier must remain one positional argument, never a CLI option. */
+export function isSafeNativeSessionId(value: string): boolean {
+  return value.length > 0 && !value.startsWith("-") && !/[\u0000-\u0020\u007f]/.test(value);
+}
+
 export type ExternalSessionScope = { kind: "workspace"; root: string } | { kind: "all" };
 
 export interface ExternalSessionSummary {
@@ -27,6 +32,7 @@ export interface ExternalSessionSummary {
 export type ExternalTranscriptEntryKind = "user" | "assistant" | "tool" | "note";
 
 export interface ExternalTranscriptEntry {
+  status?: "completed" | "failed" | "interrupted" | "unknown";
   id: string;
   kind: ExternalTranscriptEntryKind;
   title: string;

@@ -201,6 +201,8 @@ export interface ProviderChatRequest {
   localConfig?: ProviderWorkspaceOverride | null;
   resolvedLocalAgentConfig?: ResolvedLocalAgentConfig;
   runIntent?: "normal" | "plan" | "approved-execution";
+  /** "interactive" when a person can answer tool approvals; unset means nobody can. */
+  approvalSurface?: "interactive" | "none";
   conversationHistory?: readonly ConversationMessage[];
   localContextCheckpoint?: ConversationContextCheckpoint;
   localHarnessSession?: LocalHarnessSessionMetadata;

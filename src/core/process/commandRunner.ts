@@ -224,6 +224,7 @@ function runProcess(
   const stdout = createOutputBuffer(spec.capture);
   const stderr = createOutputBuffer(spec.capture);
   let canceled = false;
+  let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const stdoutTitleStripper = createTerminalTitleSequenceStripper({
     source: "src/core/process/commandRunner.ts:shell.stdout",
@@ -283,7 +284,7 @@ function runProcess(
     }
   });
   const stop = () => {
-    if (stopping) return;
+    if (stopping || closed) return;
     stopping = true;
     const kill = (signal: NodeJS.Signals) => {
       try {
@@ -372,27 +373,24 @@ function runProcess(
     child.once("close", (code, signal) => {
       handlers.onProcessLifecycle?.("exit");
       finish({
-        status: canceled ? "canceled" : code === 0 ? "completed" : "failed",
+        status: canceled ? "canceled" : timedOut ? "timeout" : code === 0 ? "completed" : "failed",
         exitCode: code,
         signal,
+        ...(timedOut ? { debugMessage: `Timed out after ${spec.timeoutMs}ms` } : {}),
       });
     });
 
     if (spec.timeoutMs && spec.timeoutMs > 0) {
       timeoutHandle = setTimeout(() => {
-        if (child.killed) return;
+        if (closed || canceled) return;
+        timedOut = true;
         stop();
-        finish({
-          status: "timeout",
-          exitCode: null,
-          signal: null,
-          debugMessage: `Timed out after ${spec.timeoutMs}ms`,
-        });
       }, spec.timeoutMs);
     }
   });
 
   const cancel = () => {
+    if (closed || canceled) return;
     canceled = true;
     handlers.onProcessLifecycle?.("cancel");
     if (!child.killed) stop();
@@ -405,16 +403,6 @@ function runProcess(
     child,
     result,
     stopped,
-    cancel: () => {
-      canceled = true;
-      handlers.onProcessLifecycle?.("cancel");
-      if (!child.killed) {
-        try {
-          stop();
-        } catch {
-          // ignore cancellation failures
-        }
-      }
-    },
+    cancel,
   };
 }

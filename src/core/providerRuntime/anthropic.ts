@@ -4,6 +4,7 @@
  * from response delivery.
  */
 
+import type { Writable } from "node:stream";
 import { formatConversationHistory } from "../../session/conversation.js";
 import {
   buildClaudeSpawnSpec,
@@ -29,6 +30,8 @@ import {
   findClaudeModel,
   modelSupportsClaudeEffort,
 } from "./claudeCodeDiscovery.js";
+import { createClaudeApprovalBridge, resolveClaudePermissionMode } from "./claudePermissions.js";
+import { createClaudeStreamParser } from "./claudeStream.js";
 import {
   apiRequestError,
   classifyProviderFailure,
@@ -36,7 +39,16 @@ import {
   ProviderRequestError,
   retryAfterDelay,
 } from "./failures.js";
+
+export { createClaudeToolParser, tryParseStreamJsonDelta } from "./claudeStream.js";
+
+import { createProviderExecution } from "./execution.js";
 import { ANTHROPIC_FALLBACK_MODELS } from "./models.js";
+import {
+  completedNativeSession,
+  isMissingNativeSession,
+  nativeContinuation,
+} from "./nativeContinuation.js";
 import type {
   ProviderBackendKind,
   ProviderChatRequest,
@@ -48,7 +60,6 @@ import type {
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const ANTHROPIC_MAX_TOKENS = 1024;
-const ANTHROPIC_TIMEOUT_MS = 120_000;
 /**
  * Default deadline for one direct Messages API request, covering connection, response
  * headers and the full body. Override with `providers.anthropic.apiTimeoutMs`. A request
@@ -109,7 +120,42 @@ export function mapReasoningToEffort(reasoning: string | null | undefined): stri
   return reasoning?.trim() || null;
 }
 
-function buildClaudeCodeBaseArgs(request: ProviderChatRequest): string[] {
+/**
+ * True when this run can answer Claude's permission prompts in Ubume: an interactive surface
+ * exists and the CLI did not report lacking stream-json input / host prompts.
+ */
+export function claudeUsesHostApprovals(request: ProviderChatRequest): boolean {
+  return (
+    request.approvalSurface === "interactive" &&
+    claudeCapabilityDiscovery?.diagnostics?.hostApprovalsSupported !== false
+  );
+}
+
+/** Claude's native permission mode for this run, honoring the CLI's advertised choices. */
+export function claudePermissionModeFor(request: ProviderChatRequest) {
+  const modes = claudeCapabilityDiscovery?.diagnostics?.permissionModes;
+  return resolveClaudePermissionMode(
+    request.runtime.mode,
+    request.runIntent,
+    typeof modes === "string" ? modes.split(",") : null,
+  );
+}
+
+function claudePromptText(request: ProviderChatRequest): string {
+  return !nativeContinuation(request, "claude") && request.conversationHistory?.length
+    ? `Previous conversation:\n${formatConversationHistory(request.conversationHistory)}\n\nCurrent request:\n${request.prompt}`
+    : request.prompt;
+}
+
+/** The stream-json stdin message carrying the user prompt when host approvals are active. */
+export function buildClaudeStdinPrompt(request: ProviderChatRequest): string {
+  return `${JSON.stringify({
+    type: "user",
+    message: { role: "user", content: claudePromptText(request) },
+  })}\n`;
+}
+
+function buildClaudeCodeBaseArgs(request: ProviderChatRequest, hostApprovals: boolean): string[] {
   const effort = mapReasoningToEffort(request.route.reasoning ?? null);
   const models = request.modelDescriptor ? [request.modelDescriptor] : getActiveAnthropicModels();
   const supportedEffort =
@@ -119,13 +165,21 @@ function buildClaudeCodeBaseArgs(request: ProviderChatRequest): string[] {
       `Claude model ${request.route.modelId} does not advertise effort "${effort}". Refresh Claude models and select a supported effort or provider-managed reasoning.`,
     );
   return [
+    ...(nativeContinuation(request, "claude")
+      ? ["--resume", nativeContinuation(request, "claude")!.sessionId]
+      : []),
     ...(request.route.modelId ? ["--model", mapModelIdToClaudeArg(request.route.modelId)] : []),
     ...(supportedEffort ? ["--effort", supportedEffort] : []),
     "--permission-mode",
-    "default",
-    request.conversationHistory?.length
-      ? `Previous conversation:\n${formatConversationHistory(request.conversationHistory)}\n\nCurrent request:\n${request.prompt}`
-      : request.prompt,
+    claudePermissionModeFor(request).mode,
+    // Host approvals route prompts to Ubume over stdin; without a surface, say so explicitly
+    // so Claude denies (and tells the model) instead of waiting on nobody.
+    ...(hostApprovals
+      ? ["--permission-prompt-tool", "stdio"]
+      : claudeCapabilityDiscovery?.diagnostics?.permissionPromptsSupported === true
+        ? ["--permission-prompts", "none"]
+        : []),
+    ...(hostApprovals ? [] : [claudePromptText(request)]),
   ];
 }
 
@@ -146,12 +200,14 @@ export function ensureClaudeStreamJsonVerbose(args: string[]): string[] {
  * Builds streaming Claude CLI argv from prompt/history, model, effort and runtime permissions.
  */
 export function buildClaudeCodeArgs(request: ProviderChatRequest): string[] {
+  const hostApprovals = claudeUsesHostApprovals(request);
   return ensureClaudeStreamJsonVerbose([
     "-p",
+    ...(hostApprovals ? ["--input-format", "stream-json"] : []),
     "--output-format",
     "stream-json",
     "--include-partial-messages",
-    ...buildClaudeCodeBaseArgs(request),
+    ...buildClaudeCodeBaseArgs(request, hostApprovals),
   ]);
 }
 
@@ -160,108 +216,12 @@ export function buildClaudeCodeArgs(request: ProviderChatRequest): string[] {
  * execution.
  */
 export function buildClaudeCodePlainTextArgs(request: ProviderChatRequest): string[] {
-  return ["-p", ...buildClaudeCodeBaseArgs(request)];
+  return ["-p", ...buildClaudeCodeBaseArgs(request, false)];
 }
 
 // ---------------------------------------------------------------------------
 // Stream-JSON parsing
 // ---------------------------------------------------------------------------
-
-interface StreamJsonAssistantEvent {
-  type: "assistant";
-  message: {
-    content?: Array<{ type?: string; text?: string; partial?: boolean }>;
-  };
-}
-
-/**
- * Parses one stdout line from `claude -p --output-format stream-json`.
- * Returns:
- *   string  — extracted assistant text delta
- *   null    — valid JSON but no text to emit (tool event, system event, etc.)
- *   false   — parse error; caller should fall back to plain-text mode
- */
-export function tryParseStreamJsonDelta(line: string): string | null | false {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return false;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const event = parsed as Record<string, unknown>;
-  if (event["type"] !== "assistant") return null;
-  const msg = event["message"];
-  if (typeof msg !== "object" || msg === null) return null;
-  const content = (msg as StreamJsonAssistantEvent["message"]).content;
-  if (!Array.isArray(content)) return null;
-  const text = content
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text ?? "")
-    .join("");
-  return text || null;
-}
-
-/** One `message.content` block in Claude Code's stream-json output. */
-interface ClaudeStreamBlock {
-  type?: string;
-  id?: string;
-  name?: string;
-  input?: { command?: unknown };
-  tool_use_id?: string;
-  content?: string | Array<{ text?: string }>;
-  is_error?: boolean;
-}
-
-/**
- * Creates per-stream tool state and forwards Claude tool lifecycle events to Ubume callbacks.
- */
-export function createClaudeToolParser(handlers: BackendRunHandlers): (line: string) => void {
-  const tools = new Map<string, { command: string; startedAt: number }>();
-  return (line) => {
-    let event: { message?: { content?: unknown } } | null;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      return;
-    }
-    const blocks = event?.message?.content;
-    if (!Array.isArray(blocks)) return;
-    for (const block of blocks as Array<ClaudeStreamBlock | null>) {
-      if (block?.type === "tool_use" && typeof block.id === "string") {
-        const command =
-          typeof block.input?.command === "string"
-            ? block.input.command
-            : `${block.name ?? "tool"} ${JSON.stringify(block.input ?? {})}`;
-        const tool = { command, startedAt: tools.get(block.id)?.startedAt ?? Date.now() };
-        tools.set(block.id, tool);
-        handlers.onToolActivity?.({ id: block.id, ...tool, status: "running" });
-      } else if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
-        const tool = tools.get(block.tool_use_id) ?? {
-          command: "Claude tool",
-          startedAt: Date.now(),
-        };
-        const output =
-          typeof block.content === "string"
-            ? block.content
-            : Array.isArray(block.content)
-              ? block.content.map((entry) => entry.text ?? JSON.stringify(entry)).join("\n")
-              : "";
-        handlers.onToolActivity?.({
-          id: block.tool_use_id,
-          ...tool,
-          status: block.is_error ? "failed" : "completed",
-          completedAt: Date.now(),
-          output,
-          summary: output.split("\n")[0]?.slice(0, 200),
-        });
-        tools.delete(block.tool_use_id);
-      }
-    }
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Anthropic Messages API
@@ -385,15 +345,14 @@ async function requestAnthropicMessage(
 // ---------------------------------------------------------------------------
 
 function isClaudeStreamJsonRequiresVerboseError(result: CommandResult): boolean {
-  const combined = `${result.userMessage}\n${result.stderr}\n${result.stdout}`;
-  return /stream-json requires --verbose/i.test(combined);
+  return result.status === "failed" && /stream-json requires --verbose/i.test(result.stderr);
 }
 
 function isClaudeInvalidEffortError(result: CommandResult): boolean {
-  const combined = `${result.userMessage}\n${result.stderr}\n${result.stdout}`;
-  return (
-    /\beffort\b/i.test(combined) &&
-    /\b(invalid|unsupported|not supported|unknown|expected|allowed|valid)\b/i.test(combined)
+  // Only explicit process validation errors are capability evidence. Never scan model/tool text.
+  if (result.status !== "failed") return false;
+  return /(?:invalid|unsupported|unknown) (?:value[^\n]*for[^\n]*)?(?:effort|[^\n]*--effort)|effort[^\n]{0,100}(?:not supported|unsupported|invalid|valid (?:values|efforts)|allowed (?:values|efforts))/i.test(
+    result.stderr,
   );
 }
 
@@ -428,9 +387,30 @@ function disableClaudeEffortForSession(
 
 function formatClaudeCommandDiagnostic(executable: string, args: string[], prompt: string): string {
   const safeArgs = args.map((arg) =>
-    arg === prompt ? `<prompt redacted: ${prompt.length} chars>` : arg,
+    prompt && arg === prompt ? `<prompt redacted: ${prompt.length} chars>` : arg,
   );
   return `Claude Code command args: ${JSON.stringify([executable, ...safeArgs])}`;
+}
+
+/**
+ * Tells the user Claude's real permission mode before the run, so Ubume's mode label is never
+ * mistaken for it, and warns up front when approvals cannot be answered in this run.
+ */
+function announceClaudePermissions(
+  request: ProviderChatRequest,
+  hostApprovals: boolean,
+  handlers: BackendRunHandlers,
+): void {
+  const { mode, requested } = claudePermissionModeFor(request);
+  const fallback =
+    mode !== requested ? ` (this Claude Code CLI does not offer "${requested}")` : "";
+  handlers.onProgress?.({
+    id: "claude-permissions",
+    source: hostApprovals ? "stdout" : "stderr",
+    text: hostApprovals
+      ? `Claude Code permissions: ${mode}${fallback}. Actions Claude asks about are approved in Ubume.`
+      : `Claude Code permissions: ${mode}${fallback}. No approval prompt is available in this run, so actions that need approval will be denied.`,
+  });
 }
 
 /**
@@ -446,141 +426,184 @@ export function runClaudeCodeWithRunner(
     resolvedClaudeExecutable,
 ): () => void {
   const control = createRunControl(handlers);
+  const execution = createProviderExecution(request, handlers);
   let currentCancel: (() => void) | null = null;
   let canceled = false;
+  let finished = false;
+  const finish = () => {
+    finished = true;
+    execution.finish();
+    control.finish();
+  };
 
-  const runAttempt = (
-    mode: "stream-json" | "plain-text",
-    attemptRequest: ProviderChatRequest = request,
-  ) => {
-    let args: string[];
-    try {
-      args =
-        mode === "stream-json"
-          ? buildClaudeCodeArgs(attemptRequest)
-          : buildClaudeCodePlainTextArgs(attemptRequest);
-    } catch (error) {
-      control.finish();
-      handlers.onError(errorMessage(error));
-      return;
-    }
+  let allowResume = true;
+  const runAttempt = (mode: "stream-json" | "plain-text") => {
+    if (canceled || finished) return;
+    const attemptRequest = allowResume ? request : { ...request, nativeSessions: [] };
+    const args =
+      mode === "stream-json"
+        ? buildClaudeCodeArgs(attemptRequest)
+        : buildClaudeCodePlainTextArgs(attemptRequest);
     const spawnSpec = buildClaudeSpawnSpec(executable, args);
-
-    let accumulatedText = "";
-    let streamingFailed = false;
-    let lineBuf = "";
-    const parseTools = createClaudeToolParser(handlers);
-
-    const runner = runCommandImpl(
+    const hostApprovals = mode === "stream-json" && claudeUsesHostApprovals(attemptRequest);
+    const promptArg = hostApprovals ? "" : (args.at(-1) ?? "");
+    announceClaudePermissions(attemptRequest, hostApprovals, handlers);
+    let stdin: Writable | null | undefined;
+    const writeStdin = (line: string): boolean => {
+      if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
+      stdin.write(line);
+      return true;
+    };
+    const bridge = createClaudeApprovalBridge({
+      workspaceRoot: request.workspaceRoot,
+      onToolApproval: handlers.onToolApproval,
+      write: writeStdin,
+      onAwaitingUser: (waiting) => execution.awaitingUser(waiting),
+    });
+    // Streaming input keeps Claude alive for more turns; closing stdin after the terminal
+    // result lets it exit normally.
+    const endStdin = () => {
+      if (stdin && !stdin.destroyed && !stdin.writableEnded) stdin.end();
+    };
+    const parser = createClaudeStreamParser(execution.handlers, {
+      approvals: hostApprovals ? "interactive" : "none",
+      ...(hostApprovals ? { onControl: bridge.handle, onResult: endStdin } : {}),
+    });
+    let received = false;
+    const runner = execution.run(
       {
         executable: spawnSpec.executable,
         args: spawnSpec.args,
         cwd: request.workspaceRoot,
-        timeoutMs: ANTHROPIC_TIMEOUT_MS,
-        ...(attemptRequest.route.reasoning
-          ? { env: { ...process.env, CLAUDE_CODE_EFFORT_LEVEL: attemptRequest.route.reasoning } }
+        ...(request.route.reasoning
+          ? { env: { ...process.env, CLAUDE_CODE_EFFORT_LEVEL: request.route.reasoning } }
+          : {}),
+        ...(hostApprovals
+          ? { stdinData: buildClaudeStdinPrompt(attemptRequest), keepStdinOpen: true }
           : {}),
       },
       {
         onStdout: (chunk) => {
-          if (mode !== "stream-json" || streamingFailed) return;
-          lineBuf += chunk;
-          const lines = lineBuf.split("\n");
-          lineBuf = lines.pop() ?? "";
-          for (const line of lines) {
-            try {
-              const event = JSON.parse(line);
-              if (
-                event.type === "system" &&
-                event.subtype === "init" &&
-                typeof event.session_id === "string"
-              )
-                handlers.onNativeSession?.({ source: "claude", sessionId: event.session_id });
-            } catch {
-              /* Malformed stream lines are handled by the existing parser. */
-            }
-            parseTools(line);
-            const delta = tryParseStreamJsonDelta(line);
-            if (delta === false) {
-              streamingFailed = true;
-              return;
-            }
-            if (delta) {
-              accumulatedText += delta;
-              handlers.onAssistantDelta?.(delta);
-            }
-          }
+          if (canceled || finished || mode !== "stream-json") return;
+          received = true;
+          parser.push(chunk);
+          if (parser.error) queueMicrotask(() => currentCancel?.());
         },
       },
+      runCommandImpl,
     );
-
-    currentCancel = runner.cancel;
+    stdin = (runner as { child?: { stdin?: Writable | null } }).child?.stdin;
+    currentCancel = () => {
+      bridge.dispose();
+      runner.cancel();
+    };
     control.track(runner.stopped ?? runner.result.then(() => undefined));
-    runner.result
-      .then((result) => {
-        if (canceled || result.status === "canceled") {
-          control.finish();
+    void runner.result
+      .then(async (result) => {
+        // The process is gone: withdraw any visible approval and never write to its stdin.
+        bridge.dispose();
+        if (canceled || finished) return;
+        if (mode === "stream-json") {
+          if (!received) parser.push(result.stdout);
+          parser.flush();
+        }
+        if (parser.error && result.status !== "timeout") {
+          finish();
+          handlers.onError(parser.error, result.stderr, {
+            kind: "protocol",
+            message: parser.error,
+            retryable: false,
+          });
+          return;
+        }
+        if (result.status === "canceled") {
+          finish();
+          return;
+        }
+        if (
+          allowResume &&
+          nativeContinuation(request, "claude") &&
+          !parser.productive &&
+          isMissingNativeSession(result, parser.failure)
+        ) {
+          allowResume = false;
+          handlers.onProgress?.({
+            id: "claude-session-recovery",
+            source: "stderr",
+            text: "Saved Claude session is unavailable; recovering this chat into a fresh session.",
+          });
+          await runner.stopped;
+          if (!canceled) runAttempt(mode);
           return;
         }
         if (result.status !== "completed" || result.exitCode !== 0) {
-          const diagnostic = formatClaudeCommandDiagnostic(
-            spawnSpec.executable,
-            spawnSpec.args,
-            request.prompt,
-          );
-          if (mode === "stream-json" && isClaudeStreamJsonRequiresVerboseError(result)) {
+          if (
+            mode === "stream-json" &&
+            parser.records === 0 &&
+            isClaudeStreamJsonRequiresVerboseError(result)
+          ) {
             handlers.onProgress?.({
-              id: "anthropic-claude-command-retry",
+              id: "claude-output-retry",
               source: "stderr",
-              text: `${diagnostic}\nClaude Code rejected stream-json args; retrying once with plain text output.`,
+              text: `${formatClaudeCommandDiagnostic(spawnSpec.executable, spawnSpec.args, promptArg)}\nClaude Code rejected stream-json args; retrying once with plain text output.`,
             });
-            runAttempt("plain-text");
+            await runner.stopped;
+            if (!canceled) runAttempt("plain-text");
             return;
           }
-
-          const requestedEffort = mapReasoningToEffort(attemptRequest.route.reasoning ?? null);
-          if (requestedEffort && isClaudeInvalidEffortError(result)) {
-            disableClaudeEffortForSession(
-              attemptRequest.route.modelId,
-              requestedEffort,
-              attemptRequest.modelDescriptor,
-            );
-          }
-          const message =
-            requestedEffort && isClaudeInvalidEffortError(result)
-              ? `${result.userMessage || result.stderr}\nClaude Code rejected effort "${requestedEffort}". Refresh models and choose a supported effort; Ubume did not retry at a lower level.`
-              : result.userMessage || result.stderr || "Claude Code execution failed.";
-          control.finish();
-          handlers.onError(message, diagnostic);
+          const effort = mapReasoningToEffort(request.route.reasoning);
+          const rejected = effort && isClaudeInvalidEffortError(result);
+          if (rejected)
+            disableClaudeEffortForSession(request.route.modelId, effort, request.modelDescriptor);
+          const failure = execution.failure(result);
+          const message = rejected
+            ? `${result.userMessage || result.stderr}\nClaude Code rejected effort "${effort}". Refresh models and choose a supported effort; Ubume did not retry at a lower level.`
+            : (failure?.message ?? result.userMessage);
+          finish();
+          handlers.onError(
+            message,
+            formatClaudeCommandDiagnostic(spawnSpec.executable, spawnSpec.args, promptArg),
+            failure,
+          );
           return;
         }
-        let finalText: string;
-        if (mode === "stream-json" && !streamingFailed && accumulatedText !== "") {
-          finalText = accumulatedText;
-        } else {
-          finalText = sanitizeTerminalOutput(result.stdout).trim();
-          if (finalText && (mode !== "stream-json" || accumulatedText === "")) {
-            handlers.onAssistantDelta?.(finalText);
-          }
+        if (parser.failure) {
+          const message = parser.failure;
+          finish();
+          handlers.onError(message, result.stderr, classifyProviderFailure(message));
+          return;
         }
-        control.finish();
-        handlers.onFinalAnswerObserved?.(finalText);
-        handlers.onResponse(finalText);
+        const text =
+          mode === "stream-json"
+            ? parser.finalText()
+            : sanitizeTerminalOutput(result.stdout).trim();
+        if (mode === "plain-text") handlers.onAssistantDelta?.(text);
+        if (parser.sessionId)
+          handlers.onNativeSession?.(
+            completedNativeSession(request, "claude", parser.sessionId, text),
+          );
+        finish();
+        handlers.onFinalAnswerObserved?.(text);
+        handlers.onResponse(text);
       })
       .catch((error) => {
-        control.finish();
-        if (canceled) return;
+        if (finished || canceled) return;
+        finish();
         const message = errorMessage(error, "Claude Code execution failed.");
         handlers.onError(message, undefined, failureFromError(error, message));
       });
   };
-
-  runAttempt("stream-json");
-
+  try {
+    runAttempt("stream-json");
+  } catch (error) {
+    finish();
+    handlers.onError(errorMessage(error));
+  }
   return () => {
+    if (finished || canceled) return;
     canceled = true;
     currentCancel?.();
-    control.finish();
+    finish();
   };
 }
 

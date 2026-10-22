@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Writable } from "node:stream";
 import { describe, test } from "node:test";
 import { releaseFrameLock, resetFrameLockForResize, wrapStdoutWithFrameLock } from "./frameLock.js";
 
@@ -39,7 +40,7 @@ describe("frameLock", () => {
     assert.equal(writes[0], "line 1\x1b[K\nline 2\x1b[K");
   });
 
-  test("frame lock drops concurrent writes", () => {
+  test("frame lock preserves reentrant writes", () => {
     let writeCount = 0;
     const stdout = {
       write: (_chunk: string) => {
@@ -56,7 +57,7 @@ describe("frameLock", () => {
 
     wrapped.write("initial frame");
 
-    assert.equal(writeCount, 1); // Nested write should have been dropped by the lock
+    assert.equal(writeCount, 2);
   });
 
   test("terminal resize invalidates identical-frame deduplication", () => {
@@ -94,4 +95,40 @@ test("releasing and rewrapping frame lock restores the writer without nested wra
   stdout.write("same");
   releaseFrameLock(stdout);
   assert.deepEqual(writes, ["same\x1b[K", "same\x1b[K", "same"]);
+});
+
+test("frame lock preserves ordered empty-write, deduplicated-write and encoding callbacks", async () => {
+  const chunks: string[] = [];
+  const completed: string[] = [];
+  const stdout = new Writable({
+    write(chunk, _encoding, callback) {
+      setTimeout(() => {
+        chunks.push(chunk.toString());
+        callback();
+      }, 5);
+    },
+  });
+  wrapStdoutWithFrameLock({ stdout, env: {} });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      stdout.write("fixture", "utf8", (error) => {
+        if (error) reject(error);
+        completed.push("first");
+      });
+      stdout.write("fixture", (error) => {
+        if (error) reject(error);
+        completed.push("duplicate");
+      });
+      stdout.write("", (error) => {
+        if (error) reject(error);
+        completed.push("barrier");
+        resolve();
+      });
+    });
+    assert.deepEqual(completed, ["first", "duplicate", "barrier"]);
+    assert.equal(chunks.filter(Boolean).join(""), "fixture\x1b[K");
+  } finally {
+    releaseFrameLock(stdout);
+    stdout.destroy();
+  }
 });

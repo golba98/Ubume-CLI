@@ -5,6 +5,9 @@
  */
 
 export type ProviderFailureKind =
+  | "timeout"
+  | "permission"
+  | "protocol"
   | "model-unavailable"
   | "model-configuration"
   | "authentication"
@@ -21,6 +24,8 @@ export interface ProviderFailure {
   message: string;
   retryable: boolean;
   retryAfterMs?: number;
+  elapsedMs?: number;
+  timeoutPhase?: "task";
 }
 
 /** Narrows failures that can be used as model rejection/configuration evidence. */
@@ -152,4 +157,16 @@ export function retryAfterDelay(value: string | null, now = Date.now()): number 
   const seconds = Number(value);
   const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now;
   return Number.isFinite(delay) && delay > 0 ? delay : undefined;
+}
+
+/**
+ * True when a CLI rejected `flag` as an unknown option (Go flag/cobra, commander, argparse,
+ * clap wording). Used only to retry once without an optional permission flag on older CLIs.
+ */
+export function isUnknownCliOption(stderr: string, flag: string): boolean {
+  const name = flag.replace(/^-+/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:unknown (?:flag|option)|flag provided but not defined|unrecognized arguments?|unexpected argument)[^\\n]*-${name}\\b`,
+    "i",
+  ).test(stderr);
 }
