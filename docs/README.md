@@ -14,7 +14,7 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
 |---|---|
 | [`architecture/`](architecture/) | How the application is structured and why: subsystem boundaries, data flow, invariants, and the per-file source catalog. |
 | [`development/`](development/) | Working on the repository: setup, running and building, testing, the `scripts/` utilities, root files and cleanup. |
-| [`providers/`](providers/) | Provider-specific integrations that need more than the main README: Local browser tools, Codexa Native. |
+| [`providers/`](providers/) | Provider-specific integrations that need more than the main README: provider setup and compatibility, Local browser tools, Codexa Native. |
 | [`terminal/`](terminal/) | Terminal behavior: the interactive workbench, headless commands, responsive pickers, and reference recordings. |
 | [`releasing/`](releasing/) | Preparing, validating and publishing a release. |
 | `_reports/` | Local agent reports. Ignored by Git; see [REPORTING.md](REPORTING.md). |
@@ -46,6 +46,8 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
 
 **Providers**
 
+- [Provider setup and compatibility](providers/provider-setup.md): the direct Anthropic API
+  route, Google's Antigravity (`agy`) adapter, and Mistral Vibe model discovery.
 - [Local browser computer use](providers/local-browser.md): browser tools for Local models
   through the DeepSeek Harness: setup, tools, permissions and lifecycle.
 - [Codexa Native](providers/codexa-native.md): the development-channel local PyTorch model
