@@ -141,7 +141,7 @@ function buildStableFrozenTurnRows(
     run?.toolActivities
       .map(
         (tool) =>
-          `${tool.id}:${tool.status}:${tool.startedAt}:${tool.completedAt ?? ""}:${textCacheToken(tool.command)}:${textCacheToken(tool.summary)}`,
+          `${tool.id}:${tool.authorization ?? ""}:${tool.status}:${tool.startedAt}:${tool.completedAt ?? ""}:${textCacheToken(tool.command)}:${textCacheToken(tool.summary)}`,
       )
       .join("|"),
     run?.responseSegments
@@ -273,6 +273,7 @@ function buildStableActiveTurnGroups(
                 verbose,
                 event.tool.id,
                 event.tool.status,
+                event.tool.authorization ?? "",
                 event.tool.startedAt,
                 event.tool.completedAt ?? "",
                 textCacheToken(event.tool.command),

@@ -8,7 +8,7 @@
  * `shouldShowRawOutputFallback` / `getVisibleRawOutputLines` are retained
  * stubs that currently always disable the raw-output fallback.
  */
-import type { RunEvent, RunProgressBlock } from "../../session/types.js";
+import type { RunEvent, RunProgressBlock, RunToolActivity } from "../../session/types.js";
 import { formatTerminalAnswerInline } from "../render/terminalAnswerFormat.js";
 
 const MAX_VISIBLE_ACTIVE_ACTIVITY = 6;
@@ -183,4 +183,27 @@ export function getFriendlyActionLabel(normalizedCommand: string): string | null
   if (/^(?:tsc\b|bun\s+run\s+typecheck\b)/.test(cmd)) return "Run typecheck";
 
   return null;
+}
+
+/** Native announcements and host consent must not be presented as confirmed execution. */
+export function toolActivityLabel(tool: RunToolActivity, command: string): string {
+  const label = getFriendlyActionLabel(command) ?? "";
+  const state = tool.authorization;
+  const suffix =
+    state === "denied"
+      ? "Permission denied"
+      : state === "cancelled"
+        ? "Cancelled"
+        : tool.status !== "running"
+          ? ""
+          : state === "pending"
+            ? "Awaiting permission"
+            : state === "approved"
+              ? "Approved; waiting for provider"
+              : state === "requested"
+                ? "Tool requested"
+                : state === "executing"
+                  ? "Executing tool"
+                  : "";
+  return suffix ? `${label} · ${suffix}` : label;
 }

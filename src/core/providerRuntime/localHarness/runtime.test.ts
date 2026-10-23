@@ -1394,6 +1394,64 @@ describe("Harness event projection and policy", () => {
     );
   });
 
+  test("unknown or mismatched Local call IDs cannot request approval", async () => {
+    let asked = 0;
+    const fixture = activeProcess({
+      onToolApproval: async () => {
+        asked++;
+        return "allow-once";
+      },
+    });
+    const bridge = (
+      fixture.process as unknown as {
+        onBridgeRequest(method: string, params: Record<string, unknown>): Promise<unknown>;
+      }
+    ).onBridgeRequest.bind(fixture.process);
+    assert.deepEqual(
+      await bridge("approval/request", { sessionId: "session-1", callId: "missing", tool: "bash" }),
+      { outcome: "rejected" },
+    );
+    await bridge("tool/policy", {
+      sessionId: "session-1",
+      callId: "known",
+      tool: "bash",
+      arguments: { command: "printf test" },
+    });
+    assert.deepEqual(
+      await bridge("approval/request", { sessionId: "session-1", callId: "known", tool: "write" }),
+      { outcome: "rejected" },
+    );
+    assert.equal(asked, 0);
+  });
+
+  test("a cancelled Local tool request cannot later receive an approval", async () => {
+    let approve!: (value: "allow-once") => void;
+    const fixture = activeProcess({
+      onToolApproval: () =>
+        new Promise((resolve) => {
+          approve = resolve;
+        }),
+    });
+    const internals = fixture.process as unknown as {
+      active: { settled: boolean };
+      onBridgeRequest(method: string, params: Record<string, unknown>): Promise<unknown>;
+    };
+    await internals.onBridgeRequest("tool/policy", {
+      sessionId: "session-1",
+      callId: "known",
+      tool: "bash",
+      arguments: { command: "printf test" },
+    });
+    const pending = internals.onBridgeRequest("approval/request", {
+      sessionId: "session-1",
+      callId: "known",
+      tool: "bash",
+    });
+    internals.active.settled = true;
+    approve("allow-once");
+    assert.deepEqual(await pending, { outcome: "cancelled" });
+  });
+
   test("session scratch paths pass the workspace guard", async () => {
     const fixture = activeProcess();
     const bridge = (

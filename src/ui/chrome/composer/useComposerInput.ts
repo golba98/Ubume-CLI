@@ -98,6 +98,9 @@ const COMPOSER_RAW_SIGNALS = {
 } as const;
 
 export function useComposerInput({
+  inputEnabled = true,
+  inputBlocked,
+  permissionPending = false,
   layout,
   width = layout.cols,
   uiState,
@@ -170,7 +173,11 @@ export function useComposerInput({
   // provider because their merged tokens are supplied there.
   const theme = themeName === "custom" ? inheritedTheme : (THEMES[themeName] ?? inheritedTheme);
   const { mode: layoutMode } = layout;
-  const { isFocused } = useFocus({ id: FOCUS_IDS.composer, autoFocus: true });
+  const { isFocused } = useFocus({
+    id: FOCUS_IDS.composer,
+    autoFocus: inputEnabled,
+    isActive: inputEnabled,
+  });
   useEffect(() => {
     if (isFocused) benchTrace.startupMarkOnce("composer-focused");
   }, [isFocused]);
@@ -212,7 +219,7 @@ export function useComposerInput({
   const [runElapsedSeconds, setRunElapsedSeconds] = useState(0);
 
   useEffect(() => {
-    if (uiState.kind !== "THINKING") {
+    if (permissionPending || uiState.kind !== "THINKING") {
       setRunElapsedSeconds(0);
       return;
     }
@@ -221,7 +228,7 @@ export function useComposerInput({
       setRunElapsedSeconds((s) => s + 1);
     }, 1_000);
     return () => clearInterval(interval);
-  }, [uiState.kind]);
+  }, [uiState.kind, permissionPending]);
 
   const allowCommands = persona !== "answer";
   const allowHistory = persona !== "answer";
@@ -342,7 +349,14 @@ export function useComposerInput({
   // through a ref. A burst flushed by its settle timer therefore uses the latest
   // props, not the ones from the render that buffered the first chunk.
   const pasteSinkRef = useRef<PasteAssemblerSink>({ text: insertText, paste: insertPaste });
-  pasteSinkRef.current = { text: insertText, paste: insertPaste };
+  pasteSinkRef.current = {
+    text: (text) => {
+      if (inputEnabled && !inputBlocked?.current && isFocused) insertText(text);
+    },
+    paste: (text) => {
+      if (inputEnabled && !inputBlocked?.current && isFocused) insertPaste(text);
+    },
+  };
   const pasteAssemblerRef = useRef<PasteAssembler | null>(null);
   pasteAssemblerRef.current ??= new PasteAssembler({
     text: (text) => pasteSinkRef.current.text(text),
@@ -354,6 +368,7 @@ export function useComposerInput({
 
   useInput(
     (input, key) => {
+      if (!inputEnabled || inputBlocked?.current) return;
       const action = composerKeymap(input, key, {
         mouseEvent: rawSignals.isActive("mouse"),
         backtabEvent: rawSignals.isActive("backtab"),
@@ -604,7 +619,7 @@ export function useComposerInput({
           return;
       }
     },
-    { isActive: isFocused },
+    { isActive: isFocused && inputEnabled },
   );
 
   const tokenDisplay = getTokenBarDisplay(tokensUsed, modelSpec);

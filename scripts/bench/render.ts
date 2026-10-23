@@ -1,6 +1,6 @@
 /**
  * Offline rendering benchmark: repeats the existing provider-free markdown probe
- * (`scripts/benchmark-terminal-markdown.ts`) in fresh processes and aggregates
+ * (`scripts/bench/markdown-render-probe.ts`) in fresh processes and aggregates
  * its per-run medians, so JIT and cache warmup are not shared across samples.
  */
 import { join } from "node:path";
@@ -34,7 +34,7 @@ const probes: ProbeResult[] = [];
 try {
   for (let i = 0; i < runs; i += 1) {
     const child = Bun.spawnSync(
-      [process.execPath, join(REPO_ROOT, "scripts/benchmark-terminal-markdown.ts")],
+      [process.execPath, join(REPO_ROOT, "scripts/bench/markdown-render-probe.ts")],
       { cwd: REPO_ROOT, env: isolated.env, stdout: "pipe", stderr: "inherit" },
     );
     if (child.exitCode !== 0) throw new Error("markdown probe failed");
@@ -84,7 +84,7 @@ const report: BenchReport = {
   createdAt: new Date().toISOString(),
   environment: environmentInfo(),
   method:
-    `${runs} fresh runs of scripts/benchmark-terminal-markdown.ts (80 columns; each run's ` +
+    `${runs} fresh runs of scripts/bench/markdown-render-probe.ts (80 columns; each run's ` +
     "medians are one sample here). Measures markdown parse + row layout and paced streaming " +
     "response rows; excludes Ink reconciliation and terminal writes.",
   metrics,

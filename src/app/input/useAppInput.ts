@@ -47,7 +47,12 @@ export function useAppInput(context: UseAppInputContext) {
     const submitTiming = createPromptRunTiming();
     perf.mark("submit");
     const ctx = latestContext.current;
-    if (ctx.submissionRef.current || ctx.recoveryRef.current) {
+    if (
+      ctx.toolApprovalResolverRef?.current ||
+      ctx.screenRef?.current === "tool-approval" ||
+      ctx.submissionRef.current ||
+      ctx.recoveryRef.current
+    ) {
       return;
     }
     const value = sanitizeTerminalInput(ctx.getSessionState().inputValue).trim();

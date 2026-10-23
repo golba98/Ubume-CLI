@@ -44,6 +44,8 @@ import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
 import type { PromptRunLifecycle } from "../run/promptRunPrep.js";
 
 export interface UseAppInputContext {
+  screenRef?: React.RefObject<Screen>;
+  toolApprovalResolverRef?: React.RefObject<unknown>;
   // Session and run guards
   activeConversationRef: React.RefObject<ConversationRecord | null>;
   submissionRef: React.RefObject<boolean>;

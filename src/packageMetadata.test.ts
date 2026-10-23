@@ -15,6 +15,9 @@ test("published package exposes only the ubume binary", () => {
 });
 
 test("local dev scripts install and run dev bin separately", () => {
-  assert.equal(packageJson.scripts?.["install:dev-bin"], "node scripts/install-local-dev-bin.mjs");
-  assert.equal(packageJson.scripts?.["dev:run"], "node scripts/run-local-dev.mjs");
+  assert.equal(
+    packageJson.scripts?.["install:dev-bin"],
+    "node scripts/development/install-dev-shims.mjs",
+  );
+  assert.equal(packageJson.scripts?.["dev:run"], "node scripts/development/run-local-dev.mjs");
 });

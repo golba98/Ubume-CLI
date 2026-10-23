@@ -7,18 +7,18 @@ spec = importlib.util.spec_from_file_location('terminal', REPO/'scripts/pty-term
 terminal = importlib.util.module_from_spec(spec);spec.loader.exec_module(terminal)
 SIZES=[(100,22),(120,30),(160,40),(200,50),(120,30),(80,24),(60,20),(100,22)]
 
-def seed(sandbox, turns):
+def seed(sandbox, turns, lines=20):
  root=sandbox.root/'data/chats'/hashlib.sha256(str(sandbox.root/'project').encode()).hexdigest()[:16]
  directory=root/'conversations/chat_resize';directory.mkdir(parents=True)
  (root/'workspace.json').write_text(json.dumps({'version':1,'workspaceRoot':str(sandbox.root/'project')}))
  messages=[]
- for i in range(turns):messages.extend([{'role':'user','content':f'HISTORY_PROMPT_{i:04}'},{'role':'assistant','content':f'HISTORY_ANSWER_{i:04}\n\n'+ ('Unchanged history **bold** `code` 雪.\n'*20)}])
+ for i in range(turns):messages.extend([{'role':'user','content':f'HISTORY_PROMPT_{i:04}'},{'role':'assistant','content':f'HISTORY_ANSWER_{i:04}\n\n'+ ('Unchanged history **bold** `code` 雪.\n'*lines)}])
  (directory/'snapshot.json').write_text(json.dumps({'version':2,'metadata':{'version':1,'id':'chat_resize','title':'RESIZE_HISTORY','workspaceRoot':str(sandbox.root/'project'),'createdAt':'2026-10-21T00:00:00Z','updatedAt':'2026-10-21T00:00:00Z','providerId':'openai','modelId':'gpt-5.4','backendKind':'codex-cli-auth','messageCount':len(messages)},'messages':messages}))
 
 class Driver:
  def __init__(self,sandbox,repo):
   self.session=Session(sandbox,['bun',str(repo/'scripts/bench/fixtures/resizeApp.tsx')],rows=22,columns=100)
-  self.dimensions=(100,22);self.screen=terminal.Screen(22,100);self.offset=0;self.decoder=codecs.getincrementaldecoder('utf8')('replace');self.frames=[];self.parse_ms=0
+  self.composer_marker=None;self.dimensions=(100,22);self.screen=terminal.Screen(22,100);self.offset=0;self.decoder=codecs.getincrementaldecoder('utf8')('replace');self.frames=[];self.parse_ms=0
  def pump(self,seconds=.002):
   self.session.pump(seconds)
   chunk=self.session.output[self.offset:];self.offset=len(self.session.output)
@@ -35,30 +35,34 @@ class Driver:
  def command(self,value):
   self.session.command(value,settle=0);self.wait(lambda: bool(self.session.output), 'command')
  def resize(self,cols,rows,overlay=False):
-  self.pump();unchanged=self.dimensions==(cols,rows);self.dimensions=(cols,rows);self.screen.resize(rows,cols)
+  self.pump();same_columns=self.dimensions[0]==cols;unchanged=self.dimensions==(cols,rows);self.dimensions=(cols,rows);self.screen.resize(rows,cols)
   start=time.perf_counter_ns();self.session.resize(rows,cols)
   first=None; observed=len(self.session.output)
   def ready():
    nonlocal first, observed
-   if len(self.session.output)==observed and not unchanged:return False
+   if len(self.session.output)==observed and not unchanged and not same_columns:return False
+   if first is None and len(self.session.output)>observed:first=(self.session.monotonic_chunks[-1][0]-start)/1e6
    observed=len(self.session.output)
-   if first is None:first=(self.session.monotonic_chunks[-1][0]-start)/1e6
    if cols<8 or rows<3:return 'Resiz' in self.text()
    # A complete newly drawn composer/overlay edge; cropped old edges lack a corner.
-   edges=[line for line in self.screen.lines() if re.search(r'[╭╰┌└].*[╮╯┐┘]',line)]
+   lines=self.screen.lines()
+   edges=[line for line in lines if re.search(r'[╭╰┌└].*[╮╯┐┘]',line)]
+   if self.composer_marker and not overlay:
+    # Historical prompt cards are not evidence that the editable composer landed.
+    edges=[lines[i+1] for i,line in enumerate(lines[:-1]) if self.composer_marker in line and re.search(r'[╰└].*[╯┘]',lines[i+1])]
    if overlay:
     shell=cols-1;content=shell-min(12,round(max(0,shell-99)*.08))
     edge_end=content+(int((cols-content+1)//2) if shell>content else 0)
     return any(len(line.rstrip())==edge_end for line in edges)
    expected=cols
-   return any(len(line.rstrip())==expected for line in edges)
+   return any(len(line.rstrip()) in ({expected,expected-1} if same_columns else {expected}) for line in edges)
   self.wait(ready,f'resize {cols}x{rows} committed',30)
   elapsed=(time.perf_counter_ns()-start)/1e6
   self.frames.append({'at':start/1e9-self.session.start,'cols':cols,'rows':rows,'latencyMs':elapsed,'firstOutputMs':first,'lines':self.screen.lines()})
   return elapsed
 
-def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
- values=[];input_ms=[];during_input_ms=[];runs=[]
+def run(repo,scenario,iterations,cycles,output,history_turns,functional=False,history_lines=20):
+ values=[];input_ms=[];during_input_ms=[];runs=[];baseline_errors=[]
  for iteration in range(iterations):
   sandbox=Sandbox(fakes={'resize-fixture':(REPO/'scripts/bench/resize-producer.cjs').read_text()})
   trace=sandbox.root/'resize.jsonl';manifest=sandbox.root/'manifest.jsonl'
@@ -67,17 +71,19 @@ def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
   try:
    d.session.wait_ready();d.pump()
    if scenario in ('history','history-stream','resume'):
-    seed(sandbox,history_turns)
+    seed(sandbox,history_turns,history_lines)
     d.command('/resume chat_resize');d.wait(lambda:f'HISTORY_ANSWER_{history_turns-1:04}'.encode() in d.session.output,'history restored',60)
     d.session.wait_ready();d.pump()
-   if scenario in ('stream','tools','large','approval','history-stream','preferences-stream','resume-stream'):
+   if scenario in ('stream','tools','large','approval','history-stream','preferences-stream','code'):
     d.command('go');d.wait(lambda:manifest.exists(),'provider started')
     if scenario=='approval':d.wait(lambda:'RESIZE_APPROVAL' in d.text() or 'fixture safe operation' in d.text(),'approval visible')
-   overlay=scenario in ('resume','preferences','preferences-stream','resume-stream')
+   overlay=scenario in ('resume','preferences','preferences-stream')
    if overlay:
-    d.command('/resume' if scenario in ('resume','resume-stream') else '/preferences');d.wait(lambda:d.screen.normal_buffer is not None,'overlay opened')
+    d.command('/resume' if scenario=='resume' else '/preferences');d.wait(lambda:d.screen.normal_buffer is not None,'overlay opened')
    if scenario=='suggestions':d.session.send(b'/pre',0);d.wait(lambda:'preferences' in d.text().lower(),'suggestions visible')
-   if not overlay and scenario not in ('approval','suggestions'):d.session.send(b'RESIZE_DRAFT',0)
+   if not overlay and scenario not in ('approval','suggestions'):
+    d.session.send(b'RESIZE_DRAFT',0);d.composer_marker='RESIZE_DRAFT' if functional else None
+    d.wait(lambda:'RESIZE_DRAFT' in d.text(),'editable draft visible')
    resize_start_ns=time.monotonic_ns()
    for cycle in range(cycles):
     for cols,rows in SIZES[1:]:
@@ -86,13 +92,15 @@ def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
       mark=len(d.session.output);start=time.perf_counter_ns();d.session.send(b'LIVE_INPUT',0)
       d.wait(lambda:b'LIVE_INPUT' in d.session.output[mark:],'input echo during resize and execution')
       during_input_ms.append((time.perf_counter_ns()-start)/1e6)
+   if functional:
+    for cols,rows in [(100,40),(100,10),(100,22)]:d.resize(cols,rows,overlay or scenario=='approval')
    replay_mark=len(d.session.output)
    # True burst: obsolete dimensions must not reappear after the final size.
    for cols,rows in SIZES:d.session.resize(rows,cols)
    d.resize(100,22,overlay or scenario=='approval')
    if overlay:d.session.send(b'\x1b',0);d.wait(lambda:d.screen.normal_buffer is None,'overlay canceled')
    if scenario=='approval':d.session.send(b'\r',0)
-   if scenario in ('stream','tools','large','approval','history-stream','preferences-stream','resume-stream'):
+   if scenario in ('stream','tools','large','approval','history-stream','preferences-stream','code'):
     d.wait(lambda:'RESIZE_FINAL_COMPLETE' in d.text(),'provider completes',60)
     expected=[json.loads(line) for line in manifest.read_text().splitlines()]
     snapshots=list((sandbox.root/'data').rglob('snapshot.json'))
@@ -112,13 +120,17 @@ def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
     d.wait(lambda:trace.exists(),'trace available');d.pump(.15)
     records=[json.loads(line) for line in trace.read_text().splitlines()]
     received=[record['seq'] for record in records if record['stage']=='providerEvent']
-    if received:assert received==[event['seq'] for event in expected],'provider event loss/duplication'
+    assert received==[event['seq'] for event in expected],'provider event loss/duplication'
     run_events=snapshot.get('session',{}).get('events',[])
     completed=[e for e in run_events if e.get('type')=='run'][-1]
     assert completed['status']=='completed','run interrupted'
     assert len(list((sandbox.root/'project').glob('fixture-file-*.txt')))==len([event for event in expected if event['kind']=='tool' and event['tool']['status']=='completed']), 'file events did not complete'
     expected_tools=[e['tool']['id'] for e in expected if e['kind']=='tool' and e['tool']['status']=='completed']
     assert [e['id'] for e in completed.get('toolActivities',[]) if e['status']=='completed']==expected_tools,'tool events differ'
+    saved_tools={event['id']:event for event in completed.get('toolActivities',[])}
+    for event in expected:
+     if event['kind']=='tool' and event['tool']['status']=='completed' and 'output' in event['tool']:
+      assert saved_tools[event['tool']['id']].get('output')==event['tool']['output'],'large shell output differs after resizing'
     if scenario=='approval':assert (sandbox.root/'decisions').read_text().splitlines()==['allow-once'],'approval was lost/duplicated'
    if not overlay:
     mark=len(d.session.output);start=time.perf_counter_ns();d.session.send(b'INPUT_PROBE',0)
@@ -133,9 +145,15 @@ def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
     def historical_replay():
      data=d.session.output[replay_mark:];clear=data.rfind(b'\x1b[3J')
      return data[clear:] if clear>=0 else b''
-    d.wait(lambda: b'HISTORY_ANSWER_0000' in historical_replay() and f'HISTORY_ANSWER_{history_turns-1:04}'.encode() in historical_replay(), 'complete historical reflow published',60)
+    try:d.wait(lambda: b'HISTORY_ANSWER_0000' in historical_replay() and f'HISTORY_ANSWER_{history_turns-1:04}'.encode() in historical_replay(), 'complete historical reflow published',60)
+    except AssertionError:
+     if repo==REPO:raise
+     baseline_errors.append({'iteration':iteration,'error':'baseline did not publish a complete post-clear historical replay'})
     replay=historical_replay()
-    assert all(replay.count(f'HISTORY_ANSWER_{i:04}'.encode())==1 for i in range(history_turns)), 'historical reflow lost/duplicated a turn'
+    bad=[{'turn':i,'count':replay.count(f'HISTORY_ANSWER_{i:04}'.encode())} for i in range(history_turns) if replay.count(f'HISTORY_ANSWER_{i:04}'.encode())!=1]
+    if bad:
+     if repo==REPO:raise AssertionError('historical reflow lost/duplicated a turn: '+str(bad))
+     baseline_errors.append({'iteration':iteration,'error':'baseline historical display mismatch','counts':bad})
    recording=[{"version":2,"width":100,"height":22,"timestamp":int(time.time()),"title":f"Ubume resize {scenario}"}]
    for index,(at,offset) in enumerate(d.session.monotonic_chunks):
     end=d.session.monotonic_chunks[index+1][1] if index+1<len(d.session.monotonic_chunks) else len(d.session.output)
@@ -149,6 +167,16 @@ def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
    runs.append({'iteration':iteration,'resizeStartNs':str(resize_start_ns),'frames':d.frames,'trace':records,'vtParsingMs':d.parse_ms})
    sandbox.assert_spawned_only(sandbox.fakes.values())
    print(f'PASS {scenario} run {iteration+1}: {len(d.frames)} resize frames',flush=True)
+  except Exception as error:
+   output.mkdir(parents=True,exist_ok=True)
+   session=d.session
+   code=session.child.poll() if session else None
+   if session:
+    session.close();d.session=None
+    (output/f'{scenario}-{iteration+1}-failure.ansi').write_bytes(session.output)
+   if trace.exists():(output/f'{scenario}-{iteration+1}-failure.trace.jsonl').write_bytes(trace.read_bytes())
+   (output/f'{scenario}-{iteration+1}-failure.json').write_text(json.dumps({'error':str(error),'processExitBeforeCleanup':code,'frames':d.frames},ensure_ascii=False,indent=2))
+   raise
   finally:
    if d.session:d.session.close()
    sandbox.dispose()
@@ -168,12 +196,13 @@ def run(repo,scenario,iterations,cycles,output,history_turns,functional=False):
    if record['stage']=='writeComplete' and writes[generation]:flush.append(max(0,(int(record['monoNs'])-writes[generation].popleft())/1e6))
   samples=[record for record in run['trace'] if record['stage']=='sample' and record['generation']>0]
   if samples:cpu.append(sum(samples[-1]['cpu'].values())/1000-sum(samples[0]['cpu'].values())/1000)
- result={'appResizeMs':summarize(app) if app else None,'writeFlushMs':summarize(flush) if flush else None,'layoutMs':summarize(layout) if layout else None,'cpuMs':summarize(cpu) if cpu else None,'scenario':scenario,'repo':str(repo),'resizeMs':summarize(values),'inputMs':summarize(input_ms) if input_ms else None,'duringResizeInputMs':summarize(during_input_ms) if during_input_ms else None,'eventLoopDelayMs':summarize(delays) if delays else None,'peakRssBytes':max(rss) if rss else None,'inkRenderMs':summarize([record['durationMs'] for run in runs for record in run['trace'] if record['stage']=='inkOutput' and record.get('durationMs') is not None and record['generation']>0]) if any(record['stage']=='inkOutput' and record.get('durationMs') is not None and record['generation']>0 for run in runs for record in run['trace']) else None,'runs':runs}
+ result={'baselineCorrectnessErrors':baseline_errors,'appResizeMs':summarize(app) if app else None,'writeFlushMs':summarize(flush) if flush else None,'layoutMs':summarize(layout) if layout else None,'cpuMs':summarize(cpu) if cpu else None,'scenario':scenario,'repo':str(repo),'resizeMs':summarize(values),'inputMs':summarize(input_ms) if input_ms else None,'duringResizeInputMs':summarize(during_input_ms) if during_input_ms else None,'eventLoopDelayMs':summarize(delays) if delays else None,'peakRssBytes':max(rss) if rss else None,'inkRenderMs':summarize([record['durationMs'] for run in runs for record in run['trace'] if record['stage']=='inkOutput' and record.get('durationMs') is not None and record['generation']>0]) if any(record['stage']=='inkOutput' and record.get('durationMs') is not None and record['generation']>0 for run in runs for record in run['trace']) else None,'runs':runs}
  output.mkdir(parents=True,exist_ok=True);(output/f'{scenario}.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
  print(json.dumps({key:value for key,value in result.items() if key!='runs'}),flush=True)
  return result
 
 if __name__=='__main__':
- parser=argparse.ArgumentParser();parser.add_argument('--repo',type=pathlib.Path,default=REPO);parser.add_argument('--output',type=pathlib.Path,default=REPO/'docs/_reports/performance/resize-2026-10-22/after');parser.add_argument('--scenario',default='idle');parser.add_argument('--iterations',type=int,default=5);parser.add_argument('--cycles',type=int,default=3);parser.add_argument('--history-turns',type=int,default=200);parser.add_argument('--functional',action='store_true');parser.add_argument('--check-performance',action='store_true');args=parser.parse_args()
- result=run(args.repo,args.scenario,args.iterations,args.cycles,args.output,args.history_turns,args.functional)
+ parser=argparse.ArgumentParser();parser.add_argument('--repo',type=pathlib.Path,default=REPO);parser.add_argument('--output',type=pathlib.Path,default=REPO/'docs/_reports/performance/resize-2026-10-22/after');parser.add_argument('--scenario',default='idle');parser.add_argument('--iterations',type=int,default=5);parser.add_argument('--cycles',type=int,default=3);parser.add_argument('--history-turns',type=int,default=200);parser.add_argument('--history-lines',type=int,default=20);parser.add_argument('--functional',action='store_true');parser.add_argument('--check-performance',action='store_true');args=parser.parse_args()
+ result=run(args.repo,args.scenario,args.iterations,args.cycles,args.output,args.history_turns,args.functional,args.history_lines)
+ if result['baselineCorrectnessErrors']:raise SystemExit(1)
  if args.check_performance:assert result['resizeMs']['p95']<=100,'P95 resize exceeds 100ms'

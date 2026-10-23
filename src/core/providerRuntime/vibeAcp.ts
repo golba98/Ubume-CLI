@@ -22,8 +22,33 @@ import {
   isOutsideWorkspace,
 } from "./providerApprovalQueue.js";
 
-/** Vibe agents Ubume selects over ACP; `plan` runs stay on headless `-p`. */
+/** Vibe agents Ubume selects over ACP; plan and Read-only runs stay on headless `-p`. */
 export type VibeAcpMode = "accept-edits" | "smart-approve";
+
+/** One step of Vibe's todo tracker (the TUI's Alt+\ plan sidebar, ACP `plan` updates). */
+export interface VibePlanStep {
+  content: string;
+  status: string;
+}
+
+/** Normalizes todo entries from ACP `plan` updates or the headless `todo` tool input. */
+export function vibePlanSteps(entries: unknown): VibePlanStep[] {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) =>
+    isRecord(entry) && typeof entry.content === "string" && entry.content.trim()
+      ? entry.status === "cancelled"
+        ? []
+        : [{ content: entry.content.trim(), status: String(entry.status ?? "pending") }]
+      : [],
+  );
+}
+
+/** Renders todo steps as the checklist Ubume shows in progress and plan output. */
+export function formatVibePlanSteps(steps: readonly VibePlanStep[]): string {
+  return steps
+    .map((step) => `${step.status === "completed" ? "[x]" : "[ ]"} ${step.content}`)
+    .join("\n");
+}
 
 /**
  * Finds `vibe-acp` next to the resolved `vibe` executable (as installed by `uv tool`), either
@@ -63,6 +88,7 @@ interface AcpToolCall {
 interface AcpPermissionOption {
   optionId: string;
   kind: string;
+  name?: string;
 }
 
 interface AcpPermissionRequest {
@@ -84,6 +110,7 @@ function locationPaths(locations: unknown): string[] {
 export function toVibeApprovalRequest(
   toolCall: AcpToolCall,
   workspaceRoot: string,
+  permissionOptions: readonly AcpPermissionOption[] = [],
 ): ToolApprovalRequest {
   const input = isRecord(toolCall.rawInput) ? toolCall.rawInput : null;
   const kind =
@@ -106,6 +133,14 @@ export function toVibeApprovalRequest(
       : null;
   return {
     tool: commandTitle ?? title,
+    toolUseId: toolCall.toolCallId,
+    ...(input
+      ? {
+          details: JSON.stringify(
+            Object.fromEntries(Object.entries(input).filter(([key]) => key !== "command")),
+          ),
+        }
+      : {}),
     // Without the tool's input there is nothing exact to match, so the id keeps it unique.
     signature: input
       ? `vibe:${toolCall.kind ?? "other"}:${canonicalJson(input)}`
@@ -115,7 +150,22 @@ export function toVibeApprovalRequest(
     ...(command !== null && commandTitle === null && title !== command
       ? { description: title }
       : {}),
-    allowForRun: input !== null && !outsideWorkspace,
+    allowForRun: false,
+    actions:
+      new Set(permissionOptions.map((option) => option.optionId)).size !== permissionOptions.length
+        ? []
+        : permissionOptions
+            .filter((option) => option.kind === "allow_once" || option.kind === "reject_once")
+            .map((option) => ({
+              id: option.optionId,
+              label: option.name || (option.kind === "allow_once" ? "Allow once" : "Deny"),
+              decision: option.kind === "allow_once" ? ("allow-once" as const) : ("deny" as const),
+            })),
+    ...(permissionOptions.some(
+      (option) => option.kind !== "allow_once" && option.kind !== "reject_once",
+    )
+      ? { restriction: "Persistent or unsupported permission scopes are unavailable in Ubume." }
+      : {}),
     provider: "Mistral Vibe",
     workspace: workspaceRoot,
     kind,
@@ -239,12 +289,17 @@ export function createVibeAcpTurn(options: VibeAcpTurnOptions) {
 
   const approvals = createProviderApprovalQueue<AcpPermissionRequest>({
     onToolApproval: options.onToolApproval,
-    toApproval: (request) => toVibeApprovalRequest(request.toolCall, workspaceRoot),
-    respond: (request, outcome) => {
+    toApproval: (request) =>
+      toVibeApprovalRequest(request.toolCall, workspaceRoot, request.options),
+    respond: (request, outcome, action) => {
       openPermissions.delete(String(request.rpcId));
       writeLine({
         id: request.rpcId,
-        result: { outcome: vibePermissionOutcome(request.options, outcome === "allow") },
+        result: {
+          outcome: action
+            ? { outcome: "selected", optionId: action.id }
+            : vibePermissionOutcome(request.options, outcome === "allow"),
+        },
       });
     },
     onAwaitingUser: options.onAwaitingUser,
@@ -279,6 +334,7 @@ export function createVibeAcpTurn(options: VibeAcpTurnOptions) {
       id: call.toolCallId,
       command: toolLabel(call),
       status: "running",
+      authorization: call.status === "in_progress" ? "executing" : "requested",
       startedAt: call.startedAt,
     });
   };
@@ -307,13 +363,13 @@ export function createVibeAcpTurn(options: VibeAcpTurnOptions) {
       return;
     }
     if (kind === "plan" && Array.isArray(update.entries)) {
-      const lines = update.entries.flatMap((entry) =>
-        isRecord(entry) && typeof entry.content === "string"
-          ? [`${entry.status === "completed" ? "[x]" : "[ ]"} ${entry.content}`]
-          : [],
-      );
-      if (lines.length)
-        handlers.onProgress?.({ id: "vibe-acp-plan", source: "todo", text: lines.join("\n") });
+      const steps = vibePlanSteps(update.entries);
+      if (steps.length)
+        handlers.onProgress?.({
+          id: "vibe-acp-plan",
+          source: "todo",
+          text: formatVibePlanSteps(steps),
+        });
       return;
     }
     if ((kind === "tool_call" || kind === "tool_call_update") && update.toolCallId) {
@@ -359,7 +415,13 @@ export function createVibeAcpTurn(options: VibeAcpTurnOptions) {
     const permissionOptions = Array.isArray(params.options)
       ? params.options.flatMap((option) =>
           isRecord(option) && typeof option.optionId === "string" && typeof option.kind === "string"
-            ? [{ optionId: option.optionId, kind: option.kind }]
+            ? [
+                {
+                  optionId: option.optionId,
+                  kind: option.kind,
+                  ...(typeof option.name === "string" ? { name: option.name } : {}),
+                },
+              ]
             : [],
         )
       : [];

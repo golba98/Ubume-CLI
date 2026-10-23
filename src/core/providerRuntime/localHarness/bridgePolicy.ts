@@ -12,6 +12,7 @@ import {
   isDangerousShellCommand,
   isPathInsideAllowedRoots,
 } from "../../workspace/workspaceGuard.js";
+import { canonicalJson } from "../providerApprovalQueue.js";
 import type { ProviderChatRequest } from "../types.js";
 
 /** Treats malformed tool arguments as an empty record before policy inspection. */
@@ -89,7 +90,7 @@ export function decideToolPolicy(
       });
   }
   const ensureScratch = [command, ...paths].some(mentionsScratchDir);
-  const signature = `${tool}:${command || paths.join(",")}`;
+  const signature = `${tool}:${canonicalJson(args)}`;
   if (approvals.has(signature)) return result({ kind: "allow" }, ensureScratch);
   return result(
     request.runtime.policy.approvalPolicy === "on-request"

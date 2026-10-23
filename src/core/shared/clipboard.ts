@@ -1,6 +1,7 @@
 /**
- * Platform clipboard bridges for text and PNG images. Image reads validate PNG bytes and size,
- * clean up their temporary directory and reject when no supported bridge succeeds.
+ * Platform clipboard bridges for text and PNG images. Text copies fall back to the terminal's
+ * OSC 52 clipboard; image reads validate PNG bytes and size, clean up their temporary directory
+ * and reject when no supported bridge succeeds.
  */
 
 import { execFile } from "node:child_process";
@@ -15,22 +16,97 @@ function trySpawn(cmd: string, args: string[], text: string): Promise<boolean> {
     const proc = spawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"] });
     proc.on("error", () => resolve(false));
     proc.on("close", (code) => resolve(code === 0));
+    proc.stdin?.on("error", () => undefined);
     proc.stdin?.write(text);
     proc.stdin?.end();
   });
 }
 
-/** Tries platform text clipboard commands and returns whether a bridge exited successfully. */
-export async function copyToClipboard(text: string): Promise<boolean> {
-  const os = platform();
+export type ClipboardCopyMethod = "wl-copy" | "xclip" | "xsel" | "pbcopy" | "clip" | "osc52";
 
-  if (os === "win32") return trySpawn("clip", [], text);
-  if (os === "darwin") return trySpawn("pbcopy", [], text);
+export type ClipboardCopyResult =
+  | { ok: true; method: ClipboardCopyMethod }
+  | { ok: false; reason: string };
 
-  // Linux: try xclip, fall back to xsel
-  const ok = await trySpawn("xclip", ["-selection", "clipboard"], text);
-  if (ok) return true;
-  return trySpawn("xsel", ["--clipboard", "--input"], text);
+export interface CopyToClipboardOptions {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  /** Runs a clipboard command with `text` on stdin; resolves whether it exited 0. */
+  spawnText?: (cmd: string, args: string[], text: string) => Promise<boolean>;
+  /** Writes a control sequence to the terminal; null when no terminal is attached. */
+  writeTerminal?: ((sequence: string) => void) | null;
+}
+
+/** Largest text sent through OSC 52; terminals cap or reject bigger clipboard writes. */
+export const MAX_OSC52_TEXT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * OSC 52 "set clipboard" for the terminal itself to perform (Kitty, WezTerm, foot, iTerm2...).
+ * The payload is the text's exact UTF-8 bytes, so Unicode survives unchanged.
+ */
+export function buildOsc52Sequence(text: string, tmux = false): string {
+  const sequence = `\x1b]52;c;${Buffer.from(text, "utf8").toString("base64")}\x07`;
+  return tmux ? `\x1bPtmux;${sequence.replaceAll("\x1b", "\x1b\x1b")}\x1b\\` : sequence;
+}
+
+/** Writes like the terminal title: stderr when it is the TTY, outside Ink's stdout frames. */
+function defaultTerminalWriter(): ((sequence: string) => void) | null {
+  if (process.stderr?.isTTY) return (sequence) => process.stderr.write(sequence);
+  if (process.stdout?.isTTY) return (sequence) => process.stdout.write(sequence);
+  return null;
+}
+
+/**
+ * Copies text through the first bridge that works. Linux tries the display server's own tool
+ * (wl-copy on Wayland, then xclip/xsel on X11), then asks the terminal via OSC 52. OSC 52 has no
+ * acknowledgement: success means the request was sent, not that the terminal accepted it.
+ */
+export async function copyToClipboard(
+  text: string,
+  options: CopyToClipboardOptions = {},
+): Promise<ClipboardCopyResult> {
+  const os = options.platform ?? platform();
+  const env = options.env ?? process.env;
+  const run = options.spawnText ?? trySpawn;
+
+  if (os === "win32")
+    return (await run("clip", [], text))
+      ? { ok: true, method: "clip" }
+      : {
+          ok: false,
+          reason: "the Windows clip command failed",
+        };
+  if (os === "darwin")
+    return (await run("pbcopy", [], text))
+      ? { ok: true, method: "pbcopy" }
+      : {
+          ok: false,
+          reason: "pbcopy failed",
+        };
+
+  const tried: string[] = [];
+  if (env.WAYLAND_DISPLAY) {
+    tried.push("wl-copy");
+    if (await run("wl-copy", [], text)) return { ok: true, method: "wl-copy" };
+  }
+  if (env.DISPLAY) {
+    tried.push("xclip", "xsel");
+    if (await run("xclip", ["-selection", "clipboard"], text)) return { ok: true, method: "xclip" };
+    if (await run("xsel", ["--clipboard", "--input"], text)) return { ok: true, method: "xsel" };
+  }
+
+  const write =
+    options.writeTerminal === undefined ? defaultTerminalWriter() : options.writeTerminal;
+  if (write && Buffer.byteLength(text, "utf8") <= MAX_OSC52_TEXT_BYTES) {
+    write(buildOsc52Sequence(text, Boolean(env.TMUX)));
+    return { ok: true, method: "osc52" };
+  }
+
+  const bridges = tried.length
+    ? `${tried.join(", ")} unavailable or failed`
+    : "no Wayland or X11 display";
+  const terminal = write ? "text too large for OSC 52" : "no terminal attached for OSC 52";
+  return { ok: false, reason: `${bridges}; ${terminal}` };
 }
 
 const MAX_CLIPBOARD_IMAGE_BYTES = 20 * 1024 * 1024;

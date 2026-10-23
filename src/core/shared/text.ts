@@ -339,8 +339,17 @@ export function formatDuration(ms: number): string {
 }
 
 /** Single-line title in the same shape Ubume uses for its own conversations. */
+/**
+ * Removes the invisible ids composer chips carry (`[Pasted Content …]` + U+2063, variation
+ * selectors, U+2063). They keep repeated chips distinct in the editor but are noise in copied
+ * text and titles, where a terminal can still render them as cells.
+ */
+export function stripAttachmentIds(text: string): string {
+  return text.replace(/\u2063[\uFE00-\uFE09]+\u2063/g, "");
+}
+
 export function titleFromText(text: string, max = 72): string {
-  const title = text.replace(/\s+/g, " ").trim();
+  const title = stripAttachmentIds(text).replace(/\s+/g, " ").trim();
   return title.length > max ? `${title.slice(0, max - 3).trimEnd()}...` : title;
 }
 

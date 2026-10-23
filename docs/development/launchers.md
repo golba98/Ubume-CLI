@@ -15,10 +15,10 @@ The browser modules own tool schemas, URL admission, Chromium lifecycle,
 network policy, and communication with the separate browser worker. Keep their
 JavaScript exports and colocated TypeScript declarations consistent.
 
-Local development uses `scripts/run-local-dev.mjs` and the optional
+Local development uses `scripts/development/run-local-dev.mjs` and the optional
 `ubume-dev` / `ubd` shims. The shim installer leaves the installed `ubume`
 command alone. Native-model shortcuts continue to target the independent
 Codexa model projects.
 
 See the [migration guide](identity-migration.md) for retired application aliases
-and the [script guide](../../scripts/README.md) for development commands.
+and the [scripts guide](scripts.md) for development commands.

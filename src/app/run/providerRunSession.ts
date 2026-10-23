@@ -41,14 +41,15 @@ import {
 } from "../../core/providerRuntime/failures.js";
 import type { ProviderImageAttachment, ProviderRoute } from "../../core/providerRuntime/types.js";
 import { isNoiseLine } from "../../core/providers/codexTranscript.js";
+import { selectedToolApprovalAction } from "../../core/providers/toolApproval.js";
 import type {
   BackendProgressUpdate,
   BackendProvider,
   BackendRunHandlers,
   GenerationMetadata,
   ProviderRunControl,
-  ToolApprovalDecision,
   ToolApprovalRequest,
+  ToolApprovalResult,
 } from "../../core/providers/types.js";
 import { sanitizeTerminalOutput } from "../../core/terminal/terminalSanitize.js";
 import { recordLocalContextUsage } from "../../core/usage/localUsageTracker.js";
@@ -82,7 +83,7 @@ import {
   schedulePromptRunStartAfterVisibleCommit,
 } from "../../session/liveRenderScheduler.js";
 import type { PersistedFileActivity } from "../../session/persistedResponse.js";
-import type { ExternalCliStatus, Screen } from "../../session/types.js";
+import type { ExternalCliStatus, RunToolActivity, Screen } from "../../session/types.js";
 import {
   type PromptQueue,
   ToolOutputBudget,
@@ -153,7 +154,7 @@ export interface ProviderRunDeps {
 
   // UI and tool approval
   externalCliStatusRef: React.RefObject<ExternalCliStatus>;
-  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
+  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalResult) => void) | null>;
 
   // Session and UI callbacks
   appendEvent: (type: "system" | "error", title: string, content: string) => void;
@@ -187,10 +188,13 @@ export function presentToolApproval(
   isCurrent: () => boolean,
   request: ToolApprovalRequest,
   signal?: AbortSignal,
-): Promise<ToolApprovalDecision> {
-  return new Promise<ToolApprovalDecision>((resolve) => {
+): Promise<ToolApprovalResult> {
+  return new Promise<ToolApprovalResult>((resolve) => {
     if (!isCurrent() || signal?.aborted) return resolve("deny");
-    const settle = (decision: ToolApprovalDecision) => {
+    let settled = false;
+    const settle = (decision: ToolApprovalResult) => {
+      if (settled) return;
+      settled = true;
       signal?.removeEventListener("abort", withdraw);
       resolve(decision);
     };
@@ -576,6 +580,7 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
     finishAfterLiveFlush(flushedLiveUpdates, markFinalAnswerVisible);
   };
 
+  const observedTools = new Map<string, RunToolActivity>();
   const onToolActivity: BackendRunHandlers["onToolActivity"] = (activity) => {
     benchTrace.streamMark("handler", activity.command);
     if (!isCurrent()) {
@@ -592,6 +597,13 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
       planSectionContent = "";
     }
     const boundedActivity = toolOutputBudget.bound(activity);
+    observedTools.set(activity.id, {
+      id: activity.id,
+      command: activity.command,
+      startedAt: activity.startedAt,
+      status: activity.status,
+      authorization: activity.authorization,
+    });
     benchTrace.streamMark("normalize", boundedActivity.command);
     liveScheduler.enqueue({ type: "tool", activity: boundedActivity });
     benchTrace.streamMark("schedule", boundedActivity.command);
@@ -612,8 +624,31 @@ export function startProviderRunSession(deps: ProviderRunDeps, plan: ProviderRun
     }
   };
 
-  const onToolApproval: BackendRunHandlers["onToolApproval"] = (request, signal) =>
-    presentToolApproval(deps, isCurrent, request, signal);
+  const onToolApproval: BackendRunHandlers["onToolApproval"] = async (request, signal) => {
+    const id = request.toolUseId;
+    const update = (authorization: RunToolActivity["authorization"]) => {
+      if (!id || !isCurrent()) return;
+      const previous = observedTools.get(id);
+      onToolActivity({
+        ...(previous ?? { id, command: request.command ?? request.tool, startedAt: Date.now() }),
+        authorization,
+        status: authorization === "denied" || authorization === "cancelled" ? "failed" : "running",
+      });
+    };
+    const withdrawn = () => update("cancelled");
+    signal?.addEventListener("abort", withdrawn, { once: true });
+    update("pending");
+    try {
+      const result = await presentToolApproval(deps, isCurrent, request, signal);
+      if (!signal?.aborted) {
+        const decision = selectedToolApprovalAction(request, result)?.decision;
+        update(decision === "allow-once" || decision === "allow-for-run" ? "approved" : "denied");
+      }
+      return result;
+    } finally {
+      signal?.removeEventListener("abort", withdrawn);
+    }
+  };
 
   /**
    * Forces one final synchronous workspace poll so file changes made just

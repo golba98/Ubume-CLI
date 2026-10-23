@@ -61,10 +61,15 @@ function controlRecord(requestId: string, toolName: string, input: Record<string
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("Ubume modes map to Claude's native permission modes and never to bypass", () => {
-  const expectMode = (mode: string, intent: "normal" | "plan" | undefined, expected: string) =>
-    expect(resolveClaudePermissionMode(mode, intent).mode as string).toBe(expected);
+  const expectMode = (
+    mode: string,
+    intent: "normal" | "plan" | "approved-execution" | undefined,
+    expected: string,
+  ) => expect(resolveClaudePermissionMode(mode, intent).mode as string).toBe(expected);
   expectMode("suggest", "normal", "dontAsk");
-  expectMode("auto-edit", "normal", "acceptEdits");
+  // Ubume "Auto" uses Claude's native auto mode (its classifier still gates risky actions).
+  expectMode("auto-edit", "normal", "auto");
+  expectMode("auto-edit", "approved-execution", "auto");
   expectMode("full-auto", "normal", "auto");
   expectMode("full-auto", "plan", "plan");
   expectMode("auto-edit", "plan", "plan");
@@ -74,12 +79,26 @@ test("Ubume modes map to Claude's native permission modes and never to bypass", 
       expect(resolveClaudePermissionMode(mode, intent).mode).not.toBe("bypassPermissions");
 });
 
-test("an older CLI without the requested mode falls back to default and reports it", () => {
+test("an older CLI without the requested mode falls back without broadening and reports it", () => {
   expect(resolveClaudePermissionMode("full-auto", "normal", ["default", "plan"])).toEqual({
     mode: "default",
     requested: "auto",
   });
-  expect(resolveClaudePermissionMode("auto-edit", "normal", null).mode).toBe("acceptEdits");
+  expect(
+    resolveClaudePermissionMode("auto-edit", "normal", ["acceptEdits", "default", "plan"]),
+  ).toEqual({ mode: "acceptEdits", requested: "auto" });
+  expect(resolveClaudePermissionMode("auto-edit", "normal", null).mode).toBe("auto");
+});
+
+test("Claude 2.1's choices (no `default`) fall back to manual, never to an invalid mode", () => {
+  const choices = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
+  expect(resolveClaudePermissionMode("unknown", "normal", choices)).toEqual({
+    mode: "manual",
+    requested: "default",
+  });
+  expect(resolveClaudePermissionMode("auto-edit", "normal", choices).mode).toBe("auto");
+  expect(resolveClaudePermissionMode("suggest", "normal", choices).mode).toBe("dontAsk");
+  expect(resolveClaudePermissionMode("full-auto", "plan", choices).mode).toBe("plan");
 });
 
 test("discovery parses the installed CLI's permission-mode choices and host-approval support", () => {
@@ -362,4 +381,29 @@ test("permission outcomes are labeled apart from ordinary tool failures", () => 
   ).toBe("Blocked by Claude's permission policy");
   expect(classifyClaudeToolDenial("Exit code 1\nnpm ERR! missing script: build")).toBeNull();
   expect(classifyClaudeToolDenial("EACCES: permission denied, open '/etc/passwd'")).toBeNull();
+});
+
+test("unknown decisions and malformed shell requests cannot produce a Claude allow response", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const bridge = createClaudeApprovalBridge({
+    workspaceRoot: workspace,
+    onToolApproval: async () => "unknown" as ToolApprovalDecision,
+    write: (line) => {
+      writes.push(JSON.parse(line).response.response);
+      return true;
+    },
+  });
+  for (const [id, input] of [
+    ["unknown", { command: "printf test" }],
+    ["malformed", { command: 42 }],
+  ] as const) {
+    bridge.handle({
+      type: "control_request",
+      request_id: id,
+      request: { subtype: "can_use_tool", tool_name: "Bash", input },
+    });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(writes.map((response) => response.behavior)).toEqual(["deny", "deny"]);
+  bridge.dispose();
 });

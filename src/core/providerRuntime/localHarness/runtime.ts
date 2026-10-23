@@ -33,15 +33,17 @@ import {
 import { BrowserManager } from "../../computerUse/browser.js";
 import { resolveBrowserCapability } from "../../computerUse/capability.js";
 import { traceLocalStream } from "../../perf/debugLog.js";
-import type { BackendRunHandlers, ToolApprovalDecision } from "../../providers/types.js";
+import { selectedToolApprovalAction } from "../../providers/toolApproval.js";
+import type { BackendRunHandlers, ToolApprovalRequest } from "../../providers/types.js";
 import { errorMessage } from "../../shared/values.js";
 import type { LocalHarnessSessionMetadata } from "../../workspace/conversationStore.js";
 import {
   ensureSessionScratchDir,
   removeUnusedSessionScratchDir,
 } from "../../workspace/scratchDir.js";
+import { canonicalJson } from "../providerApprovalQueue.js";
 import type { ProviderChatRequest } from "../types.js";
-import { commandFrom, decideToolPolicy, normalizedArgs, pathsFrom } from "./bridgePolicy.js";
+import { decideToolPolicy, normalizedArgs, pathsFrom } from "./bridgePolicy.js";
 import {
   buildHarnessEnv,
   HARNESS_MAX_RSS_BYTES,
@@ -674,13 +676,16 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
       const browserGrant = this.browserGrants.get(callId);
       if (browserGrant) {
         if (!state.handlers.onToolApproval) return { outcome: "rejected" };
-        const decision = await state.handlers.onToolApproval({
+        const approval: ToolApprovalRequest = {
           tool: String(params.tool),
           signature: `browser:${callId}`,
+          toolUseId: callId,
           description: browserGrant.description,
           allowForRun: false,
           paths: [],
-        });
+        };
+        const result = await state.handlers.onToolApproval(approval);
+        const decision = selectedToolApprovalAction(approval, result)?.decision ?? "deny";
         if (
           this.active !== state ||
           state.settled ||
@@ -691,20 +696,26 @@ export class LocalHarnessProcess implements LocalHarnessRunner {
         return { outcome: browserGrant.allowed ? "allowed-once" : "rejected" };
       }
       const known = state.toolArguments.get(callId);
-      const tool = String(params.tool ?? known?.tool ?? "tool");
+      if (!known || (params.tool !== undefined && params.tool !== known.tool))
+        return { outcome: "rejected" };
+      const tool = known.tool;
       const args = known?.arguments ?? {};
       if (!state.handlers.onToolApproval) return { outcome: "rejected" };
-      const signature = `${tool}:${commandFrom(tool, args)}`;
-      const decision: ToolApprovalDecision = await state.handlers.onToolApproval({
+      const signature = `${tool}:${canonicalJson(args)}`;
+      const approval: ToolApprovalRequest = {
         tool,
         signature,
+        toolUseId: callId,
+        kind:
+          typeof args.command === "string" ? "command" : pathsFrom(args).length ? "file" : "tool",
+        ...(typeof args.command !== "string" ? { description: JSON.stringify(args) } : {}),
         command: typeof args.command === "string" ? args.command : undefined,
         paths: pathsFrom(args),
-      });
-      if (decision === "allow-for-run")
-        state.approvals.add(
-          `${tool}:${typeof args.command === "string" ? args.command : pathsFrom(args).join(",")}`,
-        );
+      };
+      const result = await state.handlers.onToolApproval(approval);
+      if (this.active !== state || state.settled) return { outcome: "cancelled" };
+      const decision = selectedToolApprovalAction(approval, result)?.decision ?? "deny";
+      if (decision === "allow-for-run") state.approvals.add(signature);
       return { outcome: decision === "deny" ? "rejected" : "allowed-once" };
     }
     throw new Error(`Unknown Local Harness bridge request: ${method}`);

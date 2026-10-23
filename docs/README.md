@@ -13,7 +13,7 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
 | Directory | Contents |
 |---|---|
 | [`architecture/`](architecture/) | How the application is structured and why: subsystem boundaries, data flow, invariants, and the per-file source catalog. |
-| [`development/`](development/) | Working on the repository: root files, local artifacts and cleanup. |
+| [`development/`](development/) | Working on the repository: setup, running and building, testing, the `scripts/` utilities, root files and cleanup. |
 | [`providers/`](providers/) | Provider-specific integrations that need more than the main README: Local browser tools, Codexa Native. |
 | [`terminal/`](terminal/) | Terminal behavior: the interactive workbench, headless commands, responsive pickers, and reference recordings. |
 | [`releasing/`](releasing/) | Preparing, validating and publishing a release. |
@@ -33,6 +33,12 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
 
 **Development**
 
+- [Getting started](development/getting-started.md): requirements, running this checkout
+  (`dev`, `dev:run`, `ubume-dev`/`ubd`), and the build and check commands.
+- [Testing](development/testing.md): the default suite, script tests, opt-in PTY checks,
+  benchmarks and live provider smokes.
+- [Scripts guide](development/scripts.md): the `scripts/` layout, each script's safety class,
+  arguments and exit behavior, compatibility entry points, and how to add a script.
 - [Repository files and local cleanup](development/repository-files.md): what each root file
   is for and which local artifacts are safe to remove.
 
@@ -44,6 +50,8 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
   through the DeepSeek Harness: setup, tools, permissions and lifecycle.
 - [Codexa Native](providers/codexa-native.md): the development-channel local PyTorch model
   integration.
+- [Plan mode and native permissions](providers/planning-and-permissions.md): how each provider
+  plans, how Ubume modes map to native permission modes, and when approvals still appear.
 
 **Terminal**
 
@@ -53,6 +61,8 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
   `models`, `sessions`, JSON output and exit codes.
 - [Responsive pickers](terminal/pickers.md): how provider, model and selection panels size and
   scroll.
+- [Clipboard and terminal graphics](terminal/clipboard.md): `/copy` bridges (Wayland, X11,
+  OSC 52), why the Kitty logo is not copyable text, and paste handling.
 - [`terminal/recordings/`](terminal/recordings/): asciinema recordings referenced by these docs
   and the changelog. Play them with `asciinema play <file>`.
 
@@ -66,7 +76,6 @@ local, Git-ignored [`_reports/`](#local-reports) directory.
 - [`README.md`](../README.md): installation, providers and everyday use.
 - [`CHANGELOG.md`](../CHANGELOG.md) and [`VERSIONS.md`](../VERSIONS.md): release history.
 - [Installed launchers](development/launchers.md): installed launchers and Harness modules.
-- [`scripts/README.md`](../scripts/README.md): developer automation and smoke utilities.
 - Folder guides next to the code: [`src/config`](../src/config/README.md),
   [`src/core`](../src/core/README.md), [`src/headless`](../src/headless/README.md),
   [`src/session`](../src/session/README.md), [`src/test`](../src/test/README.md),

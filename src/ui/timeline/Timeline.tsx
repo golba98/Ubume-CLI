@@ -40,6 +40,7 @@ import { useTimelineViewport } from "./useTimelineViewport.js";
 // ─── Types & constants ────────────────────────────────────────────────────────
 
 interface TimelineProps {
+  visible?: boolean;
   staticEvents: TimelineEvent[];
   activeEvents: TimelineEvent[];
   layout: Layout;
@@ -357,6 +358,8 @@ export const Timeline = memo(
     );
   },
   (prev, next) => {
+    if (prev.visible === false && next.visible === false) return true;
+    if (prev.visible !== next.visible) return false;
     return (
       prev.staticEvents === next.staticEvents &&
       prev.activeEvents === next.activeEvents &&

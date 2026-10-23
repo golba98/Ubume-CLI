@@ -35,7 +35,30 @@ export interface BackendProgressUpdate {
 
 export type ToolApprovalDecision = "allow-once" | "allow-for-run" | "deny";
 
+export interface ToolApprovalAction {
+  /** Stable adapter-owned ID; never a visual row index. */
+  id: string;
+  label: string;
+  decision: ToolApprovalDecision;
+}
+
+export interface ToolApprovalSelection {
+  requestId: string;
+  /** null is the provider's safe denial/cancellation path. */
+  actionId: string | null;
+}
+
+/** Semantic decisions remain supported for existing non-UI callers. */
+export type ToolApprovalResult = ToolApprovalDecision | ToolApprovalSelection;
+
 export interface ToolApprovalRequest {
+  requestId?: string;
+  toolUseId?: string;
+  /** Explicit native choices, when the provider supplies them. Empty means unavailable. */
+  actions?: readonly ToolApprovalAction[];
+  restriction?: string;
+  /** Additional native input relevant to the decision, displayed without executing controls. */
+  details?: string;
   tool: string;
   signature: string;
   command?: string;
@@ -89,7 +112,7 @@ export interface BackendRunHandlers {
   onToolApproval?: (
     request: ToolApprovalRequest,
     signal?: AbortSignal,
-  ) => Promise<ToolApprovalDecision>;
+  ) => Promise<ToolApprovalResult>;
   /** Persists invisible rolling memory used only by Local context-window rollover. */
   onLocalContextCheckpoint?: (checkpoint: ConversationContextCheckpoint) => void;
   /** Reports a native CLI session reference for future resume. */

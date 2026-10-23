@@ -45,9 +45,9 @@ import { DashCard } from "./DashCard.js";
 import { formatProgressBlockBodyLines } from "./progressEntries.js";
 import {
   coalesceConsecutiveThinking,
-  getFriendlyActionLabel,
   normalizeCommand,
   selectVisibleRunActivity,
+  toolActivityLabel,
 } from "./runActivityView.js";
 
 /** Visual emphasis of a turn relative to the active one (see `createTurnOpacityResolver`). */
@@ -348,7 +348,7 @@ function ActionEventCard({
   const theme = useTheme();
   const dim = opacity !== "active";
   const actionNormalized = normalizeCommand(tool.command);
-  const actionLabel = getFriendlyActionLabel(actionNormalized);
+  const actionLabel = toolActivityLabel(tool, actionNormalized);
 
   const statusIcon = tool.status === "failed" ? "✕" : tool.status === "completed" ? "✔" : "▸";
   const statusColor =
@@ -421,6 +421,7 @@ const MemoizedActionEventCard = memo(
   ActionEventCard,
   (prev, next) =>
     prev.tool.id === next.tool.id &&
+    prev.tool.authorization === next.tool.authorization &&
     prev.tool.status === next.tool.status &&
     prev.tool.command === next.tool.command &&
     prev.tool.completedAt === next.tool.completedAt &&

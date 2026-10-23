@@ -7,8 +7,8 @@ Codexa Native runs the existing local PyTorch model. It has no cloud transport, 
 From this development checkout:
 
 ```sh
-node scripts/configure-codexa-native.mjs --help
-node scripts/configure-codexa-native.mjs
+node scripts/providers/configure-codexa-native.mjs --help
+node scripts/providers/configure-codexa-native.mjs
 bun run dev:run
 ```
 

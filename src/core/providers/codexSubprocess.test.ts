@@ -98,7 +98,8 @@ interface FakeRun {
 
 /**
  * Runs the real adapter against a generated fake `codex` script. The script body sees
- * `args` (argv after the executable) and `out(text)`/`err(text)` writers with backpressure.
+ * `args` (argv after the executable) and `out(text)`/`err(text)` writers that await
+ * actual write completion, including before fixtures deliberately call process.exit.
  */
 async function runFakeCodex(body: string): Promise<FakeRun> {
   const root = mkdtempSync(join(tmpdir(), "ubume-fake-codex-"));
@@ -107,8 +108,8 @@ async function runFakeCodex(body: string): Promise<FakeRun> {
     executable,
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
-const out = (t) => new Promise((r) => (process.stdout.write(t) ? r() : process.stdout.once("drain", r)));
-const err = (t) => new Promise((r) => (process.stderr.write(t) ? r() : process.stderr.once("drain", r)));
+const out = (t) => new Promise((resolve, reject) => process.stdout.write(t, error => error ? reject(error) : resolve()));
+const err = (t) => new Promise((resolve, reject) => process.stderr.write(t, error => error ? reject(error) : resolve()));
 const event = (type, item) => out(JSON.stringify({ type, item }) + "\\n");
 if (args.includes("--help")) { console.log("Usage: codex exec [OPTIONS]\\n  -c, --config <key=value>"); process.exit(0); }
 if (args.includes("--version")) { console.log("codex-cli 0.200.0"); process.exit(0); }

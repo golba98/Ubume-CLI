@@ -14,6 +14,7 @@ import {
   externalSourceLabel,
 } from "../../core/externalSessions/types.js";
 import type { LocalBackendId } from "../../core/providerLauncher/types.js";
+import { stripAttachmentIds } from "../../core/shared/text.js";
 import type { ConversationListEntry } from "../../core/workspace/conversationStore.js";
 import type { SessionSummary } from "../../session/sessionCatalog.js";
 
@@ -116,9 +117,8 @@ function importedLabel(source: string): string {
 }
 
 function displayTitle(title: string): string {
-  // Composer attachment IDs are invisible, but Ink renders them as cells.
-  // Remove only their paired suffix so existing saved titles stay intact.
-  return title.replace(/\u2063[\uFE00-\uFE09]+\u2063/g, "");
+  // Older saved titles can still carry composer attachment IDs; strip them for display.
+  return stripAttachmentIds(title);
 }
 
 /** Row text for an Ubume conversation: title — activity · model · provider · [backend] · count · [import source]. */

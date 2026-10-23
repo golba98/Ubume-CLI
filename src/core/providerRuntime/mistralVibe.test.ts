@@ -8,8 +8,11 @@ import { normalizeRuntimeConfig, resolveRuntimeConfig } from "../../config/runti
 import { resolveVibeExecutable } from "../executables/executableResolver.js";
 import type { CommandResult, CommandSpec } from "../process/commandRunner.js";
 import type { ProviderConfig } from "../providerLauncher/types.js";
+import type { NativeSessionReference } from "../workspace/conversationStore.js";
 import { parseMistralModels } from "./mistralDiscovery.js";
 import {
+  buildVibeAgentArgs,
+  composeVibePlan,
   createVibeStreamParser,
   detectVibeActiveModel,
   discoverMistralVibeModels,
@@ -20,9 +23,12 @@ import {
   MISTRAL_VIBE_MISSING_MESSAGE,
   mergeMistralVibeModels,
   runMistralVibe,
+  VIBE_PLAN_TODO_INSTRUCTION,
+  VIBE_READ_ONLY_UNSUPPORTED_MESSAGE,
   validateMistralVibeRoute,
   vibeAgentFor,
 } from "./mistralVibe.js";
+import { nativeContinuation } from "./nativeContinuation.js";
 import type { ProviderChatRequest } from "./types.js";
 
 function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
@@ -717,10 +723,15 @@ test("vibeAgentFor maps Ubume modes to built-in Vibe agents and never auto-appro
     ...buildRequest().runtime,
     mode,
   });
-  assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("suggest") })), "plan");
+  // Vibe 3 removed its `plan` agent; read-only turns use `ask` restricted to read-only tools.
+  assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("suggest") })), "ask");
   assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("auto-edit") })), "accept-edits");
   assert.equal(vibeAgentFor(buildRequest({ runtime: runtime("full-auto") })), "smart-approve");
-  assert.equal(vibeAgentFor(buildRequest({ runIntent: "plan" })), "plan");
+  assert.equal(vibeAgentFor(buildRequest({ runIntent: "plan" })), "ask");
+  assert.equal(
+    vibeAgentFor(buildRequest({ runIntent: "plan", runtime: runtime("full-auto") })),
+    "ask",
+  );
 });
 
 test("Vibe passes the mapped --agent and retries once without it on an older CLI", async () => {
@@ -770,5 +781,276 @@ test("Vibe passes the mapped --agent and retries once without it on an older CLI
   assert.equal(
     specs.some((spec) => spec.args.includes("--auto-approve") || spec.args.includes("--yolo")),
     false,
+  );
+});
+
+type VibeAttempt = (spec: CommandSpec, emit: (chunk: string) => void) => Partial<CommandResult>;
+
+function runVibeWith(
+  request: ProviderChatRequest,
+  attempts: VibeAttempt[],
+): Promise<{
+  specs: CommandSpec[];
+  progress: { id: string; source?: string; text: string }[];
+  response?: string;
+  error?: string;
+}> {
+  const specs: CommandSpec[] = [];
+  const progress: { id: string; source?: string; text: string }[] = [];
+  return new Promise((resolve) => {
+    runMistralVibe(
+      request,
+      {
+        onResponse: (response) => resolve({ specs, progress, response }),
+        onError: (error) => resolve({ specs, progress, error }),
+        onProgress: (update) => progress.push(update),
+      },
+      {
+        resolveExecutable: async () => "/bin/vibe",
+        runCommandImpl: (spec, handlers) => {
+          specs.push(spec);
+          const attempt = attempts[Math.min(specs.length - 1, attempts.length - 1)]!;
+          const result = attempt(spec, (chunk) => handlers.onStdout?.(chunk));
+          return { result: Promise.resolve(commandResult(result)), cancel: () => undefined };
+        },
+        findSessionImpl: async () => null,
+      },
+    );
+  });
+}
+
+function argAfter(args: readonly string[], flag: string): string[] {
+  return args.flatMap((arg, index) => (arg === flag ? [args[index + 1]!] : []));
+}
+
+// Recorded shape of `vibe -p --output streaming` from Vibe 3.0.2 (camelCase public records).
+function vibe3Record(record: Record<string, unknown>): string {
+  return `${JSON.stringify({
+    sessionId: "bb5733d2-5e9f-402a-72bc-8f433130b951",
+    generationStatus: "completed",
+    ...record,
+  })}\n`;
+}
+
+const VIBE3_TODO_EFFECT = vibe3Record({
+  id: "effect-todo",
+  type: "effect",
+  title: "vibe.todo",
+  detail: {
+    toolName: "vibe.todo",
+    kind: "todo",
+    input: {
+      action: "write",
+      todos: [
+        { id: "1", content: "Add subtract(a, b) to math.js", status: "pending", priority: "high" },
+        { id: "2", content: "Document add and subtract in README.md", status: "pending" },
+        { id: "3", content: "Dropped idea", status: "cancelled" },
+      ],
+    },
+  },
+  state: { status: "completed", outputText: "", durationMs: 1 },
+});
+
+test("plan and Read-only Vibe turns run agent ask restricted to read-only tools, never --agent plan", async () => {
+  const plan = buildRequest({ runIntent: "plan" });
+  const readOnly = buildRequest({ runtime: { ...buildRequest().runtime, mode: "suggest" } });
+  for (const request of [plan, readOnly]) {
+    const args = buildVibeAgentArgs(request);
+    assert.deepEqual(argAfter(args, "--agent"), ["ask"]);
+    assert.deepEqual(argAfter(args, "--enabled-tools"), ["read_file", "grep", "todo"]);
+  }
+  const write = buildVibeAgentArgs(
+    buildRequest({ runtime: { ...buildRequest().runtime, mode: "auto-edit" } }),
+  );
+  assert.deepEqual(argAfter(write, "--agent"), ["accept-edits"]);
+  assert.equal(write.includes("--enabled-tools"), false);
+
+  const { specs, response } = await runVibeWith(plan, [
+    (_spec, emit) => {
+      emit(vibe3Record({ id: "a1", type: "message", role: "assistant", content: "## Steps" }));
+      return {};
+    },
+  ]);
+  assert.equal(response, "## Steps");
+  assert.deepEqual(argAfter(specs[0]!.args, "--agent"), ["ask"]);
+  assert.equal(specs[0]!.args.includes("plan"), false);
+  assert.ok(String(specs[0]!.stdinData).endsWith(VIBE_PLAN_TODO_INSTRUCTION));
+});
+
+test("Vibe todo steps become live todo progress and lead the plan response", async () => {
+  const { progress, response } = await runVibeWith(buildRequest({ runIntent: "plan" }), [
+    (_spec, emit) => {
+      emit(VIBE3_TODO_EFFECT);
+      emit(vibe3Record({ id: "a1", type: "message", role: "assistant", content: "Prose plan." }));
+      return {};
+    },
+  ]);
+  const todo = progress.find((update) => update.source === "todo");
+  assert.equal(
+    todo?.text,
+    "[ ] Add subtract(a, b) to math.js\n[ ] Document add and subtract in README.md",
+  );
+  assert.equal(
+    response,
+    "## Todo steps (Vibe)\n\n1. [ ] Add subtract(a, b) to math.js\n2. [ ] Document add and subtract in README.md\n\nProse plan.",
+  );
+  assert.equal(composeVibePlan([], "Only prose."), "Only prose.");
+});
+
+test("normal Vibe turns keep their prose response even when Vibe updates todos", async () => {
+  const { response } = await runVibeWith(
+    buildRequest({ runtime: { ...buildRequest().runtime, mode: "auto-edit" } }),
+    [
+      (_spec, emit) => {
+        emit(VIBE3_TODO_EFFECT);
+        emit(vibe3Record({ id: "a1", type: "message", role: "assistant", content: "Done." }));
+        return {};
+      },
+    ],
+  );
+  assert.equal(response, "Done.");
+});
+
+test("Vibe 3 camelCase records supply the native session id without a filesystem search", async () => {
+  const sessions: string[] = [];
+  await new Promise<void>((resolve, reject) => {
+    runMistralVibe(
+      buildRequest(),
+      {
+        onResponse: () => resolve(),
+        onError: (message) => reject(new Error(message)),
+        onNativeSession: (session) => sessions.push(session.sessionId),
+      },
+      {
+        resolveExecutable: async () => "/bin/vibe",
+        runCommandImpl: (_spec, handlers) => {
+          handlers.onStdout?.(
+            vibe3Record({ id: "a1", type: "message", role: "assistant", content: "hi" }),
+          );
+          return { result: Promise.resolve(commandResult()), cancel: () => undefined };
+        },
+        findSessionImpl: async () => {
+          throw new Error("filesystem search must not run when the stream names the session");
+        },
+      },
+    );
+  });
+  assert.deepEqual(sessions, ["bb5733d2-5e9f-402a-72bc-8f433130b951"]);
+});
+
+test("a pre-3 Vibe without the ask agent retries once with its native read-only plan agent", async () => {
+  const { specs, response, progress } = await runVibeWith(buildRequest({ runIntent: "plan" }), [
+    () => ({ status: "failed", exitCode: 1, stderr: "Error: Agent 'ask' not found." }),
+    (_spec, emit) => {
+      emit(`${JSON.stringify({ role: "assistant", content: "legacy plan" })}\n`);
+      return {};
+    },
+  ]);
+  assert.equal(response, "legacy plan");
+  assert.equal(specs.length, 2);
+  assert.deepEqual(argAfter(specs[1]!.args, "--agent"), ["plan"]);
+  assert.ok(progress.some((update) => /read-only plan agent/.test(update.text)));
+});
+
+test("read-only Vibe turns fail closed instead of retrying without their restriction", async () => {
+  for (const stderr of [
+    "vibe: error: unrecognized arguments: --agent ask",
+    "vibe: error: unrecognized arguments: --enabled-tools read_file",
+  ]) {
+    const { specs, error } = await runVibeWith(buildRequest({ runIntent: "plan" }), [
+      () => ({ status: "failed", exitCode: 2, stderr }),
+    ]);
+    assert.equal(error, VIBE_READ_ONLY_UNSUPPORTED_MESSAGE);
+    assert.equal(specs.length, 1);
+  }
+  const legacyMissing = await runVibeWith(buildRequest({ runIntent: "plan" }), [
+    () => ({ status: "failed", exitCode: 1, stderr: "Error: Agent 'ask' not found." }),
+    () => ({ status: "failed", exitCode: 1, stderr: "Error: Agent 'plan' not found." }),
+  ]);
+  assert.equal(legacyMissing.error, VIBE_READ_ONLY_UNSUPPORTED_MESSAGE);
+  assert.equal(legacyMissing.specs.length, 2);
+});
+
+test("concurrent Vibe runs with different intents keep independent arguments", async () => {
+  const reply: VibeAttempt = (_spec, emit) => {
+    emit(`${JSON.stringify({ role: "assistant", content: "ok" })}\n`);
+    return {};
+  };
+  const [plan, write] = await Promise.all([
+    runVibeWith(buildRequest({ runIntent: "plan" }), [reply]),
+    runVibeWith(buildRequest({ runtime: { ...buildRequest().runtime, mode: "full-auto" } }), [
+      reply,
+    ]),
+  ]);
+  assert.deepEqual(argAfter(plan.specs[0]!.args, "--agent"), ["ask"]);
+  assert.deepEqual(argAfter(write.specs[0]!.args, "--agent"), ["smart-approve"]);
+  assert.equal(write.specs[0]!.args.includes("--enabled-tools"), false);
+});
+
+test("Vibe plan turns keep the selected model and reasoning environment", async () => {
+  const { specs } = await runVibeWith(
+    buildRequest({
+      runIntent: "plan",
+      route: {
+        providerId: "mistral",
+        modelId: "mistral-medium-3.5",
+        backendKind: "mistral-vibe-cli-auth",
+      },
+    }),
+    [
+      (_spec, emit) => {
+        emit(`${JSON.stringify({ role: "assistant", content: "ok" })}\n`);
+        return {};
+      },
+    ],
+  );
+  const normal = await runVibeWith(buildRequest(), [
+    (_spec, emit) => {
+      emit(`${JSON.stringify({ role: "assistant", content: "ok" })}\n`);
+      return {};
+    },
+  ]);
+  const vibeEnv = (env: NodeJS.ProcessEnv | undefined) =>
+    Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => key.startsWith("VIBE_")));
+  assert.deepEqual(vibeEnv(specs[0]!.env), vibeEnv(normal.specs[0]!.env));
+  assert.ok(Object.keys(vibeEnv(specs[0]!.env)).length > 0);
+});
+
+test("a Vibe plan's session stays resumable by the approved execution turn", async () => {
+  const plan = buildRequest({ runIntent: "plan" });
+  const sessions: NativeSessionReference[] = [];
+  const response = await new Promise<string>((resolve, reject) => {
+    runMistralVibe(
+      plan,
+      {
+        onResponse: resolve,
+        onError: (message) => reject(new Error(message)),
+        onNativeSession: (session) => sessions.push(session),
+      },
+      {
+        resolveExecutable: async () => "/bin/vibe",
+        runCommandImpl: (_spec, handlers) => {
+          handlers.onStdout?.(VIBE3_TODO_EFFECT);
+          handlers.onStdout?.(
+            vibe3Record({ id: "a1", type: "message", role: "assistant", content: "Prose plan." }),
+          );
+          return { result: Promise.resolve(commandResult()), cancel: () => undefined };
+        },
+      },
+    );
+  });
+  assert.match(response, /^## Todo steps \(Vibe\)/);
+  const execution = buildRequest({
+    runIntent: "approved-execution",
+    runtime: { ...buildRequest().runtime, mode: "auto-edit" },
+    conversationHistory: [
+      { role: "user", content: plan.prompt },
+      { role: "assistant", content: response },
+    ],
+    nativeSessions: sessions,
+  });
+  assert.equal(
+    nativeContinuation(execution, "vibe")?.sessionId,
+    "bb5733d2-5e9f-402a-72bc-8f433130b951",
   );
 });

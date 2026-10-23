@@ -247,7 +247,10 @@ export function startApp({
         if (!cleanupDone) graphics.probe(true);
       }, 50).unref();
     schedulePlacementRefresh();
-    resetFrameLockForResize(wrappedStdout);
+    // Same-width historical lines remain valid when only height changes. Let
+    // them drain unless the boundary supersedes them with a fresh clear; Ink
+    // can legitimately emit no new bytes for an unchanged live composer.
+    resetFrameLockForResize(wrappedStdout, stdout.columns !== previousResizeCols);
     renderDebug.traceEvent("terminal", "resize", {
       previousCols: previousResizeCols,
       previousRows: previousResizeRows,

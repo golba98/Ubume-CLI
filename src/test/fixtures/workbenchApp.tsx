@@ -296,13 +296,13 @@ async function verifyUsageDuringRun(): Promise<void> {
   terminal.stdin.write("/usage");
   await delay();
   terminal.stdin.write("\r");
-  await until(() => terminal.lastFrame().includes("Provider Usage"), "usage panel open");
+  await until(() => terminal.lastFrame().includes("Usage · OpenAI / Codex"), "usage panel open");
   await until(
     () => terminal.output().includes("exited before Codex usage check completed"),
     "usage result rendered",
   );
   terminal.stdin.write("\u001b");
-  await until(() => !terminal.lastFrame().includes("Provider Usage"), "usage panel closed");
+  await until(() => !terminal.lastFrame().includes("Usage · OpenAI / Codex"), "usage panel closed");
   await delay(200);
   assert.equal(cancelCount, 0, "closing /usage must not cancel the active run");
   runs[0]!.stopped();

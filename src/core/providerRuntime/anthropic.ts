@@ -454,11 +454,21 @@ export function runClaudeCodeWithRunner(
       stdin.write(line);
       return true;
     };
+    let capturedPlan: string | null = null;
     const bridge = createClaudeApprovalBridge({
       workspaceRoot: request.workspaceRoot,
       onToolApproval: handlers.onToolApproval,
       write: writeStdin,
       onAwaitingUser: (waiting) => execution.awaitingUser(waiting),
+      runIntent: attemptRequest.runIntent,
+      onPlanCaptured: (plan) => {
+        capturedPlan = plan.trim();
+        handlers.onProgress?.({
+          id: "claude-plan-captured",
+          source: "stdout",
+          text: "Claude finished its plan. Ubume kept Claude in plan mode and will show the plan for review.",
+        });
+      },
     });
     // Streaming input keeps Claude alive for more turns; closing stdin after the terminal
     // result lets it exit normally.
@@ -467,6 +477,7 @@ export function runClaudeCodeWithRunner(
     };
     const parser = createClaudeStreamParser(execution.handlers, {
       approvals: hostApprovals ? "interactive" : "none",
+      ...(attemptRequest.runIntent === "plan" ? { hostHandledTools: ["ExitPlanMode"] } : {}),
       ...(hostApprovals ? { onControl: bridge.handle, onResult: endStdin } : {}),
     });
     let received = false;
@@ -578,13 +589,16 @@ export function runClaudeCodeWithRunner(
             ? parser.finalText()
             : sanitizeTerminalOutput(result.stdout).trim();
         if (mode === "plain-text") handlers.onAssistantDelta?.(text);
+        // Claude's native plan (from ExitPlanMode) is the plan Ubume reviews.
+        const response = request.runIntent === "plan" && capturedPlan ? capturedPlan : text;
+        // The continuation hash must cover the reply Ubume stores.
         if (parser.sessionId)
           handlers.onNativeSession?.(
-            completedNativeSession(request, "claude", parser.sessionId, text),
+            completedNativeSession(request, "claude", parser.sessionId, response),
           );
         finish();
-        handlers.onFinalAnswerObserved?.(text);
-        handlers.onResponse(text);
+        handlers.onFinalAnswerObserved?.(response);
+        handlers.onResponse(response);
       })
       .catch((error) => {
         if (finished || canceled) return;

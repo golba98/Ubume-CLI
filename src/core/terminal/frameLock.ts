@@ -11,9 +11,12 @@ import * as renderDebug from "../perf/renderDebug.js";
 import { resolveUbumeDebugLogPath } from "../workspace/appData.js";
 import { getStartupGraphicsChannel } from "./startupGraphics.js";
 import { isTerminalResizing } from "./terminalControl.js";
+import { createTerminalWriteQueue } from "./terminalWriteQueue.js";
 
 /** The writable surface the frame lock wraps; satisfied by `NodeJS.WriteStream`. */
 interface FrameWritable {
+  isTTY?: boolean;
+  fd?: number;
   write(
     chunk: string | Uint8Array,
     encoding?: BufferEncoding | ((error?: Error | null) => void),
@@ -26,7 +29,7 @@ interface FrameLockOptions<T extends FrameWritable> {
   env: Record<string, string | undefined>;
 }
 
-const resizeFrameCacheResetters = new WeakMap<object, () => void>();
+const resizeFrameCacheResetters = new WeakMap<object, (cancelQueuedOutput: boolean) => void>();
 const frameLockReleases = new WeakMap<object, () => void>();
 
 /** Restores the original writer and releases debug/frame buffers after the app exits. */
@@ -38,8 +41,8 @@ export function releaseFrameLock(stdout: object): void {
  * Invalidates the wrapped stream's last-frame cache so identical content can repaint at new
  * dimensions.
  */
-export function resetFrameLockForResize(stdout: object): void {
-  resizeFrameCacheResetters.get(stdout)?.();
+export function resetFrameLockForResize(stdout: object, cancelQueuedOutput = true): void {
+  resizeFrameCacheResetters.get(stdout)?.(cancelQueuedOutput);
 }
 
 /**
@@ -77,21 +80,32 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
 
   const previousWrite = stdout.write;
   const originalWrite = previousWrite.bind(stdout);
+  const writeQueue = createTerminalWriteQueue(originalWrite, {
+    enabled: stdout.isTTY === true && typeof stdout.fd === "number",
+    onError: (error) => {
+      lastFrame = "";
+      getStartupGraphicsChannel(stdout)?.reportWriteFailure();
+      renderDebug.traceEvent("terminal", "frameWriteFailed", { message: error.message });
+    },
+  });
+  const orderedWrite = writeQueue.write;
+
   let firstFrameMarked = false;
 
   // A terminal resize can make an otherwise identical Ink frame meaningful:
   // rows reflow at a new width and height-driven spacer/layout changes must be
   // written even when their source text did not change. src/index.tsx owns the
   // single resize listener and invokes this reset through the exported helper.
-  resizeFrameCacheResetters.set(stdout, () => {
+  resizeFrameCacheResetters.set(stdout, (cancelQueuedOutput) => {
     lastFrame = "";
+    if (cancelQueuedOutput) writeQueue.cancel();
     logDebug("Frame cache reset: terminal resize");
   });
 
   const target: FrameWritable = stdout;
   target.write = (chunk, encoding, callback) => {
     if (typeof chunk !== "string" || chunk.length === 0) {
-      return originalWrite(chunk, encoding, callback);
+      return orderedWrite(chunk, encoding, callback);
     }
 
     // Task 7: Frame Lock
@@ -100,7 +114,7 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
       // Node's Writable queue owns serialization. A reentrant write is still
       // real output, and dropping it would violate the stream contract.
       lastFrame = "";
-      return originalWrite(chunk, encoding, callback);
+      return orderedWrite(chunk, encoding, callback);
     }
 
     // Task 8: Full-frame Deduplication
@@ -109,7 +123,7 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
       logDebug("Frame dropped: identical to last frame");
       // Empty writes still provide an ordered completion barrier to Ink.
       return typeof encoding === "function" || callback
-        ? originalWrite("", encoding, callback)
+        ? orderedWrite("", encoding, callback)
         : true;
     }
 
@@ -173,7 +187,7 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
             callback?.(error);
           }
         : callback;
-      return originalWrite(
+      return orderedWrite(
         (getStartupGraphicsChannel(stdout)?.prepareFrame(chunk) ?? "") +
           (getStartupGraphicsChannel(stdout)?.transformFrame(processed) ?? processed),
         encoding,
@@ -193,6 +207,7 @@ export function wrapStdoutWithFrameLock<T extends FrameWritable>({
 
   const wrappedWrite = target.write;
   frameLockReleases.set(stdout, () => {
+    writeQueue.dispose();
     if (target.write === wrappedWrite) target.write = previousWrite;
     lastFrame = "";
     debugLogStream?.end();
