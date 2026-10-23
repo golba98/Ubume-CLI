@@ -76,3 +76,38 @@ test("unresolved attachments are rejected before expansion while attached litera
     /image attachment/,
   );
 });
+
+test("large pastes expand byte-for-byte at every size, with Unicode and line breaks intact", () => {
+  const unit = "line \u00e9\u0301 \u{10eeee}\u0305\u030d 👩🏽‍💻\r\n\tindented — 日本\n";
+  for (const size of [1_000, 10_000, 22_704, 50_000, 100_000]) {
+    const units = Array.from(unit.repeat(Math.ceil(size / Array.from(unit).length) + 1));
+    const content = units.slice(0, size).join("");
+    assert.equal(Array.from(content).length, size);
+    assert.equal(isLargePaste(content), true);
+    const token = createPastedContentToken(content);
+    assert.equal(token.startsWith(`[Pasted Content ${size.toLocaleString("en-US")} chars]`), true);
+    const registry = new Map([[token, [content]]]);
+    const started = performance.now();
+    const expanded = expandPastedContent(`before ${token} after`, registry);
+    const elapsed = performance.now() - started;
+    assert.ok(
+      Buffer.from(expanded, "utf8").equals(Buffer.from(`before ${content} after`, "utf8")),
+      `paste of ${size} chars changed`,
+    );
+    // Expansion is a single regex pass; generous bound catches accidental quadratic work.
+    assert.ok(elapsed < 250, `expanding ${size} chars took ${elapsed.toFixed(1)}ms`);
+  }
+});
+
+test("two identical large pastes keep separate payloads", () => {
+  const first = "a".repeat(22_704);
+  const second = "b".repeat(22_704);
+  const firstToken = createPastedContentToken(first);
+  const secondToken = createPastedContentToken(second);
+  assert.notEqual(firstToken, secondToken);
+  const registry = new Map([
+    [firstToken, [first]],
+    [secondToken, [second]],
+  ]);
+  assert.equal(expandPastedContent(`${secondToken}|${firstToken}`, registry), `${second}|${first}`);
+});

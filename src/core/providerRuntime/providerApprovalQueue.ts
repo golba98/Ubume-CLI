@@ -7,12 +7,16 @@
  * signature, and is never available for paths outside the workspace.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { selectedToolApprovalAction, toolApprovalActions } from "../providers/toolApproval.js";
 import type {
   BackendRunHandlers,
+  ToolApprovalAction,
   ToolApprovalDecision,
   ToolApprovalRequest,
+  ToolApprovalResult,
 } from "../providers/types.js";
 import { isRecord } from "../shared/values.js";
 
@@ -67,7 +71,7 @@ export interface ProviderApprovalQueueOptions<T> {
   /** Converts a native request into the shared prompt. */
   toApproval: (item: T) => ToolApprovalRequest;
   /** Answers the provider. Never called after `dispose` or for a withdrawn request. */
-  respond: (item: T, outcome: ProviderApprovalOutcome) => void;
+  respond: (item: T, outcome: ProviderApprovalOutcome, action?: ToolApprovalAction) => void;
   /** Reports whether Ubume is waiting on the user, so quiet-provider notices pause. */
   onAwaitingUser?: (waiting: boolean) => void;
   onDecision?: (request: ToolApprovalRequest, decision: ToolApprovalDecision | "cached") => void;
@@ -85,15 +89,36 @@ export function createProviderApprovalQueue<T>(options: ProviderApprovalQueueOpt
   let current: { id: string; abort: AbortController } | null = null;
   let disposed = false;
 
-  const respond = (item: T, outcome: ProviderApprovalOutcome) => {
-    if (!disposed) options.respond(item, outcome);
+  const respond = (item: T, outcome: ProviderApprovalOutcome, action?: ToolApprovalAction) => {
+    if (!disposed) options.respond(item, outcome, action);
   };
 
   const pump = async () => {
     while (!current && !disposed && queue.length) {
       const { id, item } = queue.shift()!;
-      const approval = options.toApproval(item);
-      if (allowedForRun.has(approval.signature)) {
+      let approval: ToolApprovalRequest;
+      try {
+        const normalized = options.toApproval(item);
+        approval = Object.freeze({
+          ...normalized,
+          requestId: randomUUID(),
+          paths: Object.freeze([...normalized.paths]) as unknown as string[],
+          actions: Object.freeze(
+            toolApprovalActions(normalized).map((action) => Object.freeze({ ...action })),
+          ),
+        });
+      } catch {
+        respond(item, "unavailable");
+        continue;
+      }
+      if (!approval.actions?.length) {
+        respond(item, "unavailable");
+        continue;
+      }
+      if (
+        approval.actions.some((action) => action.decision === "allow-for-run") &&
+        allowedForRun.has(approval.signature)
+      ) {
         options.onDecision?.(approval, "cached");
         respond(item, "allow");
         continue;
@@ -106,23 +131,25 @@ export function createProviderApprovalQueue<T>(options: ProviderApprovalQueueOpt
       const abort = new AbortController();
       current = { id, abort };
       options.onAwaitingUser?.(true);
-      let decision: ToolApprovalDecision;
+      let result: ToolApprovalResult;
       try {
         // A withdrawn request must not wait on a UI that ignores the abort signal.
-        const withdrawn = new Promise<ToolApprovalDecision>((resolveWithdrawn) =>
+        const withdrawn = new Promise<ToolApprovalResult>((resolveWithdrawn) =>
           abort.signal.addEventListener("abort", () => resolveWithdrawn("deny"), { once: true }),
         );
-        decision = await Promise.race([options.onToolApproval(approval, abort.signal), withdrawn]);
+        result = await Promise.race([options.onToolApproval(approval, abort.signal), withdrawn]);
       } catch {
-        decision = "deny";
+        result = "deny";
       }
       current = null;
       options.onAwaitingUser?.(false);
       if (abort.signal.aborted) continue;
+      const action = selectedToolApprovalAction(approval, result);
+      const decision = action?.decision ?? "deny";
       options.onDecision?.(approval, decision);
       if (decision === "allow-for-run" && approval.allowForRun !== false)
         allowedForRun.add(approval.signature);
-      respond(item, decision === "deny" ? "deny" : "allow");
+      respond(item, decision === "deny" ? "deny" : "allow", action ?? undefined);
     }
   };
 
@@ -131,7 +158,13 @@ export function createProviderApprovalQueue<T>(options: ProviderApprovalQueueOpt
     enqueue(id: string, item: T): void {
       if (disposed || seen.has(id)) return;
       seen.add(id);
-      queue.push({ id, item });
+      // Keep the displayed payload and the eventual provider response tied to the same input.
+      try {
+        queue.push({ id, item: structuredClone(item) });
+      } catch {
+        respond(item, "unavailable");
+        return;
+      }
       void pump();
     },
     /** Withdraws a queued or visible request without answering it. */

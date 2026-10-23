@@ -62,10 +62,11 @@ import type {
 import type { CodexaNativeOptions } from "../../core/providerRuntime/codexaNativeConfig.js";
 import { getProviderSetupPlan } from "../../core/providerRuntime/registry.js";
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
+import { toolApprovalRequestId } from "../../core/providers/toolApproval.js";
 import type {
   BackendProvider,
-  ToolApprovalDecision,
   ToolApprovalRequest,
+  ToolApprovalResult,
 } from "../../core/providers/types.js";
 import type { UsageViewState } from "../../core/usage/usageService.js";
 import type { GlobalPackageManager } from "../../core/version/packageManager.js";
@@ -273,9 +274,8 @@ interface OverlayPanelsProps {
   handleImportConfirm: () => Promise<void>;
   handleImportCancel: () => void;
   toolApproval: ToolApprovalRequest | null;
-  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
+  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalResult) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
-  handleCancel: () => void;
 
   // Update prompt and usage
   updateCheckResult: UpdateCheckResult | null;
@@ -417,7 +417,6 @@ export function OverlayPanels(props: OverlayPanelsProps) {
     toolApproval,
     toolApprovalResolverRef,
     setToolApproval,
-    handleCancel,
 
     // Update prompt and usage
     updateCheckResult,
@@ -614,7 +613,12 @@ export function OverlayPanels(props: OverlayPanelsProps) {
 
   // --- Tool approval -------------------------------------------------------------------
 
-  const toolApprovalContext = { toolApprovalResolverRef, setToolApproval, setScreen };
+  const toolApprovalContext = {
+    toolApprovalResolverRef,
+    setToolApproval,
+    setScreen,
+    expectedResolver: toolApprovalResolverRef.current,
+  };
 
   return (
     <>
@@ -979,10 +983,9 @@ export function OverlayPanels(props: OverlayPanelsProps) {
         <ToolApprovalPanel
           focusId={FOCUS_IDS.toolApprovalPanel}
           request={toolApproval}
-          onSelect={(decision) => resolveToolApproval(toolApprovalContext, decision)}
-          onCancelRun={() => {
-            resolveToolApproval(toolApprovalContext, "deny");
-            handleCancel();
+          onSelect={(decision) => {
+            if (decision.requestId !== toolApprovalRequestId(toolApproval)) return;
+            resolveToolApproval(toolApprovalContext, decision);
           }}
         />
       )}
@@ -1082,10 +1085,13 @@ function modelPickerRefreshMessage(refreshing: boolean, emptyMessage: string): s
 
 /** Answers the pending tool approval and closes the approval overlay. */
 function resolveToolApproval(
-  context: Pick<OverlayPanelsProps, "toolApprovalResolverRef" | "setToolApproval" | "setScreen">,
-  decision: ToolApprovalDecision,
+  context: Pick<OverlayPanelsProps, "toolApprovalResolverRef" | "setToolApproval" | "setScreen"> & {
+    expectedResolver: OverlayPanelsProps["toolApprovalResolverRef"]["current"];
+  },
+  decision: ToolApprovalResult,
 ): void {
   const resolve = context.toolApprovalResolverRef.current;
+  if (!resolve || resolve !== context.expectedResolver) return;
   context.toolApprovalResolverRef.current = null;
   context.setToolApproval(null);
   context.setScreen("main");

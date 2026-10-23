@@ -11,6 +11,7 @@ import { useMemo } from "react";
 import { estimateTokens } from "../../config/settings.js";
 import type { ModelSpec } from "../../core/providerRuntime/contextMetadata.js";
 import type { ProviderRoute } from "../../core/providerRuntime/types.js";
+import type { ToolApprovalRequest } from "../../core/providers/types.js";
 import type { SessionState } from "../../session/appSession.js";
 import { cancelPlanFeedback, type PlanFlowState } from "../../session/planFlow.js";
 import type { UIState } from "../../session/types.js";
@@ -26,6 +27,8 @@ import type { WorkbenchView } from "../../ui/panels/WorkbenchPanel.js";
 import type { buildActiveRuntimeDisplay } from "../../ui/render/runtimeDisplay.js";
 
 interface UseAppComposerContext {
+  toolApprovalResolverRef: React.RefObject<unknown>;
+  toolApproval: ToolApprovalRequest | null;
   // Plan review and revision flow
   planFlow: PlanFlowState;
   handlePlanAction: (action: PlanActionValue) => void;
@@ -83,6 +86,8 @@ interface UseAppComposerContext {
 
 export function useAppComposer(context: UseAppComposerContext) {
   const {
+    toolApprovalResolverRef,
+    toolApproval,
     planFlow,
     terminalLayout,
     handlePlanAction,
@@ -166,6 +171,9 @@ export function useAppComposer(context: UseAppComposerContext) {
     return (
       <MemoizedBottomComposer
         key={composerInstanceKey}
+        inputBlocked={toolApprovalResolverRef}
+        inputEnabled={toolApproval === null}
+        permissionPending={toolApproval !== null}
         layout={terminalLayout}
         width={composerWidth}
         uiState={uiState}
@@ -219,6 +227,8 @@ export function useAppComposer(context: UseAppComposerContext) {
       />
     );
   }, [
+    toolApprovalResolverRef,
+    toolApproval,
     planFlow,
     initialRevisionText,
     handlePlanAction,

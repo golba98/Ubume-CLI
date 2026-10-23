@@ -276,6 +276,8 @@ function AppShellInner({
   const showMainPanelFullOutput = showMainPanel && mainPanelMode === "full-output";
   const showTimeline = screen === "main" && !showMainPanel;
   const showPanelStage = screen !== "main";
+  const timelineHasBeenVisible = useRef(false);
+  if (showTimeline) timelineHasBeenVisible.current = true;
   // Short terminals with an overlay open: force the compact header (and cap its
   // width) so the panel stage keeps as many rows as possible.
   const headerLayout =
@@ -396,8 +398,9 @@ function AppShellInner({
 
   if (layout.isCramped) return <CrampedView layout={layout} />;
 
-  // Note: the Timeline below stays mounted while hidden (display="none") rather
-  // than being conditionally rendered.
+  // Native chat owns its own history. Overlay-only shells must never mount a
+  // second transcript. Legacy callers retain an already visible Timeline to
+  // preserve its scroll state, freezing it while a panel owns the viewport.
   const mainContent = (
     <AppLayoutBudgetContext.Provider value={appLayoutBudget}>
       <Box flexDirection="column" width={contentWidth} height="100%">
@@ -422,20 +425,23 @@ function AppShellInner({
           overflow="hidden"
           display={showTimeline ? "flex" : "none"}
         >
-          <Timeline
-            key={`timeline-${clearCount}`}
-            staticEvents={staticEvents}
-            activeEvents={activeEvents}
-            layout={layout}
-            uiState={uiState}
-            viewportRows={resolvedTimelineRows}
-            verboseMode={verboseMode}
-            authState={authState}
-            workspaceLabel={workspaceLabel}
-            workspaceRoot={workspaceRoot}
-            contentSized
-            showIntro={false}
-          />
+          {(showTimeline || timelineHasBeenVisible.current) && (
+            <Timeline
+              visible={showTimeline}
+              key={`timeline-${clearCount}`}
+              staticEvents={staticEvents}
+              activeEvents={activeEvents}
+              layout={layout}
+              uiState={uiState}
+              viewportRows={resolvedTimelineRows}
+              verboseMode={verboseMode}
+              authState={authState}
+              workspaceLabel={workspaceLabel}
+              workspaceRoot={workspaceRoot}
+              contentSized
+              showIntro={false}
+            />
+          )}
         </Box>
 
         {showMainPanel && (

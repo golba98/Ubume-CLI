@@ -173,6 +173,8 @@ function transcriptNode({
   theme = "purple",
   runtimeSummary = TEST_RUNTIME_SUMMARY,
   startupAnimation = false,
+  onPreparedStaticFrame,
+  layout: suppliedLayout,
 }: {
   staticEvents: TimelineEvent[];
   activeEvents?: TimelineEvent[];
@@ -188,8 +190,10 @@ function transcriptNode({
   theme?: string;
   runtimeSummary?: RuntimeSummary | null;
   startupAnimation?: boolean;
+  onPreparedStaticFrame?: (frame: { cols: number; rows: number; output: string } | null) => void;
+  layout?: ReturnType<typeof createLayoutSnapshot>;
 }) {
-  const layout = createLayoutSnapshot(cols, rows);
+  const layout = suppliedLayout ?? createLayoutSnapshot(cols, rows);
   return (
     <ThemeProvider theme={theme}>
       <TranscriptShell
@@ -209,6 +213,7 @@ function transcriptNode({
         repaintGeneration={repaintGeneration}
         notice={notice}
         visible={visible}
+        onPreparedStaticFrame={onPreparedStaticFrame}
       />
     </ThemeProvider>
   );
@@ -1298,6 +1303,45 @@ test("a hidden transcript defers historical reflow during selector resizes", asy
       label: "showing the transcript prepares its new width cooperatively",
     });
   } finally {
+    h.instance.cleanup();
+  }
+});
+
+test("historical reflow finishes while the same active turn keeps streaming", async () => {
+  const events = Array.from({ length: 300 }, (_, index) => finalizedTurnEvents(index + 1)).flat();
+  const h = renderTranscript(events);
+  const viewport = createLayoutSnapshot(60, 20);
+  let generation = 0;
+  let prepared = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    await h.instance.waitUntilRenderFlush();
+    const update = () => {
+      generation++;
+      h.instance.rerender(
+        transcriptNode({
+          staticEvents: events,
+          activeEvents: [
+            userPromptEvent(500, "ongoing"),
+            streamingRunEvent(500, "ongoing", 0, `token ${generation}`),
+          ],
+          uiState: { kind: "THINKING", turnId: 500 },
+          layout: viewport,
+          onPreparedStaticFrame: (frame) => {
+            if (frame?.cols === 60) prepared = true;
+          },
+        }),
+      );
+    };
+    update();
+    timer = setInterval(update, 10);
+    await waitFor(() => prepared, {
+      label: "history publishes before streaming stops",
+      timeoutMs: 2000,
+    });
+    assert.ok(generation > 1, "multiple active snapshots arrived during preparation");
+  } finally {
+    clearInterval(timer);
     h.instance.cleanup();
   }
 });

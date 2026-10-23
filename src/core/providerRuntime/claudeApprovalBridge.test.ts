@@ -26,6 +26,7 @@ import {
   resetAnthropicRouteValidationCacheForTests,
   runClaudeCodeWithRunner,
 } from "./anthropic.js";
+import { nativeContinuation } from "./nativeContinuation.js";
 import type { ProviderChatRequest } from "./types.js";
 
 const FAKE_CLAUDE = `${FAKE_STDIO_READER}
@@ -232,14 +233,14 @@ test("the original failure: Write, compound shell, pipeline and denial complete 
   const argv = logged("argv")[0]!.argv as string[];
   expect(argv).toContain("--input-format");
   expect(argv[argv.indexOf("--permission-prompt-tool") + 1]).toBe("stdio");
-  expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+  expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("auto");
   expect(argv).not.toContain("--permission-prompts");
   expect(argv).not.toContain("--dangerously-skip-permissions");
   expect(argv).not.toContain("Build the Minecraft clone");
   expect(logged("prompt")[0]!.content).toBe("Build the Minecraft clone");
   expect(logged("stdin-end")).toHaveLength(1);
   expect(outcome.sessions[0]?.sessionId).toBe("fake-session");
-  expect(outcome.progress[0]).toMatch(/Claude Code permissions: acceptEdits/);
+  expect(outcome.progress[0]).toMatch(/Claude Code permissions: auto/);
 });
 
 test("concurrent requests are answered in order, never overlapping, and duplicates once", async () => {
@@ -309,7 +310,7 @@ test("headless runs keep print mode with the prompt in argv and never ask the ho
   expect(args).not.toContain("--input-format");
   expect(args).not.toContain("--permission-prompt-tool");
   expect(args.at(-1)).toBe("Build the Minecraft clone");
-  expect(args[args.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+  expect(args[args.indexOf("--permission-mode") + 1]).toBe("auto");
 });
 
 test("plan intent and read-only mode reach Claude as plan and dontAsk", () => {
@@ -320,4 +321,51 @@ test("plan intent and read-only mode reach Claude as plan and dontAsk", () => {
   expect(mode(claudeRequest({ runIntent: "plan" }))).toBe("plan");
   expect(mode(claudeRequest({ runtime: { ...TEST_RUNTIME, mode: "suggest" } }))).toBe("dontAsk");
   expect(mode(claudeRequest({ runtime: { ...TEST_RUNTIME, mode: "full-auto" } }))).toBe("auto");
+});
+
+test("a plan run answers ExitPlanMode itself: one review in Ubume, Claude stays in plan mode", async () => {
+  const plan = "# Plan\n\n## Steps\n1. Create index.html\n2. Add the game loop";
+  const outcome = await runFake(
+    {
+      final: "Plan presented.",
+      steps: [
+        { id: "ls", tool: "Bash", input: { command: "ls" } },
+        { id: "exit", tool: "ExitPlanMode", input: { plan } },
+      ],
+    },
+    async () => "allow-once",
+    claudeRequest({ runIntent: "plan" }),
+  );
+  // Claude's own policy still decides other tools: Bash reached Ubume's overlay.
+  expect(outcome.asked.map((approval) => approval.tool)).toEqual(["Bash"]);
+  // ExitPlanMode never became a second approval prompt, and was denied to Claude.
+  const exit = logged("response").find(
+    (entry) => (entry.response as { request_id: string }).request_id === "exit",
+  )!.response as { response: { behavior: string; message: string } };
+  expect(exit.response.behavior).toBe("deny");
+  expect(exit.response.message).toMatch(/Ubume captured this plan/);
+  // The native plan is what Ubume reviews.
+  expect(outcome.response).toBe(plan);
+  expect(outcome.progress.some((text) => /kept Claude in plan mode/.test(text))).toBe(true);
+  const argv = logged("argv")[0]!.argv as string[];
+  expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("plan");
+  // The approved execution can resume the planning session: its hash covers the stored plan.
+  const execution = claudeRequest({
+    runIntent: "approved-execution",
+    conversationHistory: [
+      { role: "user", content: "Build the Minecraft clone" },
+      { role: "assistant", content: plan },
+    ],
+    nativeSessions: outcome.sessions,
+  });
+  expect(nativeContinuation(execution, "claude")?.sessionId).toBe("fake-session");
+});
+
+test("outside plan runs ExitPlanMode stays an ordinary approval", async () => {
+  const outcome = await runFake(
+    { final: "done", steps: [{ id: "exit", tool: "ExitPlanMode", input: { plan: "p" } }] },
+    async () => "deny",
+  );
+  expect(outcome.asked.map((approval) => approval.tool)).toEqual(["ExitPlanMode"]);
+  expect(outcome.response).toBe("done");
 });

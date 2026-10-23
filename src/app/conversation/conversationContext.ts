@@ -13,8 +13,8 @@ import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 import type {
   BackendProvider,
   ProviderRunControl,
-  ToolApprovalDecision,
   ToolApprovalRequest,
+  ToolApprovalResult,
 } from "../../core/providers/types.js";
 import type {
   CheckpointStore,
@@ -95,7 +95,7 @@ export interface UseConversationContext {
   activeRunCaptureRef: React.RefObject<ActiveRunCapture | null>;
 
   // Tool approval
-  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
+  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalResult) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
 
   // Attachment and checkpoint registries

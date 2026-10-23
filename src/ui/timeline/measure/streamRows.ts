@@ -45,6 +45,7 @@ import {
   coalesceConsecutiveThinking,
   getFriendlyActionLabel,
   normalizeCommand,
+  toolActivityLabel,
 } from "../runActivityView.js";
 import {
   _actionDisplayCache,
@@ -309,7 +310,7 @@ function getActionDisplayDescriptor(params: {
   // collapses *complete* escape sequences, so leftover bytes would otherwise be
   // counted (and wrapped) character-by-character and corrupt the card width.
   const command = normalizeCommand(sanitizeTerminalOutput(params.tool.command));
-  const label = getFriendlyActionLabel(command);
+  const label = toolActivityLabel(params.tool, command);
   // Bare label (no leading gap) — the head-row builder right-aligns it and owns
   // the spacing, so the gap can never get baked into a width calculation.
   const duration =

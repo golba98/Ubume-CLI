@@ -47,9 +47,12 @@ import type {
 } from "./types.js";
 import {
   createVibeAcpTurn,
+  formatVibePlanSteps,
   resolveVibeAcpExecutable,
   type VibeAcpMode,
   type VibeAcpTurnResult,
+  type VibePlanStep,
+  vibePlanSteps,
 } from "./vibeAcp.js";
 import { probeVibeEffectiveModels } from "./vibeEffectiveModels.js";
 
@@ -589,9 +592,16 @@ interface VibeStreamParser {
   flush: () => void;
   finalText: () => string;
   assistantText: () => string;
+  /** The latest todo list Vibe wrote this turn (its native plan steps). */
+  planSteps: () => VibePlanStep[];
   readonly error: string | undefined;
   readonly sessionId: string | undefined;
   readonly productive: boolean;
+}
+
+/** Vibe 3 streams camelCase records; older CLIs used snake_case. */
+function vibeField(record: Record<string, unknown>, camel: string, snake: string): unknown {
+  return record[camel] ?? record[snake];
 }
 
 // Parses `vibe -p --output streaming` stdout: one JSON LLMMessage per line, followed
@@ -611,13 +621,27 @@ export function createVibeStreamParser(
   const runningTools = new Map<string, { command: string; startedAt: number }>();
   const resumePrompt = options.startAfterUserPrompt?.trim() || null;
   let acceptingCurrentTurn = resumePrompt === null;
+  let planSteps: VibePlanStep[] = [];
+
+  const recordTodos = (todos: unknown) => {
+    const steps = vibePlanSteps(todos);
+    if (!steps.length) return;
+    planSteps = steps;
+    handlers.onProgress?.({
+      id: "vibe-acp-plan",
+      source: "todo",
+      text: formatVibePlanSteps(steps),
+    });
+  };
 
   const handleMessage = (message: Record<string, unknown>) => {
-    if (typeof message.session_id === "string") sessionId = message.session_id;
+    const recordSessionId = vibeField(message, "sessionId", "session_id");
+    if (typeof recordSessionId === "string" && recordSessionId) sessionId = recordSessionId;
     // New public history streams contain only this turn, including on --resume.
     if (typeof message.type === "string" && typeof message.id === "string") {
       acceptingCurrentTurn = true;
-      if (message.generation_status && message.generation_status !== "completed") return;
+      const generationStatus = vibeField(message, "generationStatus", "generation_status");
+      if (generationStatus && generationStatus !== "completed") return;
       if (seenEntries.has(message.id)) return;
       seenEntries.add(message.id);
       if (message.type === "reasoning" && typeof message.text === "string") {
@@ -628,15 +652,17 @@ export function createVibeStreamParser(
         productive = true;
         const state = message.state;
         const detail = isRecord(message.detail) ? message.detail : {};
+        if (detail.kind === "todo" && isRecord(detail.input)) recordTodos(detail.input.todos);
         const command =
           typeof detail.command === "string"
             ? detail.command
             : String(message.title ?? "Vibe tool");
         const completedAt = Date.now();
-        const startedAt =
-          completedAt - (typeof state.duration_ms === "number" ? state.duration_ms : 0);
+        const durationMs = vibeField(state, "durationMs", "duration_ms");
+        const startedAt = completedAt - (typeof durationMs === "number" ? durationMs : 0);
         handlers.onToolActivity?.({ id: message.id, command, startedAt, status: "running" });
-        const output = typeof state.output_text === "string" ? state.output_text : "";
+        const outputText = vibeField(state, "outputText", "output_text");
+        const output = typeof outputText === "string" ? outputText : "";
         handlers.onToolActivity?.({
           id: message.id,
           command,
@@ -710,6 +736,14 @@ export function createVibeStreamParser(
         const args =
           typeof record.function?.arguments === "string" ? record.function.arguments : "";
         const id = typeof record.id === "string" ? record.id : `vibe-tool-${++sequence}`;
+        if (/(^|\.)todo$/.test(name)) {
+          try {
+            const parsed: unknown = JSON.parse(args);
+            if (isRecord(parsed)) recordTodos(parsed.todos);
+          } catch {
+            // Partial or non-JSON arguments carry no steps.
+          }
+        }
         const activity = {
           id,
           command: truncateForActivity(args ? `${name}(${args})` : name),
@@ -738,6 +772,7 @@ export function createVibeStreamParser(
     },
     finalText: () => accumulated || (framing.records ? "" : plainLines.join("\n").trim()),
     assistantText: () => accumulated,
+    planSteps: () => planSteps,
     get productive() {
       return productive || accumulated.length > 0;
     },
@@ -764,14 +799,63 @@ function isVibeAuthFailure(stderr: string): boolean {
 }
 
 /**
- * Maps Ubume's mode/run intent to a built-in Vibe agent. Over vibe-acp the agent's prompts reach
- * Ubume; on headless `-p` the agent alone decides what runs. `auto-approve` is never used.
+ * Tools a plan or Read-only turn keeps. Headless `--enabled-tools` disables every other tool, so
+ * these turns cannot write files or run commands whatever the user's Vibe permissions say.
+ */
+export const VIBE_READ_ONLY_TOOLS = ["read_file", "grep", "todo"] as const;
+
+/** Plan and Read-only turns run Vibe read-only; Vibe 3 has no native plan agent. */
+export function isVibeReadOnlyTurn(request: ProviderChatRequest): boolean {
+  return request.runIntent === "plan" || request.runtime.mode === "suggest";
+}
+
+/**
+ * Maps Ubume's mode/run intent to a built-in Vibe agent. Read-only turns use `ask` restricted to
+ * `VIBE_READ_ONLY_TOOLS` (Vibe 3 removed its `plan` agent). Over vibe-acp the agent's prompts
+ * reach Ubume; on headless `-p` the agent alone decides what runs. `auto-approve` is never used.
  */
 export function vibeAgentFor(
   request: ProviderChatRequest,
-): "plan" | "accept-edits" | "smart-approve" {
-  if (request.runIntent === "plan" || request.runtime.mode === "suggest") return "plan";
+): "ask" | "accept-edits" | "smart-approve" {
+  if (isVibeReadOnlyTurn(request)) return "ask";
   return request.runtime.mode === "full-auto" ? "smart-approve" : "accept-edits";
+}
+
+/** `--agent` arguments for a turn; `legacyPlan` selects the read-only `plan` agent of Vibe < 3. */
+export function buildVibeAgentArgs(request: ProviderChatRequest, legacyPlan = false): string[] {
+  if (legacyPlan) return ["--agent", "plan"];
+  const agent = vibeAgentFor(request);
+  return [
+    "--agent",
+    agent,
+    ...(isVibeReadOnlyTurn(request)
+      ? VIBE_READ_ONLY_TOOLS.flatMap((tool) => ["--enabled-tools", tool])
+      : []),
+  ];
+}
+
+/** Puts Vibe's todo steps ahead of its prose so the plan Ubume reviews is Vibe's native step list. */
+export function composeVibePlan(steps: readonly VibePlanStep[], prose: string): string {
+  if (!steps.length) return prose;
+  const list = steps
+    .map(
+      (step, index) =>
+        `${index + 1}. ${step.status === "completed" ? "[x]" : "[ ]"} ${step.content}`,
+    )
+    .join("\n");
+  const body = prose.trim();
+  return `## Todo steps (Vibe)\n\n${list}${body ? `\n\n${body}` : ""}`;
+}
+
+/** Appended to plan turns so Vibe's native todo tracker holds the plan's steps. */
+export const VIBE_PLAN_TODO_INSTRUCTION =
+  "Before your final message, record the plan's Steps as ordered entries with your todo tool (all pending). Only read_file, grep and todo are available in this turn; do not try to modify files or run commands.";
+
+export const VIBE_READ_ONLY_UNSUPPORTED_MESSAGE =
+  "This Mistral Vibe CLI does not support the read-only options Ubume needs for planning and Read-only mode (--agent, --enabled-tools). Update Mistral Vibe; Ubume will not run this turn with write access.";
+
+function isMissingVibeAgent(stderr: string, agent: string): boolean {
+  return stderr.includes(`Agent '${agent}' not found`);
 }
 
 /**
@@ -911,18 +995,24 @@ export function runMistralVibe(
   const workspaceRoot = request.workspaceRoot;
 
   const agent = vibeAgentFor(request);
+  const readOnly = isVibeReadOnlyTurn(request);
   let allowAgentFlag = true;
+  let legacyPlanAgent = false;
 
   const runAttempt = (executable: string, resumeSessionId: string | null) => {
     if (cancelled || finished) return;
     handlers.onProgress?.({
       id: "mistral-route",
       source: "stdout",
-      text: `Starting Mistral Vibe CLI (agent ${agent}). Vibe cannot send approval prompts to Ubume; actions its agent would ask about are denied.`,
+      text: readOnly
+        ? legacyPlanAgent
+          ? "Starting Mistral Vibe CLI (legacy read-only agent plan)."
+          : `Starting Mistral Vibe CLI read-only (agent ask; tools ${VIBE_READ_ONLY_TOOLS.join(", ")}).${request.runIntent === "plan" ? " Planning is managed by Ubume; Vibe records the steps in its todo tracker." : ""}`
+        : `Starting Mistral Vibe CLI (agent ${agent}). Vibe cannot send approval prompts to Ubume; actions its agent would ask about are denied.`,
     });
     const args = ["-p", "--output", "streaming", "--trust", "--workdir", workspaceRoot];
     const usedAgentFlag = allowAgentFlag;
-    if (usedAgentFlag) args.push("--agent", agent);
+    if (usedAgentFlag) args.push(...buildVibeAgentArgs(request, legacyPlanAgent));
     if (resumeSessionId) args.push("--resume", resumeSessionId);
 
     const built = buildVibeSpawnEnv(request, env);
@@ -933,13 +1023,17 @@ export function runMistralVibe(
     }
     const spawnEnv = built.env;
 
+    const turnPrompt =
+      request.runIntent === "plan"
+        ? `${request.prompt}\n\n${VIBE_PLAN_TODO_INSTRUCTION}`
+        : request.prompt;
     const prompt =
       !resumeSessionId && request.conversationHistory?.length
-        ? `Previous conversation:\n${formatConversationHistory(request.conversationHistory)}\n\nCurrent request:\n${request.prompt}`
-        : request.prompt;
+        ? `Previous conversation:\n${formatConversationHistory(request.conversationHistory)}\n\nCurrent request:\n${turnPrompt}`
+        : turnPrompt;
     const parser = createVibeStreamParser(
       execution.handlers,
-      resumeSessionId ? { startAfterUserPrompt: request.prompt } : undefined,
+      resumeSessionId ? { startAfterUserPrompt: turnPrompt } : undefined,
     );
     const spawnedAt = now();
     let received = false;
@@ -999,7 +1093,37 @@ export function runMistralVibe(
             return;
           }
           if (
+            readOnly &&
+            !legacyPlanAgent &&
+            !parser.productive &&
+            isMissingVibeAgent(result.stderr, agent)
+          ) {
+            // Vibe < 3 has no `ask` agent but ships a native read-only `plan` agent.
+            legacyPlanAgent = true;
+            handlers.onProgress?.({
+              id: "vibe-agent-retry",
+              source: "stderr",
+              text: "This Vibe CLI has no ask agent; retrying with its read-only plan agent.",
+            });
+            await runner.stopped;
+            if (!cancelled) runAttempt(executable, resumeSessionId);
+            return;
+          }
+          if (
+            readOnly &&
+            !parser.productive &&
+            (isUnknownCliOption(result.stderr, "--agent") ||
+              isUnknownCliOption(result.stderr, "--enabled-tools") ||
+              isMissingVibeAgent(result.stderr, "plan"))
+          ) {
+            // Never retry a read-only turn without its restriction.
+            finish();
+            handlers.onError(VIBE_READ_ONLY_UNSUPPORTED_MESSAGE, result.stderr.trim() || undefined);
+            return;
+          }
+          if (
             usedAgentFlag &&
+            !readOnly &&
             !parser.productive &&
             result.status === "failed" &&
             isUnknownCliOption(result.stderr, "--agent")
@@ -1035,10 +1159,12 @@ export function runMistralVibe(
           return;
         }
 
-        const finalText = parser.finalText();
-        if (!parser.assistantText() && finalText) {
-          handlers.onAssistantDelta?.(finalText);
+        const proseText = parser.finalText();
+        if (!parser.assistantText() && proseText) {
+          handlers.onAssistantDelta?.(proseText);
         }
+        const finalText =
+          request.runIntent === "plan" ? composeVibePlan(parser.planSteps(), proseText) : proseText;
         const sessionId =
           parser.sessionId ??
           resumeSessionId ??
@@ -1047,13 +1173,14 @@ export function runMistralVibe(
             sinceMs: spawnedAt,
             env,
             prompt,
-            response: finalText,
+            response: proseText,
           }).catch(() => null));
         if (cancelled) {
           finish();
           return;
         }
         if (sessionId)
+          // The continuation hash must cover the reply Ubume stores: the composed plan.
           handlers.onNativeSession?.(completedNativeSession(request, "vibe", sessionId, finalText));
         finish();
         handlers.onFinalAnswerObserved?.(finalText);
@@ -1227,8 +1354,8 @@ export function runMistralVibe(
         source: "transcript",
         text: "Saved Vibe state does not match this chat and model; recovering its transcript into a fresh session.",
       });
-    // ACP has no plan agent; plan and read-only turns stay on headless `--agent plan`.
-    const acpMode = agent === "plan" ? null : agent;
+    // Plan and Read-only turns stay on headless `-p`, where `--enabled-tools` is a hard limit.
+    const acpMode = readOnly || agent === "ask" ? null : agent;
     const acpExecutable =
       request.approvalSurface === "interactive" && acpMode
         ? resolveVibeAcpExecutable(executable, env)

@@ -9,6 +9,7 @@
 
 import { useCallback } from "react";
 import { copyToClipboard } from "../core/shared/clipboard.js";
+import { stripAttachmentIds } from "../core/shared/text.js";
 import type { TimelineEvent } from "./types.js";
 
 export function buildTranscriptExport(
@@ -34,7 +35,8 @@ export function buildTranscriptExport(
     }
     lines.push("");
   }
-  const transcript = lines.join("\n").trimEnd();
+  // Chip ids are editor bookkeeping; the copied text keeps only the visible chip label.
+  const transcript = stripAttachmentIds(lines.join("\n")).trimEnd();
 
   return { transcript, turnCount: turns.size };
 }
@@ -46,12 +48,16 @@ export function useTranscriptExport(
   const handleCopy = useCallback(async () => {
     const exported = buildTranscriptExport(staticEvents);
     if (!exported) return;
-    const ok = await copyToClipboard(exported.transcript);
+    const result = await copyToClipboard(exported.transcript);
     const turnWord = exported.turnCount === 1 ? "1 turn" : `${exported.turnCount} turns`;
     appendEvent(
       "system",
       "Clipboard",
-      ok ? `Copied full conversation (${turnWord}) to clipboard.` : "Clipboard unavailable.",
+      result.ok
+        ? result.method === "osc52"
+          ? `Sent full conversation (${turnWord}) to the terminal clipboard (OSC 52). If nothing was copied, enable clipboard writes in your terminal (Kitty: clipboard_control write-clipboard) or install wl-clipboard.`
+          : `Copied full conversation (${turnWord}) to clipboard via ${result.method}.`
+        : `Clipboard unavailable: ${result.reason}.`,
     );
   }, [appendEvent, staticEvents]);
   return { handleCopy };

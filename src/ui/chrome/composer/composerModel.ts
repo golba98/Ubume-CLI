@@ -106,6 +106,9 @@ export function getTokenBarDisplay(tokensUsed: number, modelSpec: ModelSpec) {
 export type InterruptHint = "stopping" | "confirm-exit";
 
 export interface BottomComposerProps {
+  inputEnabled?: boolean;
+  inputBlocked?: React.RefObject<unknown>;
+  permissionPending?: boolean;
   layout: Layout;
   width?: number;
   uiState: UIState;
@@ -149,6 +152,7 @@ export interface BottomComposerProps {
 }
 
 export interface BottomComposerMeasureParams {
+  permissionPending?: boolean;
   layout: Layout;
   width?: number;
   uiState: UIState;
@@ -217,6 +221,7 @@ export function getCommandSuggestionState({
 }
 
 export function measureBottomComposerRows({
+  permissionPending = false,
   layout,
   width = layout.cols,
   uiState,
@@ -225,6 +230,7 @@ export function measureBottomComposerRows({
   queueCount = 0,
   interruptHint = null,
 }: BottomComposerMeasureParams): number {
+  if (permissionPending) return 2;
   const persona = getComposerPersona(uiState);
   const allowCommands = persona !== "answer";
   const { editorWidth: promptWidth } = getComposerRowLayout(width);

@@ -49,8 +49,8 @@ import type { ProviderRoute } from "../../core/providerRuntime/types.js";
 
 import type {
   BackendProvider,
-  ToolApprovalDecision,
   ToolApprovalRequest,
+  ToolApprovalResult,
 } from "../../core/providers/types.js";
 
 import {
@@ -269,7 +269,7 @@ export function useAppState(context: UseAppStateContext) {
   const pastedContentRegistryRef = useRef<PastedContentRegistry>(new Map());
   const imageAttachmentRegistryRef = useRef<ImageAttachmentRegistry>(new Map());
   const [toolApproval, setToolApproval] = useState<ToolApprovalRequest | null>(null);
-  const toolApprovalResolverRef = useRef<((decision: ToolApprovalDecision) => void) | null>(null);
+  const toolApprovalResolverRef = useRef<((decision: ToolApprovalResult) => void) | null>(null);
   const [registryNonce, setRegistryNonce] = useState(0);
 
   // Render-time mirrors: assigned during render so frame-time code and async

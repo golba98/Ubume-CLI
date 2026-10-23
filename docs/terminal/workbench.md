@@ -240,7 +240,7 @@ storage keys remain readable. An unavailable saved model or backend requires an 
 
 From a terminal, `ubume --resume chat_ID` opens a saved chat without sending a prompt. `ubume --import-session vibe:SESSION_ID` imports a native history in the current workspace. Supported native sources are `claude`, `codex`, `google` and `vibe`.
 
-A deterministic [resume picker recording](recordings/provider-resume.cast) shows provider sections and Local backend/model filters; regenerate it with `bun scripts/record-resume-picker.tsx`.
+A deterministic [resume picker recording](recordings/provider-resume.cast) shows provider sections and Local backend/model filters; regenerate it with `bun scripts/maintenance/record-resume-picker.tsx`.
 
 ## Verification
 
@@ -249,7 +249,7 @@ processes using a deterministic provider. It exercises abrupt restart, draft and
 partial reply recovery, a paused resumed queue, FIFO dispatch, send-now, provider
 cleanup, stale callbacks, and draft preservation during cancellation.
 
-`python3 scripts/smoke-workbench.py` creates a temporary workspace and data root,
+`python3 scripts/testing/smoke-workbench.py` creates a temporary workspace and data root,
 uses a deterministic provider, and records the actual app through a PTY. It does
 not invoke a paid provider. Play the included [recording](recordings/terminal-workbench.cast)
 with `asciinema play docs/terminal/recordings/terminal-workbench.cast`. Live authenticated provider
@@ -278,3 +278,9 @@ independent Claude/Mistral/Google adapter terminals. `bun run bench:resize --sce
 history --iterations 5 --cycles 3 --check-performance` additionally enforces the
 100 ms P95 live-geometry target on the benchmark host. `UBUME_RESIZE_TRACE` enables
 bounded monotonic phase records; it is disabled during normal execution.
+
+Large historical TTY writes yield between complete lines and control strings.
+Empty-write flush barriers retain their ordering for native CLI handoffs. A width
+change discards obsolete queued frames; a height-only change preserves valid
+same-width history unless an authoritative clear supersedes it. Hidden overlay
+shells do not measure a second transcript.

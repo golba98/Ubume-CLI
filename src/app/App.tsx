@@ -591,6 +591,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       return measureTextEntryPanelRows();
     }
     return measureBottomComposerRows({
+      permissionPending: toolApproval !== null,
       queueCount: promptQueue.items.length,
       interruptHint,
       layout: terminalLayout,
@@ -605,6 +606,7 @@ export function App({ launchArgs, providerOverride }: AppProps) {
       cursor,
     });
   }, [
+    toolApproval,
     composerWidth,
     conversationChars,
     currentModelSpec,
@@ -968,7 +970,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
     exit,
     staticEvents,
   });
-  const { handleCancel } = runLifecycle;
 
   const {
     handleChangeInput,
@@ -1336,7 +1337,6 @@ export function App({ launchArgs, providerOverride }: AppProps) {
               toolApproval={toolApproval}
               toolApprovalResolverRef={toolApprovalResolverRef}
               setToolApproval={setToolApproval}
-              handleCancel={handleCancel}
               updateCheckResult={updateCheckResult}
               globalPackageManager={globalPackageManager}
               handleSkipUpdateForSession={handleSkipUpdateForSession}

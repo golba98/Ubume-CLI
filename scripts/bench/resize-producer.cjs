@@ -29,6 +29,7 @@ async function emit(event) {
  if (!process.stdout.write(JSON.stringify(wire) + '\n')) await once(process.stdout, 'drain');
 }
 (async () => {
+ if(scenario==='code')await emit({kind:'text',text:'```typescript\n'});
  for (let i = 0; i < count; i++) {
   if (scenario === 'approval' && i === 8) {
    await emit({kind:'approval'});
@@ -40,11 +41,13 @@ async function emit(event) {
    await emit({kind:'tool',tool:{id,command,status:'running',startedAt:Date.now()}});
    await delay(10);
    fs.writeFileSync(`fixture-file-${i}.txt`, `file event ${i}\n`);
-   await emit({kind:'tool',tool:{id,command,status:'completed',startedAt:Date.now()-10,completedAt:Date.now(),summary: scenario === 'large' ? `LARGE_${i} 雪 output `.repeat(4000) : `RESULT_${i}`}});
+   await emit({kind:'tool',tool:{id,command,status:'completed',startedAt:Date.now()-10,completedAt:Date.now(),summary: `RESULT_${i}`, ...(scenario === 'large' ? {output: `LARGE_${i} 雪 output `.repeat(4000)} : {})}});
   }
-  await emit({kind:'text',text:`LINE_${String(i).padStart(4,'0')} ${i%9===0?'Unicode 雪 👩🏽‍💻 **bold** and `code`':'streaming resize response'}\n\n`});
+  if(scenario==='code')await emit({kind:'text',text:`const value${i} = 'LINE_${String(i).padStart(4,'0')} 雪 👩🏽‍💻';\n`});
+  else await emit({kind:'text',text:`LINE_${String(i).padStart(4,'0')} ${i%9===0?'Unicode 雪 👩🏽‍💻 **bold** and `code`':'streaming resize response'}\n\n`});
   await delay(Number(process.env.RESIZE_EVENT_MS || 8));
  }
+ if(scenario==='code')await emit({kind:'text',text:'```\n'});
  await emit({kind:'text',text:'RESIZE_FINAL_COMPLETE\n'});
  if(native==='anthropic')console.log(JSON.stringify({type:'result',subtype:'success',result:accumulated,session_id:'resize-claude'}));
  if(native==='google')console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',response:accumulated,conversation_id:'resize-google'}}));

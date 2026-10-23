@@ -15,10 +15,12 @@ import {
   type FakeExecutable,
 } from "../../test/fakeExecutable.js";
 import { TEST_RUNTIME } from "../../test/runtimeTestUtils.js";
+import { toolApprovalRequestId } from "../providers/toolApproval.js";
 import type {
   BackendRunHandlers,
   ToolApprovalDecision,
   ToolApprovalRequest,
+  ToolApprovalResult,
 } from "../providers/types.js";
 import type { NativeSessionReference } from "../workspace/conversationStore.js";
 import { runMistralVibe } from "./mistralVibe.js";
@@ -67,7 +69,7 @@ const step = async (s, i) => {
   update(sessionId, { sessionUpdate: "tool_call", toolCallId: id, title: s.title, kind: s.kind, status: "pending", rawInput: s.rawInput, locations: s.rawInput.path ? [{ path: path.resolve(process.cwd(), s.rawInput.path) }] : [] });
   let allowed = true;
   if (s.ask) {
-    const params = { sessionId, toolCall: { toolCallId: id }, options: OPTIONS };
+    const params = { sessionId, toolCall: { toolCallId: id }, options: s.options || OPTIONS };
     const response = await ask("session/request_permission", params, s.duplicate);
     log({ event: "permission", id, outcome: response.result && response.result.outcome });
     const outcome = response.result && response.result.outcome;
@@ -182,7 +184,7 @@ interface RunOutcome {
 
 function runFake(
   scenario: unknown,
-  decide: (request: ToolApprovalRequest, signal?: AbortSignal) => Promise<ToolApprovalDecision>,
+  decide: (request: ToolApprovalRequest, signal?: AbortSignal) => Promise<ToolApprovalResult>,
   request = vibeRequest(),
   onStart?: (cancel: () => void) => void,
 ): Promise<RunOutcome> {
@@ -233,8 +235,8 @@ function logged(fake: FakeExecutable | null, event: string): Array<Record<string
 test("Vibe's shell and file requests reach Ubume's approval prompt and run once approved", async () => {
   const decisions: ToolApprovalDecision[] = [
     "allow-once", // write index.html
-    "allow-for-run", // mkdir && node
-    // the identical second command is reused without asking
+    "allow-once", // mkdir && node
+    "allow-once", // identical command must ask again: ACP one-shot scopes stay one-shot
     "allow-once", // build || echo | cat
     "deny", // write secrets.txt
   ];
@@ -274,16 +276,16 @@ test("Vibe's shell and file requests reach Ubume's approval prompt and run once 
   expect(existsSync(join(workspace, "src"))).toBe(true);
   expect(existsSync(join(workspace, "secrets.txt"))).toBe(false);
 
-  // Four prompts: the repeated identical command was answered from the run-scoped cache.
-  expect(outcome.asked).toHaveLength(4);
+  // Every native one-shot request asks again; persistent scopes stay unavailable.
+  expect(outcome.asked).toHaveLength(5);
   expect(outcome.asked[0]).toMatchObject({
     provider: "Mistral Vibe",
     kind: "file",
     paths: ["index.html"],
-    allowForRun: true,
+    allowForRun: false,
   });
   expect(outcome.asked[1]).toMatchObject({ kind: "command", command });
-  expect(outcome.asked[2]?.command).toBe(
+  expect(outcome.asked[3]?.command).toBe(
     'npm run build 2>/dev/null || echo "build && failed" | cat',
   );
 
@@ -477,4 +479,43 @@ test("approval mapping never reuses decisions without input or outside the works
   expect(vibePermissionOutcome([{ optionId: "allow_always", kind: "allow_always" }], true)).toEqual(
     { outcome: "cancelled" },
   );
+});
+
+test("Vibe duplicate IDs cannot disguise a persistent scope as a one-shot action", () => {
+  const approval = toVibeApprovalRequest(
+    { toolCallId: "a", kind: "execute", rawInput: { command: "printf test" }, startedAt: 0 },
+    workspace,
+    [
+      { optionId: "collision", kind: "allow_once", name: "Allow once" },
+      { optionId: "collision", kind: "allow_always", name: "Always allow" },
+    ],
+  );
+  expect(approval.actions).toEqual([]);
+});
+
+test("Vibe dispatches the exact chosen native ID among multiple permitted actions", async () => {
+  const outcome = await runFake(
+    {
+      final: "native choice",
+      steps: [
+        {
+          kind: "execute",
+          title: "bash",
+          ask: true,
+          rawInput: { command: "printf test" },
+          options: [
+            { optionId: "allow-first", kind: "allow_once", name: "First native scope" },
+            { optionId: "reject-native", kind: "reject_once", name: "Reject" },
+            { optionId: "allow-second", kind: "allow_once", name: "Second native scope" },
+          ],
+        },
+      ],
+    },
+    async (request) => ({ requestId: toolApprovalRequestId(request), actionId: "allow-second" }),
+  );
+  expect(outcome.response).toBe("native choice");
+  expect(logged(acp, "permission")[0]?.outcome).toEqual({
+    outcome: "selected",
+    optionId: "allow-second",
+  });
 });

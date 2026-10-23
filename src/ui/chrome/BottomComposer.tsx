@@ -74,6 +74,9 @@ function renderFooterRuntime(displayStr: string, theme: Theme) {
 }
 
 export function BottomComposer({
+  inputEnabled = true,
+  inputBlocked,
+  permissionPending = false,
   layout,
   width = layout.cols,
   uiState,
@@ -138,6 +141,9 @@ export function BottomComposer({
     isAnswerMode,
     geometry,
   } = useComposerInput({
+    inputEnabled,
+    inputBlocked,
+    permissionPending,
     layout,
     width,
     uiState,
@@ -178,6 +184,23 @@ export function BottomComposer({
     activeProviderId,
     externalCliStatus,
   });
+
+  if (permissionPending) {
+    return (
+      <Box flexDirection="column" width={width} height={2} flexShrink={0}>
+        <Box height={1} flexShrink={0}>
+          <Text color={theme.textMuted} wrap="truncate">
+            › {value || "Composer paused"}
+          </Text>
+        </Box>
+        <Box height={1} flexShrink={0}>
+          <Text color={theme.warning} wrap="truncate">
+            Awaiting permission · Ctrl+C stop
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
 
   const contextText =
     contextDisplay ||
@@ -426,6 +449,9 @@ export function areBottomComposerPropsEqual(
   prev: BottomComposerProps,
   next: BottomComposerProps,
 ): boolean {
+  if (prev.inputBlocked !== next.inputBlocked) return false;
+  if (prev.inputEnabled !== next.inputEnabled || prev.permissionPending !== next.permissionPending)
+    return false;
   // Always re-render if the uiState kind changes to a different persona
   const prevKey = getUiStateKey(prev.uiState);
   const nextKey = getUiStateKey(next.uiState);

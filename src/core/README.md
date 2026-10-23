@@ -34,7 +34,7 @@ Home and CODEX_HOME resolution come from `config/settings.ts`; platform app-data
 - `perf/debugLog.ts` shares a writer while retaining each caller's flags, filenames, redaction, and failure handling. Input tracing uses `UBUME_DEBUG_INPUT=1`; local stream tracing uses `UBUME_DEBUG_LOCAL_STREAM=1` and the separate content opt-in.
 - `perf/renderDebug.ts` owns render/flicker tracing (`UBUME_RENDER_DEBUG=1`).
 - `perf/profiler.ts` records performance sessions.
-- `scripts/claudeCodeDiscoveryDebug.ts` is the standalone `bun run debug:claude-models` entry point.
+- `scripts/providers/debug-claude-model-discovery.ts` is the standalone `bun run debug:claude-models` entry point.
 
 ## Initialization, execution and shutdown
 

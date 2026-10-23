@@ -118,6 +118,8 @@ export function getResponseSegmentText(segment: RunResponseSegment | null | unde
 }
 
 export interface RunToolActivity {
+  /** Authorization is separate from execution; a tool announcement proves neither consent nor execution. */
+  authorization?: "requested" | "pending" | "approved" | "denied" | "cancelled" | "executing";
   id: string;
   command: string;
   status: "running" | "completed" | "failed";

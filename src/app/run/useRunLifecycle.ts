@@ -12,7 +12,7 @@ import { useCallback } from "react";
 import * as perf from "../../core/perf/profiler.js";
 import * as renderDebug from "../../core/perf/renderDebug.js";
 import { unloadCodexaNative } from "../../core/providerRuntime/codexaNative.js";
-import type { ToolApprovalDecision, ToolApprovalRequest } from "../../core/providers/types.js";
+import type { ToolApprovalRequest, ToolApprovalResult } from "../../core/providers/types.js";
 import { sanitizeTerminalOutput } from "../../core/terminal/terminalSanitize.js";
 import { resetLocalUsageRecords } from "../../core/usage/localUsageTracker.js";
 import type { ConversationStore } from "../../core/workspace/conversationStore.js";
@@ -70,7 +70,7 @@ interface UseRunLifecycleContext {
   conversationStore: ConversationStore;
 
   // Tool approval
-  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalDecision) => void) | null>;
+  toolApprovalResolverRef: React.RefObject<((decision: ToolApprovalResult) => void) | null>;
   setToolApproval: React.Dispatch<React.SetStateAction<ToolApprovalRequest | null>>;
 
   // Prompt queue and submission guards

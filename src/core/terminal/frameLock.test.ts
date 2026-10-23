@@ -132,3 +132,28 @@ test("frame lock preserves ordered empty-write, deduplicated-write and encoding 
     stdout.destroy();
   }
 });
+
+test("height-only resize preserves a pending historical publication when Ink has no new live frame", async () => {
+  let output = "";
+  const stdout = {
+    isTTY: true,
+    fd: 123,
+    write(
+      chunk: string | Uint8Array,
+      encoding?: BufferEncoding | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ) {
+      output += String(chunk);
+      const done = typeof encoding === "function" ? encoding : callback;
+      done?.();
+      return true;
+    },
+  };
+  wrapStdoutWithFrameLock({ stdout, env: {} });
+  const history = "HISTORICAL_ROW\n".repeat(4000);
+  stdout.write(history);
+  resetFrameLockForResize(stdout, false);
+  await new Promise<void>((resolve) => stdout.write("", () => resolve()));
+  assert.equal(output.split("HISTORICAL_ROW").length - 1, 4000);
+  releaseFrameLock(stdout);
+});

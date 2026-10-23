@@ -73,7 +73,12 @@ export function createClaudeToolParser(handlers: BackendRunHandlers): (line: str
             : `${block.name ?? "tool"} ${JSON.stringify(block.input ?? {})}`;
         const tool = { command, startedAt: tools.get(block.id)?.startedAt ?? Date.now() };
         tools.set(block.id, tool);
-        handlers.onToolActivity?.({ id: block.id, ...tool, status: "running" });
+        handlers.onToolActivity?.({
+          id: block.id,
+          ...tool,
+          status: "running",
+          authorization: "requested",
+        });
       } else if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
         const tool = tools.get(block.tool_use_id) ?? {
           command: "Claude tool",
@@ -107,7 +112,12 @@ export interface ClaudeStreamParserOptions {
   onControl?: (record: Record<string, unknown>) => boolean;
   /** Called once Claude reports its terminal result for the turn. */
   onResult?: () => void;
+  /** Tools whose denials Ubume answered itself (e.g. a plan run's ExitPlanMode); not reported. */
+  hostHandledTools?: readonly string[];
 }
+
+/** Characters of streamed tool input between "preparing" progress updates. */
+const TOOL_INPUT_PROGRESS_STEP = 8 * 1024;
 
 /** Claude snapshots reconcile against partial messages; terminal results own the final answer. */
 export function createClaudeStreamParser(
@@ -125,6 +135,8 @@ export function createClaudeStreamParser(
   let anonymousMessage = 0;
   const messages = new Map<string, string>();
   const thinking = new Map<string, string>();
+  // Streaming tool input (e.g. a large Write) per content block, reported in coarse steps.
+  const toolInputs = new Map<string, { name: string; chars: number; head: string; step: number }>();
   const tools = createClaudeToolParser(handlers);
   const plain: string[] = [];
   let plainChars = 0;
@@ -153,6 +165,29 @@ export function createClaudeStreamParser(
         record.message.content.some((block) => isRecord(block) && block.type === "tool_use")
       )
         productive = true;
+      if (record.type === "system" && record.subtype === "api_retry") {
+        // Without this the user sees a silent run while Claude Code backs off and retries.
+        const attempt = typeof record.attempt === "number" ? ` (attempt ${record.attempt}` : "";
+        const max =
+          attempt && typeof record.max_retries === "number"
+            ? ` of ${record.max_retries})`
+            : attempt
+              ? ")"
+              : "";
+        const delay =
+          typeof record.retry_delay_ms === "number"
+            ? ` in ${Math.max(1, Math.round(record.retry_delay_ms / 1000))}s`
+            : "";
+        const status =
+          typeof record.error_status === "number" ? ` (HTTP ${record.error_status})` : "";
+        const reason = typeof record.error === "string" && record.error ? `: ${record.error}` : "";
+        handlers.onProgress?.({
+          id: "claude-api-retry",
+          source: "stderr",
+          text: `Claude API request failed${status}${reason}. Claude Code is retrying${attempt}${max}${delay}.`,
+        });
+        return;
+      }
       if (record.type === "system" && record.subtype === "permission_denied") {
         handlers.onProgress?.({
           id: "claude-permission",
@@ -174,8 +209,18 @@ export function createClaudeStreamParser(
               .filter((item): item is string => typeof item === "string")
               .join("\n") || "Claude reported an execution error.";
         } else if (typeof record.result === "string") final = record.result;
-        if (Array.isArray(record.permission_denials) && record.permission_denials.length) {
-          const count = record.permission_denials.length;
+        const denials = Array.isArray(record.permission_denials)
+          ? record.permission_denials.filter(
+              (denial) =>
+                !(
+                  isRecord(denial) &&
+                  typeof denial.tool_name === "string" &&
+                  options.hostHandledTools?.includes(denial.tool_name)
+                ),
+            )
+          : [];
+        if (denials.length) {
+          const count = denials.length;
           const requests = `${count} tool request${count === 1 ? " was" : "s were"} denied`;
           handlers.onProgress?.({
             id: "claude-permission",
@@ -194,6 +239,45 @@ export function createClaudeStreamParser(
         const event = record.event;
         if (event.type === "message_start" && isRecord(event.message))
           messageId = String(event.message.id ?? "partial");
+        const blockKey = `${messageId}-${String(event.index ?? 0)}`;
+        if (event.type === "content_block_start" && isRecord(event.content_block)) {
+          const block = event.content_block;
+          // Reasoning may be withheld from the stream; say Claude is thinking instead of
+          // showing nothing. Real thinking deltas replace this entry (same id).
+          if (block.type === "thinking" || block.type === "redacted_thinking")
+            handlers.onProgress?.({
+              id: `claude-thinking-${blockKey}`,
+              source: "reasoning",
+              text: "Thinking… (Claude has not shared its reasoning)",
+            });
+          else if (block.type === "tool_use" && typeof block.name === "string")
+            toolInputs.set(blockKey, { name: block.name, chars: 0, head: "", step: 0 });
+        }
+        if (
+          event.type === "content_block_delta" &&
+          isRecord(event.delta) &&
+          event.delta.type === "input_json_delta" &&
+          typeof event.delta.partial_json === "string"
+        ) {
+          const input = toolInputs.get(blockKey);
+          if (input) {
+            input.chars += event.delta.partial_json.length;
+            if (input.head.length < 1024) input.head += event.delta.partial_json.slice(0, 1024);
+            const step = Math.floor(input.chars / TOOL_INPUT_PROGRESS_STEP);
+            if (step > input.step) {
+              input.step = step;
+              const path = /"(?:file_path|notebook_path|path)"\s*:\s*"([^"]+)"/.exec(
+                input.head,
+              )?.[1];
+              const target = path ? ` ${path.split("/").at(-1)}` : "";
+              handlers.onProgress?.({
+                id: `claude-tool-input-${blockKey}`,
+                source: "stdout",
+                text: `Claude is preparing ${input.name}${target} (${Math.round(input.chars / 1024)} KB of input so far)…`,
+              });
+            }
+          }
+        }
         // Some models think silently for minutes; say why a long wait ended in a continuation.
         if (
           event.type === "message_delta" &&
@@ -222,7 +306,8 @@ export function createClaudeStreamParser(
             const id = `claude-thinking-${messageId}-${String(event.index ?? 0)}`;
             const text = (thinking.get(id) ?? "") + event.delta.thinking;
             thinking.set(id, text);
-            handlers.onProgress?.({ id, source: "reasoning", text });
+            // Empty deltas would blank the "thinking" placeholder for this block.
+            if (text) handlers.onProgress?.({ id, source: "reasoning", text });
           }
         }
       } else if (record.type === "assistant" && isRecord(record.message)) {

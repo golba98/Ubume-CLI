@@ -467,6 +467,7 @@ function finalizePendingToolActivities(
       ? {
           ...item,
           status: fallbackStatus,
+          ...(finalStatus === "canceled" ? { authorization: "cancelled" as const } : {}),
           completedAt: item.completedAt ?? Date.now(),
           summary: item.summary ?? fallbackSummary,
         }

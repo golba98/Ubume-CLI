@@ -134,7 +134,7 @@ export function useFocusRouting(context: UseFocusRoutingContext) {
   }, [focusManager, planFlow.kind, screen]);
 
   useEffect(() => {
-    if (screen === "model-picker" || intendedInputModeRef.current !== "model-picker") {
+    if (screen !== "main" || intendedInputModeRef.current !== "model-picker") {
       return;
     }
 
@@ -153,6 +153,10 @@ export function useFocusRouting(context: UseFocusRoutingContext) {
 
   const returnToChatMode = useCallback(
     (reason = "unknown") => {
+      if (screenRef.current === "tool-approval") {
+        focusManager.focus(FOCUS_IDS.toolApprovalPanel);
+        return;
+      }
       if (modelPickerOpenRef.current) {
         intendedInputModeRef.current = "model-picker";
         intendedFocusTargetRef.current = FOCUS_IDS.modelPicker;

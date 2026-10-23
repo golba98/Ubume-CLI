@@ -8,6 +8,7 @@ import { saveProviderWorkspaceConfig } from "../../../src/core/providerLauncher/
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { selectedToolApprovalAction } from "../../../src/core/providers/toolApproval.js";
 import type { BackendProvider } from "../../../src/core/providers/types.js";
 import { flushResizeTrace, traceResize } from "../../../src/core/perf/resizeTrace.js";
 import { startApp } from "../../../src/index.js";
@@ -36,7 +37,9 @@ const provider: BackendProvider = {
       if (event.kind === "text") { final += event.text; handlers.onAssistantDelta?.(event.text); }
       else if (event.kind === "tool") handlers.onToolActivity?.(event.tool);
       else if (event.kind === "approval") {
-        void handlers.onToolApproval?.({ tool: "shell", signature: "resize-approval", command: "fixture safe operation", paths: [], description: "RESIZE_APPROVAL", workspace: options.workspaceRoot, kind: "command" }).then(decision => {
+        const approval = { tool: "shell", signature: "resize-approval", command: "fixture safe operation", paths: [], description: "RESIZE_APPROVAL", workspace: options.workspaceRoot, kind: "command" as const };
+        void handlers.onToolApproval?.(approval).then(result => {
+          const decision = selectedToolApprovalAction(approval, result)?.decision ?? "deny";
           child.stdin.write(`${decision}\n`);
           if (process.env.RESIZE_DECISIONS) appendFileSync(process.env.RESIZE_DECISIONS, `${decision}\n`);
         });

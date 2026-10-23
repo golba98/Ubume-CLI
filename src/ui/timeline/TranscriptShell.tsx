@@ -57,7 +57,7 @@ import { useTheme } from "../theme.js";
 import { LIVE_WINDOW_SAFETY_ROWS, windowLiveRows } from "./liveViewportWindow.js";
 import { wrapRows } from "./measure/rows.js";
 import { buildCompactStartupRows } from "./measure/startupBrandingRows.js";
-import { measuredRowsToAnsi } from "./measuredAnsi.js";
+import { measuredColorDepth, measuredRowsToAnsi } from "./measuredAnsi.js";
 import { TimelineRowView } from "./TimelineRows.js";
 import {
   buildActiveRenderItems,
@@ -251,9 +251,14 @@ function TranscriptShellInner({
     () => staticTimelineItems.flatMap((item) => (item.type === "turn" ? [item.turnId] : [])),
     [staticTimelineItems],
   );
+  // Streaming replaces active item objects, but unchanged turn identities must
+  // not invalidate finalized history or cancel its cooperative preparation.
+  const activeTurnIdsKey = activeTimelineItems
+    .flatMap((item) => (item.type === "turn" ? [item.turnId] : []))
+    .join(",");
   const activeTurnIds = useMemo(
-    () => activeTimelineItems.flatMap((item) => (item.type === "turn" ? [item.turnId] : [])),
-    [activeTimelineItems],
+    () => (activeTurnIdsKey ? activeTurnIdsKey.split(",").map(Number) : []),
+    [activeTurnIdsKey],
   );
   const allTurnIds = useMemo(
     () => [...staticTurnIds, ...activeTurnIds],
@@ -315,8 +320,7 @@ function TranscriptShellInner({
     () => ({ totalWidth: shellWidth, verboseMode, workspaceRoot }),
     [shellWidth, verboseMode, workspaceRoot],
   );
-  const colors =
-    Boolean(useStdout().stdout.isTTY) && !process.env.NO_COLOR && process.env.FORCE_COLOR !== "0";
+  const colors = measuredColorDepth(useStdout().stdout);
   const encodeStatic = useCallback(
     (parts: ReturnType<typeof buildNativeTranscriptParts>) =>
       parts.staticItems

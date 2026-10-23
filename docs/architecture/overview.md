@@ -29,15 +29,15 @@ Ubume does not replace provider authentication. External provider CLIs remain re
 
 ## Developer automation
 
-Repository scripts sit outside the application runtime and provide local launching, shim installation, build metadata, static capability auditing, and an authenticated headless smoke. Their full command and side-effect reference is the [Developer Scripts guide](../../scripts/README.md).
+Repository scripts sit outside the application runtime (they are not published) and are grouped by responsibility under `scripts/`: `development/` (local launcher and shims), `build/`, `release/`, `providers/`, `testing/`, `maintenance/`, `bench/` and shared `lib/`. Their command, safety and side-effect reference is the [scripts guide](../development/scripts.md).
 
 ```mermaid
 flowchart LR
-  Package[package.json commands] --> Dev[run-local-dev.mjs]
-  Package --> Install[install-local-dev-bin.mjs]
-  Package --> Build[gen-build-info.mjs]
-  Package --> Audit[audit-ubume-capabilities.mjs]
-  Package --> Smoke[smoke-terminal-bench.mjs]
+  Package[package.json commands] --> Dev[development/run-local-dev.mjs]
+  Package --> Install[development/install-dev-shims.mjs]
+  Package --> Build[build/generate-build-info.mjs]
+  Package --> Audit[maintenance/audit-capabilities.mjs]
+  Package --> Smoke[providers/smoke-headless-exec.mjs]
 
   Install --> Shims[ubume-dev and ubd]
   Shims --> Dev
@@ -208,17 +208,21 @@ completion, and `ProviderRunControl.stopped` owns workspace-release timing. See
 trace phases and permission constraints.
 
 Native permissions follow Ubume's mode, not a fixed provider default. Claude receives
-`--permission-mode` (Read-only → `dontAsk`, Auto → `acceptEdits`, Full Access → `auto`, plan
-turns → `plan`; never `bypassPermissions`). In interactive runs Claude is started with
+`--permission-mode` (Read-only → `dontAsk`, Auto and Full Access → `auto`, plan turns → `plan`;
+never `bypassPermissions`). In plan runs Ubume answers Claude's `ExitPlanMode` itself: it keeps
+the plan for its own review and keeps Claude in plan mode, so the plan is approved once. In interactive runs Claude is started with
 stream-json input and `--permission-prompt-tool stdio`, and `claudePermissions.ts` answers
 its `can_use_tool` control requests through the shared `onToolApproval` overlay, one at a
 time and with exact-match "allow for run" reuse. Headless runs pass `--permission-prompts
 none` and announce that approvals are unavailable. Interactive Vibe runs use `vibe-acp`
 (Agent Client Protocol): `vibeAcp.ts` selects the mapped agent (`accept-edits` or
 `smart-approve`) with `session/set_mode` and answers `session/request_permission` through the
-same overlay, choosing only one-shot options (never `allow_always`). Plan, read-only and
-headless Vibe runs, and a `vibe-acp` that fails before the prompt is sent, use `vibe -p
---agent`, where Vibe's native policy alone decides. AGY gets `--mode` but has no host approval
+same overlay, choosing only one-shot options (never `allow_always`). Plan and read-only
+Vibe runs use headless `vibe -p --agent ask` limited by `--enabled-tools` to `read_file`, `grep`
+and `todo` (Vibe 3 has no `plan` agent), and the plan's steps come from Vibe's todo tracker.
+Other headless Vibe runs, and a `vibe-acp` that fails before the prompt is sent, use `vibe -p
+--agent`, where Vibe's native policy alone decides. See
+[plan mode and native permissions](../providers/planning-and-permissions.md). AGY gets `--mode` but has no host approval
 protocol. Both bridges share `providerApprovalQueue.ts`.
 
 Native continuation belongs to an individual conversation. A completed model/dialogue
