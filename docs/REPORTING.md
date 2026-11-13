@@ -4,6 +4,9 @@ These rules apply to every coding agent working in this repository: Codex, Claud
 Mistral, GLM and any other. They keep generated analysis out of Git and keep the permanent
 documentation in [`docs/`](README.md) accurate.
 
+
+Ordinary task completion belongs in the terminal or agent response; do not automatically create a report. Optional working notes use the existing ignored locations below. Public Markdown and publication-policy changes require owner review of exact bytes using `python3 scripts/check_documentation.py`; see the repository agent instructions.
+
 ## The two kinds of documentation
 
 | | Permanent documentation | Agent reports |
