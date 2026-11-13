@@ -198,3 +198,13 @@ Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 ## License
 
 [MIT](LICENSE)
+
+<!-- documentation-publication-policy:start -->
+## Documentation contributions
+
+Agent instruction entrypoints (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are local-only and ignored by Git.
+
+Keep temporary plans and agent notes in ignored `docs/_reports/`. Update existing guides for lasting user or contributor needs; ordinary tasks do not need a Markdown report.
+
+After cloning, install local checks with `python3 scripts/check_documentation.py --install-hooks`. Run `python3 scripts/check_documentation.py` before publication. Public documentation and publication-policy changes require owner review of exact contents. Prepare a proposal with `python3 scripts/check_documentation.py --propose docs/_reports/documentation-review.json`; the owner reviews it in a separate terminal with `--review` and the same path. PR checks print the owner approval comment to post before rerunning validation. Hooks and CI cannot undo an initial public disclosure.
+<!-- documentation-publication-policy:end -->
